@@ -274,14 +274,44 @@ def Training_loop(
     if cfg.exp_name is not None:
         exp_dir = Path("experiments") / cfg.exp_name
         config_path = exp_dir / "config.yaml"
+        
+        # Parse dataset configuration from filename and npz file
+        dataset_config = {"path": cfg.dataset_path if cfg.dataset_path else "unknown"}
+        
+        if cfg.dataset_path:
+            dataset_stem = Path(cfg.dataset_path).stem
+            # Expected format: N{N}_T{T}_steps{steps}_{init_type}_knoise{knoise}
+            parts = dataset_stem.split('_')
+            for part in parts:
+                if part.startswith('N'):
+                    dataset_config["n_samples"] = int(part[1:])
+                elif part.startswith('T'):
+                    dataset_config["t_span"] = int(part[1:])
+                elif part.startswith('steps'):
+                    dataset_config["n_steps"] = int(part[5:])
+                elif part.startswith('knoise'):
+                    dataset_config["k_noise"] = float(part[6:])
+                elif part in ['zeros', 'ones']:
+                    dataset_config["init_type"] = part
+            
+            # Load npz to get exact shapes
+            try:
+                data = np.load(cfg.dataset_path, allow_pickle=True)
+                if 'y_seq' in data:
+                    dataset_config["n_observed_species"] = int(data['y_seq'].shape[2])
+                if 'u_seq' in data:
+                    dataset_config["n_control_species"] = int(data['u_seq'].shape[2])
+                if 't_obs' in data:
+                    dataset_config["observed_timepoints"] = int(data['t_obs'].shape[1])
+            except Exception as e:
+                pass  # silently skip if can't load
+        
         config_data = {
             "experiment": {
                 "name": cfg.exp_name,
                 "created": timestamp if 'timestamp' in locals() else "unknown",
             },
-            "dataset": {
-                "path": cfg.dataset_path if cfg.dataset_path else "unknown",
-            },
+            "dataset": dataset_config,
             "model": {
                 "type": "SimpleRNN",
                 "hidden": cfg.hidden,
