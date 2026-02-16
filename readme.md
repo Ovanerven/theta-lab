@@ -24,11 +24,7 @@ This will create the output file `dataset_N10_T300_K600_zero_tail0_seed42.npz`.
 ## Model Training
 To train the model (basic GRU), run:
 ```sh
-python -m src.train.train \
-    --data datasets/N1000_T300_steps600_zeros_knoise0.0.npz \
-    --epochs 500 \
-    --exp-name "log10_loss_no_clampmin_500epoch" \
-    --checkpoint-every 50
+python -m src.train.train --data datasets/N1000_T300_steps600_zeros_knoise0.0.npz --epochs 500 --exp-name "log10_loss_no_clampmin_500epoch" --checkpoint-every 50
 ```
 
 ## Requirements

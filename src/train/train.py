@@ -13,12 +13,20 @@ import yaml
 from src.models.simple_ode_rnn import SimpleRNN
 from src.data.ode_dataset import ODEDataset, collate
 
-def loss_fn(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
     """Compute MSE loss in log10 space."""
-    eps = 1e-8
-    log_pred = torch.log10(pred + eps)
-    log_target = torch.log10(target + eps)
-    return (log_pred - log_target).pow(2).mean()
+    # Edit on 13/02: based on Bob's feedback, looked to fix the loss. Stopped clamping loss at 1
+    # eps = 1e-8
+    # log_y = torch.log10(y_seq + eps)
+    # log_pred = torch.log10(pred + eps)
+
+    # Old idea: clamp_min at 1, use log1p. 
+    y_clamped = y_seq.clamp_min(1.0)
+    pred_clamped = pred.clamp_min(1.0)
+    log_y = torch.log1p(y_clamped)
+    log_pred = torch.log1p(pred_clamped)
+
+    return (log_pred - log_y).pow(2).mean()
 
 @dataclass
 class TrainConfig:
@@ -174,17 +182,6 @@ def Training_loop(
                 print(f"  pred stats: min={pred.min()}, max={pred.max()}, has_nan={torch.isnan(pred).any()}, has_inf={torch.isinf(pred).any()}")
                 raise RuntimeError("NaNs detected in predictions")
 
-            # supervisor's approach: clamp at 1.0 before log1p to avoid near-zero regime 
-            # y_clamped = y_seq.clamp_min(1.0)
-            # pred_clamped = pred.clamp_min(1.0)
-            # Move loss function to separate function for clarity and reuse
-            # y_clamped = y_seq
-            # pred_clamped = pred
-            # eps = 1e-8
-            # log_y = torch.log10(y_clamped + eps)
-            # log_pred = torch.log10(pred_clamped + eps)
-
-            # loss = (log_pred - log_y).pow(2).mean()
             loss = loss_fn(pred, y_seq)
 
             if not torch.isfinite(loss):
