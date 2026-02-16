@@ -26,19 +26,19 @@ def plot_loss_curves(
 
     epochs = np.arange(1, len(train_losses) + 1)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(12, 8))
     ax.plot(epochs, train_losses, label="train", linewidth=2)
     if val_losses is not None and len(val_losses) > 0:
         ax.plot(epochs, val_losses, label="val", linewidth=2)
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("log1p MSE")
-    ax.set_title("Training and Validation Loss")
-    ax.legend()
+    ax.set_xlabel("Epoch", fontsize=12)
+    ax.set_ylabel("MSE in log10 space", fontsize=12)
+    ax.set_title("Training and Validation Loss", fontsize=14)
+    ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
     out_path = out_dir / "loss_curves.png"
-    fig.savefig(out_path, dpi=160)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved loss curve plot: {out_path}")
 
@@ -117,24 +117,24 @@ def plot_predictions(
         y_true = y_batch[idx].cpu().numpy()
         y_pred = pred_batch[idx].cpu().numpy()
         
-        fig, axes = plt.subplots(P, 1, figsize=(10, 2*P), sharex=True)
+        fig, axes = plt.subplots(P, 1, figsize=(12, 8), sharex=True)
         if P == 1:
             axes = [axes]
         
         for i, ax in enumerate(axes):
             ax.plot(t[1:], y_true[:, i], label="true", linewidth=2, alpha=0.8)
             ax.plot(t[1:], y_pred[:, i], label="pred", linewidth=2, linestyle="--", alpha=0.8)
-            ax.set_ylabel(species_names[i])
+            ax.set_ylabel(species_names[i], fontsize=11)
             ax.grid(True, alpha=0.25)
             if i == 0:
-                ax.legend(loc="best")
+                ax.legend(loc="best", fontsize=10)
         
-        axes[-1].set_xlabel("Time (s)")
-        fig.suptitle(f"Prediction vs Truth (Sample {idx})")
+        axes[-1].set_xlabel("Time (s)", fontsize=12)
+        fig.suptitle(f"Prediction vs Truth (Sample {idx})", fontsize=14)
         fig.tight_layout()
         
         out_path = out_dir / f"pred_vs_true_sample{idx:03d}.png"
-        fig.savefig(out_path, dpi=160)
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     
     print(f"Saved {n_samples} prediction plots to {out_dir}")

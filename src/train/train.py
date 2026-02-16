@@ -8,9 +8,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import yaml
 
 from src.models.simple_ode_rnn import SimpleRNN
 from src.data.ode_dataset import ODEDataset, collate
+
+def loss_fn(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute MSE loss in log10 space."""
+    eps = 1e-8
+    log_pred = torch.log10(pred + eps)
+    log_target = torch.log10(target + eps)
+    return (log_pred - log_target).pow(2).mean()
 
 @dataclass
 class TrainConfig:
@@ -26,10 +34,12 @@ class TrainConfig:
     tf_drop_epoch: int = 250  # keep supervisor behavior (even if epochs<250)
     tf_every: int = 50
     grad_clip: float = 1.0
+    exp_name: Optional[str] = None  # experiment name for organized storage
     save_path: Optional[str | Path] = None
     seed: int = 42
     log_dir: str = "logs"
     save_checkpoint_every: int = 0  # Save checkpoint every N epochs (0=disabled, saves space)
+    dataset_path: Optional[str] = None  # stored for config.yaml generation
 
 def Training_loop(
     dataset_path: str | Path,
@@ -38,6 +48,9 @@ def Training_loop(
     model_cls=SimpleRNN,
 ):
     start_time = time.time()
+    
+    # Store for later use (config.yaml, plotting)
+    cfg.dataset_path = str(dataset_path)
     
     # --- reproducibility ---
     np.random.seed(cfg.seed)
@@ -161,15 +174,18 @@ def Training_loop(
                 print(f"  pred stats: min={pred.min()}, max={pred.max()}, has_nan={torch.isnan(pred).any()}, has_inf={torch.isinf(pred).any()}")
                 raise RuntimeError("NaNs detected in predictions")
 
-            # supervisor's approach: clamp at 1.0 before log1p to avoid near-zero regime
-            y_clamped = y_seq.clamp_min(1.0)
-            pred_clamped = pred.clamp_min(1.0)
+            # supervisor's approach: clamp at 1.0 before log1p to avoid near-zero regime 
+            # y_clamped = y_seq.clamp_min(1.0)
+            # pred_clamped = pred.clamp_min(1.0)
+            # Move loss function to separate function for clarity and reuse
             # y_clamped = y_seq
             # pred_clamped = pred
-            log_y = torch.log1p(y_clamped)
-            log_pred = torch.log1p(pred_clamped)
+            # eps = 1e-8
+            # log_y = torch.log10(y_clamped + eps)
+            # log_pred = torch.log10(pred_clamped + eps)
 
-            loss = (log_pred - log_y).pow(2).mean()
+            # loss = (log_pred - log_y).pow(2).mean()
+            loss = loss_fn(pred, y_seq)
 
             if not torch.isfinite(loss):
                 print(f"WARNING: NaN/inf loss at epoch {ep}, batch {n_batches+1}")
@@ -201,13 +217,14 @@ def Training_loop(
                     y_seq = y_seq.to(device)
 
                     pred, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
-                    y_clamped = y_seq.clamp_min(1.0)
-                    pred_clamped = pred.clamp_min(1.0)
+                    # y_clamped = y_seq.clamp_min(1.0)
+                    # pred_clamped = pred.clamp_min(1.0)
                         
                     # y_clamped = y_seq
                     # pred_clamped = pred
 
-                    loss = (torch.log1p(pred_clamped) - torch.log1p(y_clamped)).pow(2).mean()
+                    # loss = (torch.log1p(pred_clamped) - torch.log1p(y_clamped)).pow(2).mean()
+                    loss = loss_fn(pred, y_seq)
                     val_total += float(loss.item())
                     v_batches += 1
 
@@ -252,6 +269,46 @@ def Training_loop(
         state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
         torch.save({"state_dict": state, "cfg": cfg.__dict__, "best_val": best_val}, cfg_path)
         print(f"Saved best model to {cfg_path}")
+    
+    # save config.yaml (especially useful for experiments)
+    if cfg.exp_name is not None:
+        exp_dir = Path("experiments") / cfg.exp_name
+        config_path = exp_dir / "config.yaml"
+        config_data = {
+            "experiment": {
+                "name": cfg.exp_name,
+                "created": timestamp if 'timestamp' in locals() else "unknown",
+            },
+            "dataset": {
+                "path": cfg.dataset_path if cfg.dataset_path else "unknown",
+            },
+            "model": {
+                "type": "SimpleRNN",
+                "hidden": cfg.hidden,
+                "num_layers": cfg.num_layers,
+            },
+            "training": {
+                "epochs": cfg.epochs,
+                "batch_size": cfg.batch,
+                "learning_rate": cfg.lr,
+                "weight_decay": cfg.decay,
+                "grad_clip": cfg.grad_clip,
+                "val_fraction": cfg.val_frac,
+                "teacher_forcing": cfg.teacher_forcing,
+                "seed": cfg.seed if hasattr(cfg, 'seed') else None,
+            },
+            "checkpoints": {
+                "save_every": cfg.save_checkpoint_every,
+            },
+            "results": {
+                "final_train_loss": float(train_losses[-1]) if train_losses else None,
+                "final_val_loss": float(val_losses[-1]) if val_losses else None,
+                "best_val_loss": float(best_val) if best_val < float('inf') else None,
+            },
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+        print(f"Saved config to {config_path}")
 
     elapsed = time.time() - start_time
     print(f"\nTraining completed in {elapsed:.2f}s ({elapsed/60:.2f}m)")
@@ -274,23 +331,36 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-dir", type=str, default=None, help="Log directory name (auto-generated if not provided)")
     parser.add_argument("--checkpoint-every", type=int, default=0, help="Save checkpoint every N epochs (0=disabled)")
+    parser.add_argument("--no-plot", action="store_true", help="Skip automatic plotting after training")
+    parser.add_argument("--n-samples", type=int, default=5, help="Number of prediction samples to plot")
+    parser.add_argument("--exp-name", type=str, default=None, help="Experiment name for organized storage in experiments/{exp_name}/")
     args = parser.parse_args()
 
     # auto-generate timestamp for unique naming
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_path = args.data  # save for config.yaml
     
-    # auto-generate log directory name
-    if args.log_dir is None:
-        log_dir = f"logs/ep{args.epochs}_b{args.batch}_lr{args.lr}_seed{args.seed}_{timestamp}"
+    # determine directory structure based on --exp-name
+    if args.exp_name is not None:
+        # use experiments/{exp_name}/ structure
+        exp_dir = Path("experiments") / args.exp_name
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        
+        log_dir = str(exp_dir / "logs")
+        save_path = str(exp_dir / "model.pt")
+        print(f"Using experiment structure: experiments/{args.exp_name}/")
     else:
-        log_dir = args.log_dir
-    
-    # auto-generate model save path
-    if args.save is None:
-        dataset_name = Path(args.data).stem
-        save_path = f"models/{dataset_name}_ep{args.epochs}_b{args.batch}_lr{args.lr}_seed{args.seed}_{timestamp}.pt"
-    else:
-        save_path = args.save
+        # use legacy flat structure (logs/, models/)
+        if args.log_dir is None:
+            log_dir = f"logs/ep{args.epochs}_b{args.batch}_lr{args.lr}_seed{args.seed}_{timestamp}"
+        else:
+            log_dir = args.log_dir
+        
+        if args.save is None:
+            dataset_name = Path(args.data).stem
+            save_path = f"models/{dataset_name}_ep{args.epochs}_b{args.batch}_lr{args.lr}_seed{args.seed}_{timestamp}.pt"
+        else:
+            save_path = args.save
 
     cfg = TrainConfig(
         epochs=args.epochs, 
@@ -300,5 +370,36 @@ if __name__ == "__main__":
         seed=args.seed, 
         log_dir=log_dir,
         save_checkpoint_every=args.checkpoint_every,
+        exp_name=args.exp_name,
     )
     Training_loop(args.data, cfg=cfg)
+    
+    # Automatically generate plots after training (unless disabled)
+    if not args.no_plot:
+        print("\n" + "="*70)
+        print("Generating diagnostic plots...")
+        print("="*70)
+        try:
+            from src.scripts.plot_all import plot_all_diagnostics
+            
+            # determine output directory for plots
+            if args.exp_name is not None:
+                plots_dir = str(Path("experiments") / args.exp_name / "plots")
+            else:
+                model_name = Path(save_path).stem
+                plots_dir = f"plots/{model_name}"
+            
+            plot_all_diagnostics(
+                model_path=save_path,
+                dataset_path=cfg.dataset_path,  # use from cfg
+                log_dir=log_dir,
+                n_samples=args.n_samples,
+                sample_idx=0,
+                output_dir=plots_dir,
+            )
+        except Exception as e:
+            print(f"Warning: Plotting failed: {e}")
+            if args.exp_name:
+                print(f"You can manually run: python -m src.scripts.plot_all --exp-name {args.exp_name}")
+            else:
+                print(f"You can manually run: python -m src.scripts.plot_all --model {save_path} --data {cfg.dataset_path}")

@@ -112,7 +112,7 @@ def plot_evolution(log_dir: str, dataset_path: str, sample_idx: int = 0, out_dir
     n_species = y_true_np.shape[1]
     species_names = ["A", "D", "G", "J", "M"]
     
-    fig, axes = plt.subplots(n_species, 1, figsize=(12, 3 * n_species), sharex=True)
+    fig, axes = plt.subplots(n_species, 1, figsize=(12, 8), sharex=True)
     
     for i, ax in enumerate(axes):
         # Plot ground truth
@@ -126,11 +126,11 @@ def plot_evolution(log_dir: str, dataset_path: str, sample_idx: int = 0, out_dir
             label = f"Epoch {epoch}" if j % max(1, len(epochs) // 5) == 0 else None
             ax.plot(t_obs[1:], y_pred[:, i], color=color, alpha=alpha, linewidth=1, label=label)
         
-        ax.set_ylabel(f"{species_names[i]} concentration")
+        ax.set_ylabel(f"{species_names[i]} concentration", fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper right', fontsize=8)
     
-    axes[-1].set_xlabel("Time")
+    axes[-1].set_xlabel("Time", fontsize=12)
     fig.suptitle(f"Prediction Evolution Over Training (Sample {sample_idx})\n"
                  f"Epochs: {epochs[0]} → {epochs[-1]}", fontsize=14)
     

@@ -59,7 +59,7 @@ def plot_learned_parameters(
             jump[u, p] = 1.0
     
     # Reconstruct model
-    model = SimpleRNN(U, P=P, hidden=128, num_layers=1, jump_mat=jump)
+    model = SimpleRNN(U, P=P, hidden=128, num_layers=1, u_to_y_jump=jump)
     model.load_state_dict(state_dict)
     model.eval()
     
@@ -81,7 +81,7 @@ def plot_learned_parameters(
     param_names = ['kf1', 'kf2', 'kf3', 'kf4', 'kr1', 'kr2', 'kr3', 'kr4']
     
     # Create figure
-    fig, axes = plt.subplots(4, 2, figsize=(12, 10), sharex=True)
+    fig, axes = plt.subplots(4, 2, figsize=(12, 8), sharex=True)
     axes = axes.flatten()
     
     for i, (ax, name) in enumerate(zip(axes, param_names)):
@@ -90,11 +90,11 @@ def plot_learned_parameters(
         ax.grid(True, alpha=0.3)
         ax.set_ylim(bottom=0)
     
-    axes[-1].set_xlabel('Time', fontsize=11)
-    axes[-2].set_xlabel('Time', fontsize=11)
+    axes[-1].set_xlabel('Time', fontsize=12)
+    axes[-2].set_xlabel('Time', fontsize=12)
     
     model_name = Path(model_path).stem
-    fig.suptitle(f'Learned Time-Varying Parameters θ(t) - {model_name} - Sample {sample_idx}', fontsize=13, y=0.995)
+    fig.suptitle(f'Learned Time-Varying Parameters θ(t) - {model_name} - Sample {sample_idx}', fontsize=14, y=0.995)
     fig.tight_layout()
     
     # Save
