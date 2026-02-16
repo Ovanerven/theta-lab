@@ -16,15 +16,15 @@ from src.data.ode_dataset import ODEDataset, collate
 def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
     """Compute MSE loss in log10 space."""
     # Edit on 13/02: based on Bob's feedback, looked to fix the loss. Stopped clamping loss at 1
-    # eps = 1e-8
-    # log_y = torch.log10(y_seq + eps)
-    # log_pred = torch.log10(pred + eps)
+    eps = 1e-8 # small constant to avoid log(0) in the loss. 
+    log_y = torch.log10(y_seq + eps)
+    log_pred = torch.log10(pred + eps)
 
     # Old idea: clamp_min at 1, use log1p. 
-    y_clamped = y_seq.clamp_min(1.0)
-    pred_clamped = pred.clamp_min(1.0)
-    log_y = torch.log1p(y_clamped)
-    log_pred = torch.log1p(pred_clamped)
+    # y_clamped = y_seq.clamp_min(1.0)
+    # pred_clamped = pred.clamp_min(1.0)
+    # log_y = torch.log1p(y_clamped)
+    # log_pred = torch.log1p(pred_clamped)
 
     return (log_pred - log_y).pow(2).mean()
 
