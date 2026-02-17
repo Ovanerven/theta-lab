@@ -10,3 +10,5 @@ tests
 #slurm outputs and jobs
 slurm_outputs/
 slurm_jobs/
+
+startup.sh
