@@ -1,0 +1,24 @@
+experiment:
+  name: log1p_loss_no_clampmin_noeps_ones_500epoch
+  created: unknown
+dataset:
+  path: datasets/N1000_T300_steps600_ones_knoise0.0.npz
+model:
+  type: SimpleRNN
+  hidden: 128
+  num_layers: 1
+training:
+  epochs: 500
+  batch_size: 300
+  learning_rate: 0.001
+  weight_decay: 0.0085
+  grad_clip: 1.0
+  val_fraction: 0.15
+  teacher_forcing: true
+  seed: 42
+checkpoints:
+  save_every: 50
+results:
+  final_train_loss: 0.010592001490294933
+  final_val_loss: 0.010576479136943817
+  best_val_loss: 0.010575364343822002

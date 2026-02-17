@@ -45,6 +45,23 @@ def rk4_step(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor) -> torch.Tensor
     return torch.clamp_min(y_next, 0.0) # y can't be negative
 
 
+def rk4_step_substeps(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int = 50) -> torch.Tensor:
+    """
+    RK4 with multiple substeps for better numerical accuracy.
+    Divides dt into n_sub smaller intervals and takes n_sub RK4 steps.
+    
+    y : (B,5)
+    dt: (B,1)
+    k : (B,8)
+    n_sub: number of substeps (higher = more accurate, slower)
+    """
+    h = dt / float(n_sub)
+    y_cur = y
+    for _ in range(n_sub):
+        y_cur = rk4_step(y_cur, h, k)
+    return y_cur
+
+
 class SimpleRNN(nn.Module):
     """
     Closed-loop kinetics learner:
@@ -169,7 +186,7 @@ class SimpleRNN(nn.Module):
             # (prevents RK4 overflow while model learns appropriate parameter regime)
             y_jump = y_prev + (u_k @ self.u_to_y_jump.to(device=dev, dtype=dtype))
             # y_jump = torch.clamp(y_jump, min=0.0, max=50.0)
-            y_next = rk4_step(y_jump, dt_k, theta_k)
+            y_next = rk4_step_substeps(y_jump, dt_k, theta_k, n_sub=10)
 
             y_out[:, k, :] = y_next
             theta_out[:, k, :] = theta_k
