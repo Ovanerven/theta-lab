@@ -186,7 +186,7 @@ class SimpleRNN(nn.Module):
             # (prevents RK4 overflow while model learns appropriate parameter regime)
             y_jump = y_prev + (u_k @ self.u_to_y_jump.to(device=dev, dtype=dtype))
             # y_jump = torch.clamp(y_jump, min=0.0, max=50.0)
-            y_next = rk4_step_substeps(y_jump, dt_k, theta_k, n_sub=10)
+            y_next = rk4_step_substeps(y_jump, dt_k, theta_k, n_sub=1)
 
             y_out[:, k, :] = y_next
             theta_out[:, k, :] = theta_k

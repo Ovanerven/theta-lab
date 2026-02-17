@@ -156,6 +156,7 @@ def Training_loop(
     val_losses = []
 
     for ep in range(1, cfg.epochs + 1):
+        epoch_start = time.time()
         teacher_forcing = cfg.teacher_forcing and (ep < cfg.tf_drop_epoch)
         if ep == cfg.tf_drop_epoch:
             teacher_forcing = False
@@ -236,10 +237,11 @@ def Training_loop(
                 best_val = val_loss
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
+        epoch_time = time.time() - epoch_start
         if val_loss is None:
-            print(f"ep {ep:4d} | train {train_loss:.6f}")
+            print(f"ep {ep:4d} | train {train_loss:.6f} | {epoch_time:.2f}s")
         else:
-            print(f"ep {ep:4d} | train {train_loss:.6f} | val {val_loss:.6f} | best {best_val:.6f}")
+            print(f"ep {ep:4d} | train {train_loss:.6f} | val {val_loss:.6f} | best {best_val:.6f} | {epoch_time:.2f}s")
         
         # Save periodic checkpoints if requested
         if cfg.save_checkpoint_every > 0 and ep % cfg.save_checkpoint_every == 0:
