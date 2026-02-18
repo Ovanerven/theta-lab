@@ -1,0 +1,24 @@
+experiment:
+  name: test_snellius_log10_loss_no_clampmin_500epoch
+  created: unknown
+dataset:
+  path: datasets/N1000_T300_steps600_zeros_knoise0.0.npz
+model:
+  type: SimpleRNN
+  hidden: 128
+  num_layers: 1
+training:
+  epochs: 5
+  batch_size: 850
+  learning_rate: 0.001
+  weight_decay: 0.0085
+  grad_clip: 1.0
+  val_fraction: 0.15
+  teacher_forcing: true
+  seed: 42
+checkpoints:
+  save_every: 50
+results:
+  final_train_loss: 0.3675253987312317
+  final_val_loss: 0.2398744374513626
+  best_val_loss: 0.2398744374513626

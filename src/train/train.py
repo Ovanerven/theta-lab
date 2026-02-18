@@ -10,7 +10,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import yaml
 
-from src.models.simple_ode_rnn import SimpleRNN
+# from src.models.simple_ode_rnn import SimpleRNN
+from src.models.simple_ode_rnn_full_model import FullModelRNN as SimpleRNN
 from src.data.ode_dataset import ODEDataset, collate
 
 def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
@@ -138,10 +139,10 @@ def Training_loop(
     model = model_cls(U, P=P, hidden=cfg.hidden, num_layers=cfg.num_layers, u_to_y_jump=jump).to(device)
     
     # optional compilation - disabled for MPS debugging
-    do_script = False
+    do_script = True
     if do_script:
         try:
-            model = torch.jit.script(model)
+            model = torch.compile(model, mode="reduce-overhead")
             print("The model compiled successfully")
         except Exception as e:
             print(f"TorchScript failed: {e}")
@@ -249,6 +250,8 @@ def Training_loop(
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             ckpt_path = ckpt_dir / f"model_ep{ep:04d}.pt"
             state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+            # Remove torch.compile prefix if present
+            state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
             torch.save({"state_dict": state, "epoch": ep, "cfg": cfg.__dict__}, ckpt_path)
 
     # save best model if requested
@@ -270,6 +273,8 @@ def Training_loop(
         cfg_path = Path(cfg.save_path)
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+        # Remove torch.compile prefix if present
+        state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
         torch.save({"state_dict": state, "cfg": cfg.__dict__, "best_val": best_val}, cfg_path)
         print(f"Saved best model to {cfg_path}")
     

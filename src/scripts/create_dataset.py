@@ -60,7 +60,8 @@ def generate_training_dataset(
 
     n_states_full, n_params_full, names_full = FullModel(None, None, None, dim=True)
 
-    obs_indices = np.asarray([0, 3, 6, 9, 12], dtype=np.int64)
+    # obs_indices = np.asarray([0, 3, 6, 9, 12], dtype=np.int64)
+    obs_indices = np.asarray(list(range(n_states_full)), dtype=np.int64)
     p_obs = int(obs_indices.shape[0])
 
     if control_indices is None:
