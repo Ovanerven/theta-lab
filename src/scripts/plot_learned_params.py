@@ -9,7 +9,8 @@ import torch
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from src.models.simple_ode_rnn import SimpleRNN
+# from src.models.simple_ode_rnn import SimpleRNN
+from src.models.simple_ode_rnn_full_model import FullModelRNN as SimpleRNN
 from src.data.ode_dataset import ODEDataset
 
 
@@ -72,26 +73,43 @@ def plot_learned_parameters(
         pred, theta = model(y0_batch, u_batch, dt_batch, y_seq=None, teacher_forcing=False)
     
     # Extract results
-    theta_np = theta[0].cpu().numpy()  # (K, 8)
+    theta_np = theta[0].cpu().numpy()  # (K, n_params)
     dt_np = dt_seq.cpu().numpy()
     t = np.concatenate([[0.0], np.cumsum(dt_np)])  # (K+1,)
     t_theta = t[1:]  # theta is defined at t1..tK
     
-    # Parameter names
-    param_names = ['kf1', 'kf2', 'kf3', 'kf4', 'kr1', 'kr2', 'kr3', 'kr4']
+    # Parameter names - handle both 8 (reduced) and 19 (full model)
+    n_params = theta_np.shape[1]
+    if n_params == 8:
+        param_names = ['kf1', 'kf2', 'kf3', 'kf4', 'kr1', 'kr2', 'kr3', 'kr4']
+        nrows, ncols = 4, 2
+    elif n_params == 19:
+        param_names = ['kf1', 'kf2', 'kf3', 'kf4', 'kf5', 'kf6', 'kf7', 'kf8', 'kf9', 'kf10', 'kf11', 'kf12',
+                      'kr1', 'kr3', 'kr5', 'kr7', 'kr9', 'kr11', 'kr12']
+        nrows, ncols = 7, 3  # 21 subplots (19 used)
+    else:
+        param_names = [f'θ{i+1}' for i in range(n_params)]
+        ncols = min(3, n_params)
+        nrows = (n_params + ncols - 1) // ncols
     
     # Create figure
-    fig, axes = plt.subplots(4, 2, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 2*nrows), sharex=True)
     axes = axes.flatten()
     
-    for i, (ax, name) in enumerate(zip(axes, param_names)):
-        ax.plot(t_theta, theta_np[:, i], linewidth=1.5, color=f'C{i}')
+    for i, (ax, name) in enumerate(zip(axes[:n_params], param_names)):
+        ax.plot(t_theta, theta_np[:, i], linewidth=1.5, color=f'C{i % 10}')
         ax.set_ylabel(name, fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.set_ylim(bottom=0)
     
-    axes[-1].set_xlabel('Time', fontsize=12)
-    axes[-2].set_xlabel('Time', fontsize=12)
+    # Hide extra subplots if any
+    for i in range(n_params, len(axes)):
+        axes[i].axis('off')
+    
+    # Set xlabel on bottom row
+    for i in range(nrows * ncols - ncols, nrows * ncols):
+        if i < len(axes):
+            axes[i].set_xlabel('Time', fontsize=12)
     
     model_name = Path(model_path).stem
     fig.suptitle(f'Learned Time-Varying Parameters θ(t) - {model_name} - Sample {sample_idx}', fontsize=14, y=0.995)

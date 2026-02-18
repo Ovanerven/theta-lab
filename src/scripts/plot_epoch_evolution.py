@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from src.models.simple_ode_rnn import SimpleRNN
+# from src.models.simple_ode_rnn import SimpleRNN
+from src.models.simple_ode_rnn_full_model import FullModelRNN as SimpleRNN
 from src.data.ode_dataset import ODEDataset
 
 
@@ -110,9 +111,10 @@ def plot_evolution(log_dir: str, dataset_path: str, sample_idx: int = 0, out_dir
     
     # Create multi-panel plot
     n_species = y_true_np.shape[1]
-    species_names = ["A", "D", "G", "J", "M"]
+    all_species_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]
+    species_names = all_species_names[:n_species] if n_species <= 13 else [f"S{i}" for i in range(n_species)]
     
-    fig, axes = plt.subplots(n_species, 1, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(n_species, 1, figsize=(12, max(8, n_species * 0.8)), sharex=True)
     
     for i, ax in enumerate(axes):
         # Plot ground truth

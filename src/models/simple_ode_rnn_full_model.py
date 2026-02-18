@@ -85,8 +85,8 @@ class FullModelRNN(nn.Module):
     def __init__(
         self,
         in_u: int,
-        P: int = 5, # number of observed species (e.g., 5 for A,D,G,J,M)
-        obs_indices: list = None,  # which of the 13 species are observed (e.g., [0,3,6,9,12])
+        P: int = 13, # number of observed species (13 for full model)
+        obs_indices: list = None,  # which of the 13 species are observed
         lift_dim: int = 32,
         hidden: int = 128,
         num_layers: int = 1,
@@ -101,9 +101,9 @@ class FullModelRNN(nn.Module):
         self.num_layers = num_layers
         
         # Map from observed indices to full 13-species state
-        # Default: observe A, D, G, J, M (indices 0, 3, 6, 9, 12)
+        # Default: observe all 13 species
         if obs_indices is None:
-            obs_indices = [0, 3, 6, 9, 12]
+            obs_indices = list(range(13))
         self.obs_indices = obs_indices
         
         if len(obs_indices) != P:
@@ -165,10 +165,8 @@ class FullModelRNN(nn.Module):
         y_out = torch.empty(B, K, self.P, device=dev, dtype=dtype)
         theta_out = torch.empty(B, K, 19, device=dev, dtype=dtype)
 
-        # Initialize full 13-species state (assume unobserved species start at small value)
-        y_full_prev = torch.zeros(B, 13, device=dev, dtype=dtype)
-        y_full_prev[:, self.obs_indices] = y0 + 0.01  # observed species
-        y_full_prev[:, [i for i in range(13) if i not in self.obs_indices]] = 0.01  # unobserved
+        # Initialize full 13-species state
+        y_full_prev = y0 + 0.01  # All species observed, so y0 is already (B,13)
 
         h = torch.zeros(self.num_layers, B, self.hidden, device=dev, dtype=dtype)
 

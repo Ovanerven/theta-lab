@@ -11,7 +11,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.models.simple_ode_rnn import SimpleRNN
+# from src.models.simple_ode_rnn import SimpleRNN
+from src.models.simple_ode_rnn_full_model import FullModelRNN as SimpleRNN
 from src.data.ode_dataset import ODEDataset, collate
 
 
@@ -109,7 +110,9 @@ def plot_predictions(
         pred_batch, _ = model(y0_batch, u_batch, dt_batch, y_seq=None, teacher_forcing=False)
     
     # Plot each sample
-    species_names = ["A", "D", "G", "J", "M"]
+    # Full 13-species names, will auto-slice if fewer observed
+    all_species_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]
+    species_names = all_species_names[:P] if P <= 13 else [f"S{i}" for i in range(P)]
     
     for idx in range(min(n_samples, y0_batch.shape[0])):
         dt_np = dt_batch[idx].cpu().numpy()
@@ -117,7 +120,7 @@ def plot_predictions(
         y_true = y_batch[idx].cpu().numpy()
         y_pred = pred_batch[idx].cpu().numpy()
         
-        fig, axes = plt.subplots(P, 1, figsize=(12, 8), sharex=True)
+        fig, axes = plt.subplots(P, 1, figsize=(12, max(8, P * 0.8)), sharex=True)
         if P == 1:
             axes = [axes]
         
