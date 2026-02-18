@@ -142,7 +142,7 @@ def Training_loop(
     do_script = True
     if do_script:
         try:
-            model = torch.compile(model, mode="reduce-overhead")
+            model = torch.jit.script(model)
             print("The model compiled successfully")
         except Exception as e:
             print(f"TorchScript failed: {e}")
