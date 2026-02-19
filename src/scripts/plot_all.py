@@ -2,15 +2,25 @@
 """
 Unified plotting script - generates all training diagnostics in one command.
 Automatically organizes plots into a clean directory structure.
+
+Usage
+-----
+  # Recommended: experiment-directory mode
+  python -m src.scripts.plot_all --exp-name baseline_log10_loss
+
+  # Legacy: explicit paths
+  python -m src.scripts.plot_all --model models/my.pt --data datasets/my.npz
 """
 import argparse
 from pathlib import Path
 import sys
 
-# Import plotting functions from other scripts
-from src.scripts.plot_training_results import plot_loss_curves, plot_predictions
-from src.scripts.plot_learned_params import plot_learned_parameters
-from src.scripts.plot_epoch_evolution import plot_evolution
+from src.scripts.plotting import (
+    plot_loss_curves,
+    plot_predictions,
+    plot_learned_parameters,
+    plot_evolution,
+)
 
 
 def plot_all_diagnostics(

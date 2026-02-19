@@ -1,0 +1,763 @@
+models/kinetics_rnn.py
+
+"""
+Generic KineticsRNN: one class for all mechanism variants.
+
+The model always integrates n_state species internally but only
+outputs/observes the species listed in obs_indices.
+
+Usage
+-----
+from src.sim.mechanisms import MECH_REGISTRY
+from src.models.kinetics_rnn import KineticsRNN
+
+mech = MECH_REGISTRY["full13"]
+model = KineticsRNN(mech, obs_indices=[0,3,6,9,12], in_u=13, u_to_y_jump=jump)
+"""
+
+from __future__ import annotations
+from typing import List, Tuple
+
+import torch
+import torch.nn as nn
+
+from src.sim.mechanisms import _full13_rhs, _reduced5_rhs, _reduced6_rhs, _reduced7_rhs, _reduced8_rhs
+
+
+def _gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
+    """Bounded positive map: output in (lo, hi)."""
+    return lo + (hi - lo) * torch.sigmoid(x)
+
+
+def _rk4_full13(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int) -> torch.Tensor:
+    h = dt / float(n_sub)
+    for _ in range(n_sub):
+        k1 = _full13_rhs(y, k)
+        k2 = _full13_rhs(y + 0.5 * h * k1, k)
+        k3 = _full13_rhs(y + 0.5 * h * k2, k)
+        k4 = _full13_rhs(y + h * k3, k)
+        y = torch.clamp_min(y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4), 0.0)
+    return y
+
+
+def _rk4_reduced5(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int) -> torch.Tensor:
+    h = dt / float(n_sub)
+    for _ in range(n_sub):
+        k1 = _reduced5_rhs(y, k)
+        k2 = _reduced5_rhs(y + 0.5 * h * k1, k)
+        k3 = _reduced5_rhs(y + 0.5 * h * k2, k)
+        k4 = _reduced5_rhs(y + h * k3, k)
+        y = torch.clamp_min(y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4), 0.0)
+    return y
+
+
+def _rk4_reduced6(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int) -> torch.Tensor:
+    h = dt / float(n_sub)
+    for _ in range(n_sub):
+        k1 = _reduced6_rhs(y, k)
+        k2 = _reduced6_rhs(y + 0.5 * h * k1, k)
+        k3 = _reduced6_rhs(y + 0.5 * h * k2, k)
+        k4 = _reduced6_rhs(y + h * k3, k)
+        y = torch.clamp_min(y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4), 0.0)
+    return y
+
+
+def _rk4_reduced7(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int) -> torch.Tensor:
+    h = dt / float(n_sub)
+    for _ in range(n_sub):
+        k1 = _reduced7_rhs(y, k)
+        k2 = _reduced7_rhs(y + 0.5 * h * k1, k)
+        k3 = _reduced7_rhs(y + 0.5 * h * k2, k)
+        k4 = _reduced7_rhs(y + h * k3, k)
+        y = torch.clamp_min(y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4), 0.0)
+    return y
+
+
+def _rk4_reduced8(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int) -> torch.Tensor:
+    h = dt / float(n_sub)
+    for _ in range(n_sub):
+        k1 = _reduced8_rhs(y, k)
+        k2 = _reduced8_rhs(y + 0.5 * h * k1, k)
+        k3 = _reduced8_rhs(y + 0.5 * h * k2, k)
+        k4 = _reduced8_rhs(y + h * k3, k)
+        y = torch.clamp_min(y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4), 0.0)
+    return y
+
+
+class KineticsRNN(nn.Module):
+    """
+    One generic RNN for any Mechanism.
+
+    - Always integrates `mech.n_state` species internally.
+    - Only inputs/outputs `obs_indices` species.
+    - head has `mech.n_param` outputs.
+
+    Parameters
+    ----------
+    mech : Mechanism
+        Defines n_state, n_param, and the RHS callable.
+    obs_indices : list[int]
+        Which of the n_state species are observed (input/output).
+        Must have length == P (number of observed species inferred from dataset).
+    in_u : int
+        Dimensionality of control input u_k.
+    u_to_y_jump : Tensor (in_u, P)
+        Mapping from control to observed species for bolus application.
+    lift_dim : int
+        Hidden size of the input lift MLP.
+    hidden : int
+        GRU hidden size.
+    num_layers : int
+        Number of GRU layers.
+    dropout : float
+        Dropout rate.
+    n_sub : int
+        Number of RK4 sub-steps per time interval.
+    """
+
+    def __init__(
+        self,
+        mech,
+        obs_indices: List[int],
+        in_u: int,
+        u_to_y_jump: torch.Tensor,   # (in_u, P)
+        lift_dim: int = 32,
+        hidden: int = 128,
+        num_layers: int = 1,
+        dropout: float = 0.0,
+        n_sub: int = 1,
+    ):
+        super().__init__()
+
+        self.obs_indices = obs_indices      # full-state indices (metadata / for plotting)
+        self.mech_name: str = mech.name    # scriptable: used to dispatch rhs in forward
+        self.P = len(obs_indices)          # observed species count
+        self.n_state: int = mech.n_state   # internal state size
+        self.n_param: int = mech.n_param
+        self.in_u = in_u
+        self.hidden = hidden
+        self.num_layers = num_layers
+        self.n_sub = n_sub
+
+        in_dim = in_u + self.P             # [u_k || y_obs_prev]
+
+        self.lift = nn.Sequential(
+            nn.Linear(in_dim, lift_dim),
+            nn.SiLU(),
+            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+        )
+        self.gru = nn.GRU(
+            input_size=lift_dim,
+            hidden_size=hidden,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        self.head = nn.Linear(hidden, mech.n_param)
+
+        self.register_buffer(
+            "u_to_y_jump",
+            u_to_y_jump.to(dtype=torch.float32),
+            persistent=True,
+        )
+
+        # Initialisation
+        for m in self.lift:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
+        for name, p in self.gru.named_parameters():
+            if "weight" in name:
+                nn.init.xavier_uniform_(p)
+            elif "bias" in name:
+                nn.init.zeros_(p)
+        nn.init.xavier_uniform_(self.head.weight)
+        nn.init.constant_(self.head.bias, 0.0)
+
+    def forward(
+        self,
+        y0: torch.Tensor,                      # (B, P)
+        u_seq: torch.Tensor,                   # (B, K, U)
+        dt_seq: torch.Tensor,                  # (B, K)
+        y_seq: torch.Tensor | None = None,     # (B, K, P) for teacher forcing
+        teacher_forcing: bool = True,
+        tf_every: int = 50,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        B, K, U = u_seq.shape
+        dev = u_seq.device
+        dtype = u_seq.dtype
+
+        y_out     = torch.empty(B, K, self.P,        device=dev, dtype=dtype)
+        theta_out = torch.empty(B, K, self.n_param,  device=dev, dtype=dtype)
+
+        obs_idx_t = torch.arange(self.P, device=dev, dtype=torch.long)  # 0..P-1
+
+        # Initialise full internal state: observed species from y0, rest = 0.01
+        y_full = torch.full((B, self.n_state), 0.01, device=dev, dtype=dtype)
+        y_full[:, obs_idx_t] = y0 + 0.01
+
+        h = torch.zeros(self.num_layers, B, self.hidden, device=dev, dtype=dtype)
+
+        for k in range(K):
+            dt_k = dt_seq[:, k:k+1]   # (B, 1)
+            u_k  = u_seq[:, k, :]     # (B, U)
+
+            # Extract observed species
+            y_obs_prev = y_full[:, obs_idx_t]  # (B, P)
+
+            # Teacher forcing: occasionally replace with ground truth
+            if teacher_forcing and (y_seq is not None) and k > 0 and (k % tf_every == 0):
+                y_prev_in = y_seq[:, k-1, :].detach()
+            else:
+                y_prev_in = y_obs_prev.detach()
+
+            # GRU forward
+            feat = torch.cat([u_k, y_prev_in], dim=-1)
+            x, h = self.gru(self.lift(feat).unsqueeze(1), h)
+            z = x.squeeze(1)                    # (B, hidden)
+
+            raw = self.head(z)                  # (B, n_param)
+            theta_k = _gamma(raw, 1e-3, 2.0)   # all params bounded in (1e-3, 2)
+
+            # Apply bolus to observed species in full state
+            y_obs_jump = y_obs_prev + (u_k @ self.u_to_y_jump.to(device=dev, dtype=dtype))
+            y_full_jump = y_full.clone()
+            y_full_jump[:, obs_idx_t] = y_obs_jump
+
+            # Integrate — dispatch by mechanism name (TorchScript-safe)
+            if self.mech_name == "full13":
+                y_full = _rk4_full13(y_full_jump, dt_k, theta_k, self.n_sub)
+            elif self.mech_name == "reduced7":
+                y_full = _rk4_reduced6(y_full_jump, dt_k, theta_k, self.n_sub)
+            elif self.mech_name == "reduced8":
+                y_full = _rk4_reduced7(y_full_jump, dt_k, theta_k, self.n_sub)
+            elif self.mech_name == "reduced9":
+                y_full = _rk4_reduced8(y_full_jump, dt_k, theta_k, self.n_sub)
+            else:
+                y_full = _rk4_reduced5(y_full_jump, dt_k, theta_k, self.n_sub)
+
+            y_out[:, k, :]    = y_full[:, obs_idx_t]
+            theta_out[:, k, :] = theta_k
+
+        return (y_out, theta_out) if self.training else (y_out, theta_out.detach())
+
+sim/mechanisms.py
+
+"""
+Mechanism registry: defines the ODE right-hand sides and metadata for each
+kinetic model variant.  Train / plot code only imports from here - never
+from individual model files.
+
+Usage
+-----
+from src.sim.mechanisms import MECH_REGISTRY
+mech = MECH_REGISTRY["full13"]   # or "reduced5"
+# mech.rhs(y, k)  ->  dy/dt
+# mech.n_state    ->  13
+# mech.n_param    ->  19
+"""
+
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Callable, List
+
+import torch
+
+
+@dataclass(frozen=True)
+class Mechanism:
+    name: str
+    n_state: int
+    n_param: int
+    param_names: List[str]
+    state_names: List[str]
+    rhs: Callable  # (B, n_state), (B, n_param) -> (B, n_state)
+
+
+MECH_REGISTRY: dict[str, Mechanism] = {}
+
+
+def _register(mech: Mechanism) -> Mechanism:
+    MECH_REGISTRY[mech.name] = mech
+    return mech
+
+
+# ---------------------------------------------------------------------------
+# full13: A -> B -> C -> D -> E -> F -> G -> H -> I -> J -> K -> L -> M
+# 12 forward rates (kf1..kf12), 7 reverse rates (kr1,kr3,kr5,kr7,kr9,kr11,kr12)
+# ---------------------------------------------------------------------------
+
+def _full13_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    """
+    y: (B, 13)  [A, B, C, D, E, F, G, H, I, J, K, L, M]
+    k: (B, 19)  [kf1..kf12, kr1, kr3, kr5, kr7, kr9, kr11, kr12]
+    """
+    A, B, C, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
+    (kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11, kf12,
+     kr1, kr3, kr5, kr7, kr9, kr11, kr12) = k.unbind(dim=-1)
+
+    dA = -kf1*A  + kr1*B
+    dB =  kf1*A  - kr1*B  - kf2*B
+    dC =  kf2*B  - kf3*C  + kr3*D
+    dD =  kf3*C  - kr3*D  - kf4*D
+    dE =  kf4*D  - kf5*E  + kr5*F
+    dF =  kf5*E  - kr5*F  - kf6*F
+    dG =  kf6*F  - kf7*G  + kr7*H
+    dH =  kf7*G  - kr7*H  - kf8*H
+    dI =  kf8*H  - kf9*I  + kr9*J
+    dJ =  kf9*I  - kr9*J  - kf10*J
+    dK =  kf10*J - kf11*K + kr11*L
+    dL =  kf11*K - kr11*L - kf12*L + kr12*M
+    dM =  kf12*L - kr12*M
+
+    return torch.stack([dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM], dim=-1)
+
+
+FULL13 = _register(Mechanism(
+    name="full13",
+    n_state=13,
+    n_param=19,
+    param_names=[
+        "kf1", "kf2", "kf3", "kf4", "kf5", "kf6",
+        "kf7", "kf8", "kf9", "kf10", "kf11", "kf12",
+        "kr1", "kr3", "kr5", "kr7", "kr9", "kr11", "kr12",
+    ],
+    state_names=list("ABCDEFGHIJKLM"),
+    rhs=_full13_rhs,
+))
+
+
+# ---------------------------------------------------------------------------
+# reduced5: A -> D -> G -> J -> M  (lumped 3-step sub-chains)
+# 4 forward rates (kf1..kf4), 4 reverse rates (kr1..kr4)
+# ---------------------------------------------------------------------------
+
+def _reduced5_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    """
+    y: (B, 5)  [A, D, G, J, M]
+    k: (B, 8)  [kf1, kf2, kf3, kf4, kr1, kr2, kr3, kr4]
+    """
+    A, D, G, J, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kf4, kr1, kr2, kr3, kr4 = k.unbind(dim=-1)
+
+    dA = -kf1*A + kr1*D
+    dD =  kf1*A - kr1*D - kf2*D + kr2*G
+    dG =  kf2*D - kr2*G - kf3*G + kr3*J
+    dJ =  kf3*G - kr3*J - kf4*J + kr4*M
+    dM =  kf4*J - kr4*M
+
+    return torch.stack([dA, dD, dG, dJ, dM], dim=-1)
+
+
+REDUCED5 = _register(Mechanism(
+    name="reduced5",
+    n_state=5,
+    n_param=8,
+    param_names=["kf1", "kf2", "kf3", "kf4", "kr1", "kr2", "kr3", "kr4"],
+    state_names=["A", "D", "G", "J", "M"],
+    rhs=_reduced5_rhs,
+))
+
+
+# ---------------------------------------------------------------------------
+# reduced6: A -> C -> E -> G -> I -> K -> M  (6 states, every ~2 steps)
+# obs columns from full13 file: [0, 2, 4, 6, 8, 10, 12]
+# ---------------------------------------------------------------------------
+
+def _reduced6_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    A, C, E, G, I, K, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kf4, kf5, kf6, kr1, kr2, kr3, kr4, kr5, kr6 = k.unbind(dim=-1)
+
+    dA = -kf1*A + kr1*C
+    dC =  kf1*A - kr1*C - kf2*C + kr2*E
+    dE =  kf2*C - kr2*E - kf3*E + kr3*G
+    dG =  kf3*E - kr3*G - kf4*G + kr4*I
+    dI =  kf4*G - kr4*I - kf5*I + kr5*K
+    dK =  kf5*I - kr5*K - kf6*K + kr6*M
+    dM =  kf6*K - kr6*M
+
+    return torch.stack([dA, dC, dE, dG, dI, dK, dM], dim=-1)
+
+
+REDUCED6 = _register(Mechanism(
+    name="reduced7",
+    n_state=7,
+    n_param=12,
+    param_names=["kf1", "kf2", "kf3", "kf4", "kf5", "kf6",
+                 "kr1", "kr2", "kr3", "kr4", "kr5", "kr6"],
+    state_names=["A", "C", "E", "G", "I", "K", "M"],
+    rhs=_reduced6_rhs,
+))
+
+
+# ---------------------------------------------------------------------------
+# reduced7: A -> B -> D -> F -> H -> J -> L -> M  (7 states)
+# obs columns from full13 file: [0, 1, 3, 5, 7, 9, 11, 12]
+# ---------------------------------------------------------------------------
+
+def _reduced7_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    A, B, D, F, H, J, L, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kf4, kf5, kf6, kf7, kr1, kr2, kr3, kr4, kr5, kr6, kr7 = k.unbind(dim=-1)
+
+    dA = -kf1*A + kr1*B
+    dB =  kf1*A - kr1*B - kf2*B + kr2*D
+    dD =  kf2*B - kr2*D - kf3*D + kr3*F
+    dF =  kf3*D - kr3*F - kf4*F + kr4*H
+    dH =  kf4*F - kr4*H - kf5*H + kr5*J
+    dJ =  kf5*H - kr5*J - kf6*J + kr6*L
+    dL =  kf6*J - kr6*L - kf7*L + kr7*M
+    dM =  kf7*L - kr7*M
+
+    return torch.stack([dA, dB, dD, dF, dH, dJ, dL, dM], dim=-1)
+
+
+REDUCED7 = _register(Mechanism(
+    name="reduced8",
+    n_state=8,
+    n_param=14,
+    param_names=["kf1", "kf2", "kf3", "kf4", "kf5", "kf6", "kf7",
+                 "kr1", "kr2", "kr3", "kr4", "kr5", "kr6", "kr7"],
+    state_names=["A", "B", "D", "F", "H", "J", "L", "M"],
+    rhs=_reduced7_rhs,
+))
+
+
+# ---------------------------------------------------------------------------
+# reduced8: A -> B -> C -> E -> G -> I -> K -> L -> M  (8 states)
+# obs columns from full13 file: [0, 1, 2, 4, 6, 8, 10, 11, 12]
+# ---------------------------------------------------------------------------
+
+def _reduced8_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    A, B, C, E, G, I, K, L, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kr1, kr2, kr3, kr4, kr5, kr6, kr7, kr8 = k.unbind(dim=-1)
+
+    dA = -kf1*A + kr1*B
+    dB =  kf1*A - kr1*B - kf2*B + kr2*C
+    dC =  kf2*B - kr2*C - kf3*C + kr3*E
+    dE =  kf3*C - kr3*E - kf4*E + kr4*G
+    dG =  kf4*E - kr4*G - kf5*G + kr5*I
+    dI =  kf5*G - kr5*I - kf6*I + kr6*K
+    dK =  kf6*I - kr6*K - kf7*K + kr7*L
+    dL =  kf7*K - kr7*L - kf8*L + kr8*M
+    dM =  kf8*L - kr8*M
+
+    return torch.stack([dA, dB, dC, dE, dG, dI, dK, dL, dM], dim=-1)
+
+
+REDUCED8 = _register(Mechanism(
+    name="reduced9",
+    n_state=9,
+    n_param=16,
+    param_names=["kf1", "kf2", "kf3", "kf4", "kf5", "kf6", "kf7", "kf8",
+                 "kr1", "kr2", "kr3", "kr4", "kr5", "kr6", "kr7", "kr8"],
+    state_names=["A", "B", "C", "E", "G", "I", "K", "L", "M"],
+    rhs=_reduced8_rhs,
+))
+
+scripts/train.py:
+
+"""
+YAML-driven training entrypoint.
+
+Usage
+-----
+python -m src.scripts.train --config experiments/full13_obs5.yaml
+python -m src.scripts.train --config experiments/reduced5_obs5.yaml
+python -m src.scripts.train --config experiments/full13_obs13.yaml
+
+The YAML schema is documented in the example configs under experiments/.
+"""
+
+from __future__ import annotations
+import argparse
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+import yaml
+
+from src.data.ode_dataset import ODEDataset, collate
+from src.sim.mechanisms import MECH_REGISTRY
+from src.models.kinetics_rnn import KineticsRNN
+
+
+# ---------------------------------------------------------------------------
+# Loss
+# ---------------------------------------------------------------------------
+
+def _loss_fn(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    return (torch.log1p(pred) - torch.log1p(target)).pow(2).mean()
+
+
+# ---------------------------------------------------------------------------
+# Main training function
+# ---------------------------------------------------------------------------
+
+def train_from_config(config_path: str | Path) -> None:
+    config_path = Path(config_path)
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    start_time = time.time()
+
+    # ---- unpack config sections ------------------------------------------
+    ds_cfg    = cfg["dataset"]
+    mech_cfg  = cfg["mechanism"]
+    train_cfg = cfg.get("train", {})
+    out_cfg   = cfg.get("output", {})
+
+    dataset_path     = Path(ds_cfg["path"])
+    obs_indices     = ds_cfg.get("obs_indices", None)       # list[int] or null
+
+    mech_name        = mech_cfg["name"]
+    mech             = MECH_REGISTRY[mech_name]
+
+    epochs           = int(train_cfg.get("epochs", 200))
+    batch            = int(train_cfg.get("batch", 300))
+    lr               = float(train_cfg.get("lr", 1e-3))
+    hidden           = int(train_cfg.get("hidden", 128))
+    num_layers       = int(train_cfg.get("num_layers", 1))
+    decay            = float(train_cfg.get("weight_decay", 0.0085))
+    val_frac         = float(train_cfg.get("val_frac", 0.15))
+    grad_clip        = float(train_cfg.get("grad_clip", 1.0))
+    tf_every         = int(train_cfg.get("tf_every", 50))
+    tf_drop_epoch    = int(train_cfg.get("tf_drop_epoch", 250))
+    seed             = int(train_cfg.get("seed", 42))
+    n_sub            = int(train_cfg.get("n_sub", 1))
+    ckpt_every       = int(out_cfg.get("checkpoint_every", 0))
+
+    # experiment name and paths
+    exp_name = out_cfg.get("exp_name", config_path.stem)
+    exp_dir  = Path("experiments") / exp_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    model_path = exp_dir / "model.pt"
+    log_dir    = exp_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- reproducibility --------------------------------------------------
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # ---- device -----------------------------------------------------------
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+    print(f"Mechanism: {mech_name}  |  n_state={mech.n_state}  n_param={mech.n_param}")
+
+    # ---- dataset ----------------------------------------------------------
+    ds = ODEDataset(dataset_path, obs_indices=obs_indices)
+    print(f"Dataset: {dataset_path.name}  |  N={len(ds)}  P={ds.y0.shape[1]}  K={ds.u_seq.shape[1]}")
+    print(f"obs_indices (effective): {ds.obs_indices.tolist()}")
+
+    N = len(ds)
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(N)
+
+    n_val = max(1, int(N * val_frac)) if val_frac > 0 and N > 1 else 0
+    val_idx   = idx[:n_val]
+    train_idx = idx[n_val:]
+
+    train_loader = DataLoader(
+        torch.utils.data.Subset(ds, train_idx.tolist()),
+        batch_size=batch, shuffle=True, num_workers=0,
+        collate_fn=collate, pin_memory=True,
+    )
+    val_loader = None
+    if n_val > 0:
+        val_loader = DataLoader(
+            torch.utils.data.Subset(ds, val_idx.tolist()),
+            batch_size=batch, shuffle=False, num_workers=0,
+            collate_fn=collate, pin_memory=True,
+        )
+
+    # ---- infer dimensions from dataset ------------------------------------
+    y0_ex, u_ex, _, _ = ds[0]
+    P = int(y0_ex.shape[0])
+    U = int(u_ex.shape[1])
+
+    obs  = ds.obs_indices.tolist()
+    ctrl = ds.control_indices.tolist()
+    obs_pos = {full_idx: p for p, full_idx in enumerate(obs)}
+    jump = torch.zeros(U, P, dtype=torch.float32)
+    for u_i, full_idx in enumerate(ctrl):
+        p = obs_pos.get(full_idx)
+        if p is not None:
+            jump[u_i, p] = 1.0
+
+    # obs_indices for the model = positions in the full n_state vector
+    model_obs_indices = obs  # already full-state indices
+
+    # ---- model ------------------------------------------------------------
+    model = KineticsRNN(
+        mech=mech,
+        obs_indices=model_obs_indices,
+        in_u=U,
+        u_to_y_jump=jump,
+        hidden=hidden,
+        num_layers=num_layers,
+        n_sub=n_sub,
+    ).to(device)
+
+    # Optional TorchScript compilation
+    do_script = train_cfg.get("jit_script", True)
+    if do_script:
+        try:
+            model = torch.jit.script(model)
+            print("TorchScript: OK")
+        except Exception as e:
+            print(f"TorchScript failed (running eagerly): {e}")
+
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
+
+    # ---- training loop ----------------------------------------------------
+    best_val   = float("inf")
+    best_state = None
+    train_losses: list[float] = []
+    val_losses:   list[float] = []
+
+    for ep in range(1, epochs + 1):
+        t0 = time.time()
+        tf_enabled = bool(train_cfg.get("teacher_forcing", True))
+        use_tf = tf_enabled and (ep < tf_drop_epoch)
+
+        # ---- train -------------------------------------------------------
+        model.train()
+        train_total, n_batches = 0.0, 0
+        for y0, u_seq, dt_seq, y_seq in train_loader:
+            y0     = y0.to(device)
+            u_seq  = u_seq.to(device)
+            dt_seq = dt_seq.to(device)
+            y_seq  = y_seq.to(device)
+
+            opt.zero_grad()
+            pred, _ = model(y0, u_seq, dt_seq, y_seq=y_seq,
+                            teacher_forcing=use_tf, tf_every=tf_every)
+
+            if not torch.isfinite(pred).all():
+                raise RuntimeError(f"NaNs in pred at epoch {ep}")
+
+            loss = _loss_fn(pred, y_seq)
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"NaN/inf loss at epoch {ep}: {loss}")
+
+            loss.backward()
+            if grad_clip > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            opt.step()
+
+            train_total += float(loss.item())
+            n_batches += 1
+
+        train_loss = train_total / max(1, n_batches)
+        train_losses.append(train_loss)
+
+        # ---- val ---------------------------------------------------------
+        val_loss = None
+        if val_loader is not None:
+            model.eval()
+            val_total, v_batches = 0.0, 0
+            with torch.no_grad():
+                for y0, u_seq, dt_seq, y_seq in val_loader:
+                    y0     = y0.to(device)
+                    u_seq  = u_seq.to(device)
+                    dt_seq = dt_seq.to(device)
+                    y_seq  = y_seq.to(device)
+                    pred, _ = model(y0, u_seq, dt_seq,
+                                    y_seq=None, teacher_forcing=False)
+                    val_total += float(_loss_fn(pred, y_seq).item())
+                    v_batches += 1
+            val_loss = val_total / max(1, v_batches)
+            val_losses.append(val_loss)
+
+            if val_loss < best_val:
+                best_val = val_loss
+                best_state = {k: v.detach().cpu().clone()
+                              for k, v in model.state_dict().items()}
+
+        epoch_time = time.time() - t0
+        if val_loss is None:
+            print(f"ep {ep:4d} | train {train_loss:.6f} | {epoch_time:.2f}s")
+        else:
+            print(f"ep {ep:4d} | train {train_loss:.6f} | val {val_loss:.6f} "
+                  f"| best {best_val:.6f} | {epoch_time:.2f}s")
+
+        # periodic checkpoints
+        if ckpt_every > 0 and ep % ckpt_every == 0:
+            ckpt_dir = log_dir / "checkpoints"
+            ckpt_dir.mkdir(exist_ok=True)
+            state = {k.replace("_orig_mod.", ""): v.detach().cpu()
+                     for k, v in model.state_dict().items()}
+            torch.save({
+                "state_dict": state,
+                "epoch": ep,
+                "mechanism": mech_name,
+                "obs_indices": model_obs_indices,
+                "cfg": cfg,
+            }, ckpt_dir / f"model_ep{ep:04d}.pt")
+
+    # ---- save best model -------------------------------------------------
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    np.savez(
+        log_dir / "loss_curves.npz",
+        train_losses=np.array(train_losses),
+        val_losses=np.array(val_losses) if val_losses else np.array([]),
+    )
+    print(f"Saved loss curves → {log_dir / 'loss_curves.npz'}")
+
+    final_state = {k.replace("_orig_mod.", ""): v.detach().cpu()
+                   for k, v in model.state_dict().items()}
+    torch.save({
+        "state_dict": final_state,
+        "mechanism": mech_name,
+        "obs_indices": model_obs_indices,
+        "cfg": cfg,
+        "best_val": best_val,
+    }, model_path)
+    print(f"Saved model → {model_path}")
+
+    # save config snapshot
+    with open(exp_dir / "config_used.yaml", "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    elapsed = time.time() - start_time
+    print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f}m)")
+
+    # ---- auto-plot -------------------------------------------------------
+    try:
+        from src.scripts.plotting import (
+            plot_loss_curves, plot_predictions, plot_learned_parameters, plot_evolution
+        )
+        plots_dir = exp_dir / "plots"
+        plots_dir.mkdir(exist_ok=True)
+        plot_loss_curves(log_dir / "loss_curves.npz", plots_dir)
+        plot_predictions(model_path, dataset_path, plots_dir)
+        plot_learned_parameters(str(model_path), str(dataset_path), output_path=str(plots_dir / "theta_sample0.png"))
+        ckpt_dir = log_dir / "checkpoints"
+        if ckpt_dir.exists() and any(ckpt_dir.glob("model_ep*.pt")):
+            plot_evolution(str(log_dir), str(dataset_path), out_dir=str(plots_dir))
+        print(f"Plots saved → {plots_dir}")
+    except Exception as e:
+        print(f"Auto-plotting failed (skipping): {e}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train KineticsRNN from a YAML config.")
+    parser.add_argument("--config", required=True, help="Path to experiment YAML config file.")
+    args = parser.parse_args()
+    train_from_config(args.config)

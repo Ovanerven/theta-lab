@@ -1,0 +1,30 @@
+# Ablation 3: Reduced 5-species internal model, observe 5 species (A,D,G,J,M).
+# Tests mechanism mismatch: the true data was generated with 13 species but
+# the model only has 5 internal states.
+# Dataset must have all 13 species stored; we select A,D,G,J,M (columns 0,3,6,9,12).
+
+dataset:
+  path: datasets/full13_N1000_T300_steps600_zeros_knoise0.0.npz
+  obs_indices: [0, 3, 6, 9, 12]  # select columns A,D,G,J,M from the 13-col file
+
+mechanism:
+  name: reduced5   # only 5 internal states, 8 parameters (mechanism mismatch!)
+
+train:
+  epochs: 50
+  batch: 500
+  lr: 1.0e-3
+  hidden: 128
+  num_layers: 1
+  weight_decay: 0.0085
+  val_frac: 0.15
+  grad_clip: 1.0
+  tf_every: 50
+  tf_drop_epoch: 250
+  seed: 42
+  n_sub: 1
+  jit_script: true
+
+output:
+  exp_name: reduced5_obs5
+  checkpoint_every: 10

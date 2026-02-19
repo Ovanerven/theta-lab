@@ -1,0 +1,31 @@
+dataset:
+  path: datasets/full13_N1000_T300_steps600_zeros_knoise0.0.npz
+  obs_indices:
+  - 0
+  - 1
+  - 2
+  - 4
+  - 6
+  - 8
+  - 10
+  - 11
+  - 12
+mechanism:
+  name: reduced9
+train:
+  epochs: 50
+  batch: 500
+  lr: 0.001
+  hidden: 128
+  num_layers: 1
+  weight_decay: 0.0085
+  val_frac: 0.15
+  grad_clip: 1.0
+  tf_every: 50
+  tf_drop_epoch: 250
+  seed: 42
+  n_sub: 1
+  jit_script: true
+output:
+  exp_name: reduced9
+  checkpoint_every: 10

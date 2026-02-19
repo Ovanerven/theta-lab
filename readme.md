@@ -22,9 +22,22 @@ python -m src.scripts.create_dataset --n-samples 10 --t-span 300 --n-steps 600 -
 This will create the output file `dataset_N10_T300_K600_zero_tail0_seed42.npz`.
 
 ## Model Training
-To train the model (basic GRU), run:
+
+Experiment configs live in `configs/`. Outputs (model, logs, plots) go into `experiments/{exp_name}/`.
+
 ```sh
-python -m src.train.train --data datasets/N1000_T300_steps600_zeros_knoise0.0.npz --epochs 500 --exp-name "log10_loss_no_clampmin_500epoch" --checkpoint-every 50
+# Run an experiment from its YAML config
+python -m src.scripts.train --config configs/full13_obs13.yaml
+
+# Re-plot an existing experiment
+python -m src.scripts.plot_all --exp-name full13_obs13
+```
+
+To add a new experiment, copy an existing config and change `output.exp_name` and any hyperparameters:
+```sh
+cp configs/full13_obs13.yaml configs/my_new_experiment.yaml
+# edit configs/my_new_experiment.yaml
+python -m src.scripts.train --config configs/my_new_experiment.yaml
 ```
 
 ## Requirements

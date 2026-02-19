@@ -1,0 +1,28 @@
+# Ablation 1: Full 13-species internal model, observe all 13 species.
+# Sanity check: does the model fit when there's no partial observability?
+
+dataset:
+  path: datasets/N1000_T300_steps600_ones_knoise0.0.npz
+  obs_indices: null   # use all species stored in the file
+
+mechanism:
+  name: full13   # 13 internal states, 19 parameters
+
+train:
+  epochs: 20
+  batch: 300
+  lr: 1.0e-3
+  hidden: 128
+  num_layers: 1
+  weight_decay: 0.0085
+  val_frac: 0.15
+  grad_clip: 1.0
+  tf_every: 50
+  tf_drop_epoch: 250
+  seed: 42
+  n_sub: 1
+  jit_script: true
+
+output:
+  exp_name: full13_obs13
+  checkpoint_every: 25
