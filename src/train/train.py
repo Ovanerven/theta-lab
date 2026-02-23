@@ -14,7 +14,21 @@ import yaml
 
 from src.data.ode_dataset import ODEDataset, collate
 from src.models.ode_rnn import ODERNN
-from src.mech.scaffolds import CustomRHSScaffold, rhs_5_torch, rhs_7_torch, rhs_9_torch
+from src.mech.scaffolds import (
+    CustomRHSScaffold, 
+    rhs_2_torch,
+    rhs_3_torch,
+    rhs_4_torch,
+    rhs_5_torch,
+    rhs_6_torch,
+    rhs_7_torch,
+    rhs_8_torch,
+    rhs_9_torch,
+    rhs_10_torch,
+    rhs_11_torch,
+    rhs_12_torch,
+    rhs_13_torch
+)
 
 
 def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
@@ -112,12 +126,30 @@ def _build_jump(U: int, control_full: list[int], obs_full: list[int], mech_cols:
 
 
 def _make_scaffold(name: str) -> CustomRHSScaffold:
+    if name == "reduced2":
+        return CustomRHSScaffold(P=2, theta_dim=2, rhs_fn=rhs_2_torch)
+    if name == "reduced3":
+        return CustomRHSScaffold(P=3, theta_dim=4, rhs_fn=rhs_3_torch)
+    if name == "reduced4":
+        return CustomRHSScaffold(P=4, theta_dim=6, rhs_fn=rhs_4_torch)
     if name == "reduced5":
         return CustomRHSScaffold(P=5, theta_dim=8, rhs_fn=rhs_5_torch)
+    if name == "reduced6":
+        return CustomRHSScaffold(P=6, theta_dim=10, rhs_fn=rhs_6_torch)
     if name == "reduced7":
         return CustomRHSScaffold(P=7, theta_dim=11, rhs_fn=rhs_7_torch)
+    if name == "reduced8":
+        return CustomRHSScaffold(P=8, theta_dim=13, rhs_fn=rhs_8_torch)
     if name == "reduced9":
         return CustomRHSScaffold(P=9, theta_dim=14, rhs_fn=rhs_9_torch)
+    if name == "reduced10":
+        return CustomRHSScaffold(P=10, theta_dim=15, rhs_fn=rhs_10_torch)
+    if name == "reduced11":
+        return CustomRHSScaffold(P=11, theta_dim=16, rhs_fn=rhs_11_torch)
+    if name == "reduced12":
+        return CustomRHSScaffold(P=12, theta_dim=17, rhs_fn=rhs_12_torch)
+    if name == "full13":
+        return CustomRHSScaffold(P=13, theta_dim=18, rhs_fn=rhs_13_torch)
     raise ValueError(f"Unknown scaffold: {name}")
 
 
