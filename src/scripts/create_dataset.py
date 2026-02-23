@@ -26,6 +26,7 @@ def generate_training_dataset(
     t_span: float = 300.0,
     n_steps: int = 600,  # K = n_steps - 1
     control_indices: Optional[List[int]] = None,
+    obs_indices: Optional[List[int]] = None,
     zero_init: bool = False,
     tail: float = 0.0,
     output_file: Optional[str] = None,
@@ -60,8 +61,9 @@ def generate_training_dataset(
 
     n_states_full, n_params_full, names_full = FullModel(None, None, None, dim=True)
 
-    # obs_indices = np.asarray([0, 3, 6, 9, 12], dtype=np.int64)
-    obs_indices = np.asarray(list(range(n_states_full)), dtype=np.int64)
+    if obs_indices is None:
+        obs_indices = [0, 3, 6, 9, 12]  # default: reduced 5-state chain
+    obs_indices = np.asarray(obs_indices, dtype=np.int64)
     p_obs = int(obs_indices.shape[0])
 
     if control_indices is None:
@@ -168,6 +170,7 @@ def main():
     parser.add_argument("--t-span", type=float, default=300.0)
     parser.add_argument("--n-steps", type=int, default=600)
     parser.add_argument("--control-indices", type=str, default=None)
+    parser.add_argument("--obs-indices", type=str, default=None)
     parser.add_argument("--tail", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-file", type=str, default=None)
@@ -195,12 +198,14 @@ def main():
         output_file = str(p)
 
     control_indices = _parse_int_list(args.control_indices) if args.control_indices else None
+    obs_indices = _parse_int_list(args.obs_indices) if args.obs_indices else None
 
     generate_training_dataset(
         n_samples=args.n_samples,
         t_span=args.t_span,
         n_steps=args.n_steps,
         control_indices=control_indices,
+        obs_indices=obs_indices,
         tail=args.tail,
         output_file=output_file,
         seed=args.seed,

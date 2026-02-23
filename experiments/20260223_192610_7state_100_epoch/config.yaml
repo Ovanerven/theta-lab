@@ -1,0 +1,24 @@
+experiment:
+  name: 7state_100_epoch
+  created: unknown
+dataset:
+  path: datasets/N1000_T300_steps600_zeros_knoise0.0_7state.npz
+model:
+  type: SimpleRNN
+  hidden: 128
+  num_layers: 1
+training:
+  epochs: 100
+  batch_size: 1000
+  learning_rate: 0.0005
+  weight_decay: 0.0085
+  grad_clip: 1.0
+  val_fraction: 0.15
+  teacher_forcing: true
+  seed: 42
+checkpoints:
+  save_every: 10
+results:
+  final_train_loss: 0.005157360807061195
+  final_val_loss: 0.0048089101910591125
+  best_val_loss: 0.0048089101910591125
