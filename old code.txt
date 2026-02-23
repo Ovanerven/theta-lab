@@ -1,4 +1,4 @@
-simple_ode_rnn
+simple_ode_rnn.py: 
 
 from __future__ import annotations
 from typing import Tuple
@@ -44,7 +44,7 @@ def rk4_step(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor) -> torch.Tensor
     k3 = reduced_chain_rhs_torch(y + 0.5 * dt * k2, k)
     k4 = reduced_chain_rhs_torch(y + dt * k3, k)
     y_next = y + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-    return torch.clamp_min(y_next, 0.0) # y can't be negative
+    return y_next  # do NOT clamp here; clamp once after all substeps
 
 
 def rk4_step_substeps(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub: int = 50) -> torch.Tensor:
@@ -61,7 +61,7 @@ def rk4_step_substeps(y: torch.Tensor, dt: torch.Tensor, k: torch.Tensor, n_sub:
     y_cur = y
     for _ in range(n_sub):
         y_cur = rk4_step(y_cur, h, k)
-    return y_cur
+    return torch.clamp_min(y_cur, 0.0)  # clamp once after all substeps (supervisor style)
 
 
 class SimpleRNN(nn.Module):
@@ -174,21 +174,31 @@ class SimpleRNN(nn.Module):
             raw = self.head(z)                          # (B,8)
 
             # bounded rates
-            kf1 = gamma(raw[:, 0:1], 1e-3, 2.0)
-            kf2 = gamma(raw[:, 1:2], 1e-3, 2.0)
-            kf3 = gamma(raw[:, 2:3], 1e-3, 2.0)
-            kf4 = gamma(raw[:, 3:4], 1e-3, 2.0)
-            kr1 = gamma(raw[:, 4:5], 1e-3, 2.0)
-            kr2 = gamma(raw[:, 5:6], 1e-3, 2.0)
-            kr3 = gamma(raw[:, 6:7], 1e-3, 2.0)
-            kr4 = gamma(raw[:, 7:8], 1e-3, 2.0)
+            kf1 = gamma(raw[:, 0:1], 1e-3, 5.0)
+            kf2 = gamma(raw[:, 1:2], 1e-3, 5.0)
+            kf3 = gamma(raw[:, 2:3], 1e-3, 5.0)
+            kf4 = gamma(raw[:, 3:4], 1e-3, 5.0)
+            kr1 = gamma(raw[:, 4:5], 1e-3, 5.0)
+            kr2 = gamma(raw[:, 5:6], 1e-3, 5.0)
+            kr3 = gamma(raw[:, 6:7], 1e-3, 5.0)
+            kr4 = gamma(raw[:, 7:8], 1e-3, 5.0)
             theta_k = torch.cat([kf1, kf2, kf3, kf4, kr1, kr2, kr3, kr4], dim=-1)  # (B,8)
-            
-            # Apply bolus jump with physically reasonable upper bound
-            # (prevents RK4 overflow while model learns appropriate parameter regime)
+
+            if not torch.isfinite(theta_k).all():
+                print(f"[k={k}] theta nan/inf  min={theta_k.min():.3f}  max={theta_k.max():.3f}")
+            if (theta_k > 4.9).any():
+                print(f"[k={k}] theta hitting ceiling  max={theta_k.max():.3f}")
+
+            # Apply bolus jump
             y_jump = y_prev + (u_k @ self.u_to_y_jump.to(device=dev, dtype=dtype))
-            # y_jump = torch.clamp(y_jump, min=0.0, max=50.0)
-            y_next = rk4_step_substeps(y_jump, dt_k, theta_k, n_sub=1)
+
+            if not torch.isfinite(y_jump).all():
+                print(f"[k={k}] y_jump nan/inf  min={y_jump.min():.3f}  max={y_jump.max():.3f}")
+
+            y_next = rk4_step_substeps(y_jump, dt_k, theta_k, n_sub=10)
+
+            if not torch.isfinite(y_next).all():
+                print(f"[k={k}] y_next nan/inf after RK4  min={y_next.min():.3f}  max={y_next.max():.3f}")
 
             y_out[:, k, :] = y_next
             theta_out[:, k, :] = theta_k
@@ -197,8 +207,7 @@ class SimpleRNN(nn.Module):
 
         return (y_out, theta_out) if self.training else (y_out, theta_out.detach())
 
-train.py
-
+train.py:
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -211,8 +220,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import yaml
 
-# from src.models.simple_ode_rnn import SimpleRNN
-from src.models.simple_ode_rnn_full_model import FullModelRNN as SimpleRNN
+from src.models.simple_ode_rnn import SimpleRNN
 from src.data.ode_dataset import ODEDataset, collate
 
 def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
@@ -343,7 +351,7 @@ def Training_loop(
     do_script = True
     if do_script:
         try:
-            model = torch.compile(model, mode="reduce-overhead")
+            model = torch.jit.script(model)
             print("The model compiled successfully")
         except Exception as e:
             print(f"TorchScript failed: {e}")

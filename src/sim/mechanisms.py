@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+from typing import Callable, List
 
 import torch
 
@@ -18,7 +18,7 @@ class Mechanism:
 # -------------------------
 # RHS definitions
 # -------------------------
-
+# Here we can define different mechanisms by writing out their ODE right-hand sides. 
 def full13_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     A, B, C, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
     (kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11, kf12,
@@ -100,8 +100,8 @@ def reduced9_rhs(y: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     dM =  kf8*L - kr8*M
     return torch.stack([dA, dB, dC, dE, dG, dI, dK, dL, dM], dim=-1)
 
-
-MECH: Dict[str, Mechanism] = {
+# Use a dictionary to store information about every mechanism.
+MECH = {
     "full13": Mechanism(
         name="full13",
         n_state=13,

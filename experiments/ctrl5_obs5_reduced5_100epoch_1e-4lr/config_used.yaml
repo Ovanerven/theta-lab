@@ -1,0 +1,27 @@
+dataset:
+  path: datasets/full13_N1000_T300_steps600_zeros_ctrl_reduced5.npz
+  obs_indices:
+  - 0
+  - 3
+  - 6
+  - 9
+  - 12
+mechanism:
+  name: reduced5
+train:
+  epochs: 100
+  batch: 500
+  lr: 0.0001
+  hidden: 128
+  num_layers: 1
+  weight_decay: 0.0085
+  val_frac: 0.15
+  grad_clip: 1.0
+  tf_every: 50
+  tf_drop_epoch: 250
+  seed: 42
+  n_sub: 1
+  jit_script: true
+output:
+  exp_name: ctrl5_obs5_reduced5_100epoch_1e-4lr
+  checkpoint_every: 10

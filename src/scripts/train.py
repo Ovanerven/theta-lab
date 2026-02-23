@@ -15,14 +15,45 @@ from src.sim.mechanisms import MECH
 from src.models.kinetics_rnn import KineticsRNN
 
 
-def loss_fn(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    return (torch.log1p(pred) - torch.log1p(target)).pow(2).mean()
+# def loss_fn(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+#     return (torch.log1p(pred) - torch.log1p(target)).pow(2).mean()
+
+def loss_fn(pred: torch.Tensor, target: torch.Tensor, alpha: float = 0.2) -> torch.Tensor:
+    lin = (pred - target).pow(2)
+    log = (torch.log1p(pred) - torch.log1p(target)).pow(2)
+    return (alpha * lin + (1 - alpha) * log).mean()
+
+
+def per_species_diag(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    species_names: list[str],
+    ep: int,
+) -> None:
+    """Print per-species losses in three spaces for a single batch/epoch.
+
+    pred, target: (B, T, P) — already on CPU
+    """
+    eps = 1e-8
+    P = pred.shape[-1]
+    header = f"  {'species':>10}  {'MSE-lin':>12}  {'MSE-log1p':>12}  {'MSE-rel':>12}"
+    print(f"\n--- per-species diagnostic  ep {ep} ---")
+    print(header)
+    for p in range(P):
+        pr  = pred[..., p]
+        tg  = target[..., p]
+        mse_lin   = float((pr - tg).pow(2).mean())
+        mse_log1p = float((torch.log1p(pr) - torch.log1p(tg)).pow(2).mean())
+        mse_rel   = float(((pr - tg) / (tg + eps)).pow(2).mean())
+        name = species_names[p] if p < len(species_names) else str(p)
+        print(f"  {name:>10}  {mse_lin:>12.6f}  {mse_log1p:>12.6f}  {mse_rel:>12.6f}")
+    print()
 
 
 def pick_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
-    if torch.backends.mps.is_available():
+    if torch.backends.mps.is_available(): # also runs on mac
         return torch.device("mps")
     return torch.device("cpu")
 
@@ -76,8 +107,16 @@ def train_from_config(config_path: str | Path) -> None:
     y0_ex, u_ex, _, _ = ds[0]
     P = int(y0_ex.shape[0])
     U = int(u_ex.shape[1])
-    obs_full  = ds.obs_indices.tolist()
+    obs_full  = ds.obs_indices.tolist()   # file column numbers, e.g. [0,3,6,9,12]
     ctrl_full = ds.control_indices.tolist()
+
+    # obs_indices for the model = positions within mech.n_state vector.
+    # For full13 (n_state=13), file columns ARE state indices.
+    # For reduced models (n_state=P), the state vector only has P slots: use 0..P-1.
+    if mech.n_state == 13:
+        model_obs = obs_full          # full13: file columns map directly to state slots
+    else:
+        model_obs = list(range(P))    # reduced: all P observed species fill slots 0..P-1
 
     obs_pos = {full_idx: p for p, full_idx in enumerate(obs_full)}
     jump = torch.zeros(U, P, dtype=torch.float32)
@@ -88,7 +127,7 @@ def train_from_config(config_path: str | Path) -> None:
 
     model = KineticsRNN(
         mech=mech,
-        obs_indices=obs_full,
+        obs_indices=model_obs,
         in_u=U,
         u_to_y_jump=jump,
         hidden=int(tr_cfg.get("hidden", 128)),
@@ -116,6 +155,7 @@ def train_from_config(config_path: str | Path) -> None:
     tf_drop_ep   = int(tr_cfg.get("tf_drop_epoch", 250))
     tf_enabled   = bool(tr_cfg.get("teacher_forcing", True))
     ckpt_every   = int(out_cfg.get("checkpoint_every", 0))
+    diag_every   = int(out_cfg.get("diag_every", 10))  # 0 = disabled
 
     exp_name = out_cfg.get("exp_name", config_path.stem)
     exp_dir  = Path("experiments") / exp_name
@@ -157,6 +197,9 @@ def train_from_config(config_path: str | Path) -> None:
         if val_loader is not None:
             model.eval()
             vtotal, vb = 0.0, 0
+            diag_preds:   list[torch.Tensor] = []
+            diag_targets: list[torch.Tensor] = []
+            run_diag = diag_every > 0 and ep % diag_every == 0
             with torch.no_grad():
                 for y0, u_seq, dt_seq, y_seq in val_loader:
                     y0     = y0.to(device)
@@ -166,7 +209,14 @@ def train_from_config(config_path: str | Path) -> None:
                     pred, _ = model(y0, u_seq, dt_seq, teacher_forcing=False)
                     vtotal += float(loss_fn(pred, y_seq).item())
                     vb += 1
+                    if run_diag:
+                        diag_preds.append(pred.cpu())
+                        diag_targets.append(y_seq.cpu())
             va_loss = vtotal / max(1, vb)
+            if run_diag:
+                all_pred   = torch.cat(diag_preds,   dim=0)
+                all_target = torch.cat(diag_targets, dim=0)
+                per_species_diag(all_pred, all_target, mech.state_names, ep)
             val_losses.append(va_loss)
             if va_loss < best_val:
                 best_val = va_loss
@@ -183,7 +233,7 @@ def train_from_config(config_path: str | Path) -> None:
             ckpt_dir.mkdir(exist_ok=True)
             state = {k.replace("_orig_mod.", ""): v.detach().cpu() for k, v in model.state_dict().items()}
             torch.save({"state_dict": state, "epoch": ep, "mechanism": mech_name,
-                        "obs_indices": obs_full, "cfg": cfg}, ckpt_dir / f"model_ep{ep:04d}.pt")
+                        "obs_indices": model_obs, "cfg": cfg}, ckpt_dir / f"model_ep{ep:04d}.pt")
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -194,7 +244,7 @@ def train_from_config(config_path: str | Path) -> None:
 
     final_state = {k.replace("_orig_mod.", ""): v.detach().cpu() for k, v in model.state_dict().items()}
     torch.save({"state_dict": final_state, "mechanism": mech_name,
-                "obs_indices": obs_full, "cfg": cfg, "best_val": best_val}, model_path)
+                "obs_indices": model_obs, "cfg": cfg, "best_val": best_val}, model_path)
 
     (exp_dir / "config_used.yaml").write_text(yaml.dump(cfg, sort_keys=False))
     print(f"Saved model → {model_path}")

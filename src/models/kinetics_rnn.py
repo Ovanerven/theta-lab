@@ -110,6 +110,7 @@ class KineticsRNN(nn.Module):
         self.head = nn.Linear(hidden, mech.n_param)
 
         self.register_buffer("u_to_y_jump", u_to_y_jump.to(torch.float32))
+        self.register_buffer("obs_idx_buf", torch.tensor(obs_indices, dtype=torch.long))
 
         for m in self.lift:
             if isinstance(m, nn.Linear):
@@ -137,12 +138,12 @@ class KineticsRNN(nn.Module):
         dev = u_seq.device
         dtype = u_seq.dtype
 
-        obs_idx = torch.arange(self.P, device=dev)  # always 0..P-1 into y_full
+        obs_idx = self.obs_idx_buf.to(device=dev)  # actual positions in n_state vector
         y_hat     = torch.empty(B, K, self.P,       device=dev, dtype=dtype)
         theta_out = torch.empty(B, K, self.n_param, device=dev, dtype=dtype)
 
-        y_full = torch.full((B, self.n_state), 0.01, device=dev, dtype=dtype)
-        y_full[:, obs_idx] = y0 + 0.01
+        y_full = torch.zeros(B, self.n_state, device=dev, dtype=dtype)
+        y_full[:, obs_idx] = y0
 
         h = torch.zeros(self.gru.num_layers, B, self.gru.hidden_size, device=dev, dtype=dtype)
 

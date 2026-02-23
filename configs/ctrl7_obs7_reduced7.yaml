@@ -1,0 +1,25 @@
+dataset:
+  path: datasets/full13_N1000_T300_steps600_zeros_ctrl_reduced7.npz
+  obs_indices: [0, 2, 4, 6, 8, 10, 12]  # select columns A,C,E,G,I,K,M from the 13-col file
+
+mechanism:
+  name: reduced7   # 7 internal states, 12 parameters
+
+train:
+  epochs: 50
+  batch: 500
+  lr: 1.0e-3
+  hidden: 128
+  num_layers: 1
+  weight_decay: 0.0085
+  val_frac: 0.15
+  grad_clip: 1.0
+  tf_every: 50
+  tf_drop_epoch: 250
+  seed: 42
+  n_sub: 1
+  jit_script: true
+
+output:
+  exp_name: ctrl7_obs7_reduced7
+  checkpoint_every: 10
