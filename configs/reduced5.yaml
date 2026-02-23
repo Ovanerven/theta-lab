@@ -17,7 +17,7 @@ tf_every: 50
 tf_drop_epoch: 250
 
 scaffold: reduced5
-mech_indices_full: [0, 3, 6, 9, 10, 11, 12]
+mech_indices_full: [0, 3, 6, 9, 12]
 
 theta_lo: 1.0e-3
 theta_hi: 2.0
