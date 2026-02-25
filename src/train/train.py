@@ -145,11 +145,11 @@ def _make_scaffold(name: str) -> CustomRHSScaffold:
     if name == "reduced10":
         return CustomRHSScaffold(P=10, theta_dim=15, rhs_fn=rhs_10_torch)
     if name == "reduced11":
-        return CustomRHSScaffold(P=11, theta_dim=16, rhs_fn=rhs_11_torch)
+        return CustomRHSScaffold(P=11, theta_dim=15, rhs_fn=rhs_11_torch)
     if name == "reduced12":
         return CustomRHSScaffold(P=12, theta_dim=17, rhs_fn=rhs_12_torch)
-    if name == "full13":
-        return CustomRHSScaffold(P=13, theta_dim=18, rhs_fn=rhs_13_torch)
+    if name in ("full13", "reduced13"):
+        return CustomRHSScaffold(P=13, theta_dim=19, rhs_fn=rhs_13_torch)
     raise ValueError(f"Unknown scaffold: {name}")
 
 
