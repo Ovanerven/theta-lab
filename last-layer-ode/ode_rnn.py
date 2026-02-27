@@ -4,8 +4,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from scaffold_min import Scaffold
-from ode_rnn import make_u_to_y_jump
+from scaffolds import Scaffold
 
 
 def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
@@ -30,37 +29,56 @@ def rk4_substeps(rhs, n_substeps, y: torch.Tensor, dt: torch.Tensor, theta: torc
 
     return torch.clamp_min(y, 0.0)
 
+# We can apply the jump smoothly across the substepped integrator, which is more stable for large jumps and allows us to use fewer substeps.
+# def rk4_substeps(rhs, n_substeps, y, dt, theta, *, u_k=None, jump=None):
+#     n_sub = max(1, int(n_substeps))
+#     if dt.ndim == 1: dt = dt.unsqueeze(1)
+#     hdt = dt / float(n_sub)
 
-def make_u_to_y_jump(
-    control_indices: torch.Tensor | list[int],
-    obs_indices: torch.Tensor | list[int],
-    *,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device | None = None,
-) -> torch.Tensor:
-    '''
-    Make a jump matrix that maps control inputs to observed state changes. We need this so that the ODE predictions
-    can actually be influenced by the controls, and not ignore the mass of injected species.
-    '''
+#     if u_k is not None:
+#         du = (u_k @ jump) / float(n_sub)   # (B,P)
+#     else:
+#         du = None
 
-    c = torch.as_tensor(control_indices, device=device)
-    o = torch.as_tensor(obs_indices, device=device)
+#     for _ in range(n_sub):
+#         if du is not None:
+#             y = y + du
+#         k1 = rhs(y, theta)
+#         k2 = rhs(y + 0.5 * hdt * k1, theta)
+#         k3 = rhs(y + 0.5 * hdt * k2, theta)
+#         k4 = rhs(y + hdt * k3, theta)
+#         y = y + (hdt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-    U = c.shape[0]
-    P = o.shape[0]
+#     return torch.clamp_min(y, 0.0)
 
-    # Build dict full_index -> obs_dim
-    # (works even if indices aren't contiguous)
-    obs_pos = {int(o[p].item()): p for p in range(P)}
+# Or we can just apply the jump once at the midpoint, which might be more realistic.
+# def rk4_substeps(rhs, n_substeps, y, dt, theta, *, u_k=None, jump=None):
+#     n_sub = max(1, int(n_substeps))
+#     if dt.ndim == 1:
+#         dt = dt.unsqueeze(1)  # (B,1)
+#     hdt = dt / float(n_sub)   # (B,1)
 
-    J = torch.zeros(U, P, dtype=dtype, device=c.device)
-    for j in range(U):
-        full_idx = int(c[j].item())
-        p = obs_pos.get(full_idx, None)
-        if p is not None:
-            J[j, p] = 1.0
+#     # total jump for this coarse step (apply once, at midpoint)
+#     if u_k is not None:
+#         if jump is None:
+#             raise ValueError("need jump if u_k provided")
+#         du_total = (u_k @ jump)  # (B,P)
+#         mid = n_sub // 2
+#     else:
+#         du_total = None
+#         mid = None
 
-    return J
+#     for s in range(n_sub):
+#         if du_total is not None and s == mid:
+#             y = y + du_total
+
+#         k1 = rhs(y, theta)
+#         k2 = rhs(y + 0.5 * hdt * k1, theta)
+#         k3 = rhs(y + 0.5 * hdt * k2, theta)
+#         k4 = rhs(y + hdt * k3, theta)
+#         y = y + (hdt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+#     return torch.clamp_min(y, 0.0)
 
 
 class ODERNN(nn.Module):
@@ -149,6 +167,9 @@ class ODERNN(nn.Module):
             y = y_prev + (u_k @ self.u_to_y_jump)
 
             y = rk4_substeps(self.rhs, self.n_substeps, y, dt_k, theta_k)
+
+            # We can jump within the rk4 substepper to increase the integration resolution at a bolus DIDNT WORK. 
+            # y = rk4_substeps(self.rhs, self.n_substeps, y_prev, dt_k, theta_k, u_k=u_k, jump=self.u_to_y_jump)
 
             y_out[:, k, :] = y
             th_out[:, k, :] = theta_k

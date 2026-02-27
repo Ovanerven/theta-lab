@@ -1,16 +1,12 @@
 import argparse
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.interpolate import interp1d
 
-from src.sim.benchmark_models import FullModel
-from src.sim.syndata_simulator_ODE import (
-    generate_random_bolus_events,
-    simulate_chain_with_bolus,
-    single_event_generator,
-)
+from sim.benchmark_models import FullModel
+from sim.syndata_simulator_ODE import simulate_chain_with_bolus, single_event_generator
 
 
 def _parse_int_list(value: str) -> List[int]:
@@ -18,6 +14,44 @@ def _parse_int_list(value: str) -> List[int]:
     if not value:
         return []
     return [int(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def _generate_random_events_idx(
+    *,
+    rng: np.random.Generator,
+    n_bolus: int,
+    t_start: float,
+    t_end: float,
+    amount_range: Tuple[float, float],
+    n_channels: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Random bolus schedule in integer-channel form.
+
+    Returns (t_event, ch_event, amt_event), each shape (n_bolus,).
+    """
+    t_event = rng.uniform(t_start, t_end, size=n_bolus).astype(np.float32)
+    t_event.sort()
+    ch_event = rng.integers(0, n_channels, size=n_bolus, dtype=np.int64)
+    amt_event = rng.uniform(amount_range[0], amount_range[1], size=n_bolus).astype(np.float32)
+    return t_event, ch_event, amt_event
+
+
+def _bin_events_to_u_seq(
+    *,
+    t_obs: np.ndarray,  # (K+1,)
+    t_event: np.ndarray,
+    ch_event: np.ndarray,
+    amt_event: np.ndarray,
+    d_in: int,
+) -> np.ndarray:
+    """Bin events into intervals [t_k, t_{k+1}) as u_seq[k, ch] += amt."""
+    K = int(t_obs.shape[0] - 1)
+    u_bins = np.zeros((K, d_in), dtype=np.float32)
+    for t_bolus, ch, amt in zip(t_event, ch_event, amt_event):
+        k = int(np.searchsorted(t_obs, np.float32(t_bolus), side="right")) - 1
+        k = max(0, min(k, K - 1))
+        u_bins[k, int(ch)] += np.float32(amt)
+    return u_bins
 
 
 def generate_training_dataset(
@@ -60,6 +94,7 @@ def generate_training_dataset(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_states_full, n_params_full, names_full = FullModel(None, None, None, dim=True)
+    names_full = list(names_full)
 
     if obs_indices is None:
         obs_indices = [0, 3, 6, 9, 12]  # default: reduced 5-state chain
@@ -84,8 +119,9 @@ def generate_training_dataset(
 
     rng = np.random.default_rng(seed)
 
-    allowed_names = [names_full[idx] for idx in control_indices]
-    name_to_channel = {names_full[idx]: j for j, idx in enumerate(control_indices)}
+    control_indices = np.asarray(control_indices, dtype=np.int64)
+    control_names = np.asarray([names_full[int(idx)] for idx in control_indices], dtype="<U16")
+    obs_names = np.asarray([names_full[int(idx)] for idx in obs_indices], dtype="<U16")
 
     print(f"Generating {n_samples} samples | K={K}, p_obs={p_obs}, d_in={d_in}")
 
@@ -103,14 +139,18 @@ def generate_training_dataset(
         else:
             k_for_sim = theta_true
 
-        events = generate_random_bolus_events(
-            n_bolus=int(rng.integers(2, 50)),
+        n_bolus = int(rng.integers(2, 50))
+        t_event, ch_event, amt_event = _generate_random_events_idx(
+            rng=rng,
+            n_bolus=n_bolus,
             t_start=0.0,
             t_end=max(0.0, t_span - tail),
             amount_range=(0.5, 3.0),
-            species_names=allowed_names,
-            rng=rng,
+            n_channels=d_in,
         )
+
+        # simulator consumes (time, species_name, amount)
+        events = [(float(t), str(control_names[int(ch)]), float(a)) for t, ch, a in zip(t_event, ch_event, amt_event)]
 
         x0_full = np.zeros((n_states_full,), dtype=np.float32) if zero_init else np.ones((n_states_full,), dtype=np.float32)
 
@@ -134,14 +174,13 @@ def generate_training_dataset(
         y0[i] = y_grid[0]
         y_seq[i] = y_grid[1:]
 
-        # Bin bolus events into intervals [t_k, t_{k+1})
-        u_bins = np.zeros((K, d_in), dtype=np.float32)
-        for (t_bolus, name, amt) in events:
-            k = int(np.searchsorted(t_obs, np.float32(t_bolus), side="right")) - 1
-            k = max(0, min(k, K - 1))
-            u_bins[k, name_to_channel[name]] += np.float32(amt)
-
-        u_seq[i] = u_bins
+        u_seq[i] = _bin_events_to_u_seq(
+            t_obs=t_obs,
+            t_event=t_event,
+            ch_event=ch_event,
+            amt_event=amt_event,
+            d_in=d_in,
+        )
 
         if (i + 1) % 100 == 0:
             print(f"  simulated {i+1}/{n_samples}")
@@ -151,8 +190,13 @@ def generate_training_dataset(
         u_seq=u_seq,
         y_seq=y_seq,
         t_obs=t_obs,
-        control_indices=np.asarray(control_indices, dtype=np.int64),
+        control_indices=control_indices,
         obs_indices=obs_indices,
+        names_full=np.asarray(names_full, dtype="<U16"),
+        control_names=control_names,
+        obs_names=obs_names,
+        n_states_full=np.int64(n_states_full),
+        n_params_full=np.int64(n_params_full),
         theta_true=theta_true,
     )
     if theta_full is not None:
