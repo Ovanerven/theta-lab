@@ -29,57 +29,6 @@ def rk4_substeps(rhs, n_substeps, y: torch.Tensor, dt: torch.Tensor, theta: torc
 
     return torch.clamp_min(y, 0.0)
 
-# We can apply the jump smoothly across the substepped integrator, which is more stable for large jumps and allows us to use fewer substeps.
-# def rk4_substeps(rhs, n_substeps, y, dt, theta, *, u_k=None, jump=None):
-#     n_sub = max(1, int(n_substeps))
-#     if dt.ndim == 1: dt = dt.unsqueeze(1)
-#     hdt = dt / float(n_sub)
-
-#     if u_k is not None:
-#         du = (u_k @ jump) / float(n_sub)   # (B,P)
-#     else:
-#         du = None
-
-#     for _ in range(n_sub):
-#         if du is not None:
-#             y = y + du
-#         k1 = rhs(y, theta)
-#         k2 = rhs(y + 0.5 * hdt * k1, theta)
-#         k3 = rhs(y + 0.5 * hdt * k2, theta)
-#         k4 = rhs(y + hdt * k3, theta)
-#         y = y + (hdt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-
-#     return torch.clamp_min(y, 0.0)
-
-# Or we can just apply the jump once at the midpoint, which might be more realistic.
-# def rk4_substeps(rhs, n_substeps, y, dt, theta, *, u_k=None, jump=None):
-#     n_sub = max(1, int(n_substeps))
-#     if dt.ndim == 1:
-#         dt = dt.unsqueeze(1)  # (B,1)
-#     hdt = dt / float(n_sub)   # (B,1)
-
-#     # total jump for this coarse step (apply once, at midpoint)
-#     if u_k is not None:
-#         if jump is None:
-#             raise ValueError("need jump if u_k provided")
-#         du_total = (u_k @ jump)  # (B,P)
-#         mid = n_sub // 2
-#     else:
-#         du_total = None
-#         mid = None
-
-#     for s in range(n_sub):
-#         if du_total is not None and s == mid:
-#             y = y + du_total
-
-#         k1 = rhs(y, theta)
-#         k2 = rhs(y + 0.5 * hdt * k1, theta)
-#         k3 = rhs(y + 0.5 * hdt * k2, theta)
-#         k4 = rhs(y + hdt * k3, theta)
-#         y = y + (hdt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-
-#     return torch.clamp_min(y, 0.0)
-
 
 class ODERNN(nn.Module):
     """
