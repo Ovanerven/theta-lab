@@ -89,6 +89,7 @@ class ODERNN(nn.Module):
         y_seq: Optional[torch.Tensor] = None,   # (B,K,P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        obs_idx: Optional[torch.Tensor] = None,   # <--- ADD
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -101,10 +102,17 @@ class ODERNN(nn.Module):
             u_k = u_seq[:, k, :]              # (B,U)
             dt_k = dt_seq[:, k]               # (B,)
 
+            y_in = y_prev.detach()
+
             if teacher_forcing and (y_seq is not None) and k > 0 and (k % tf_every == 0):
-                y_in = y_seq[:, k - 1, :].detach()
-            else:
-                y_in = y_prev.detach()
+                if obs_idx is None:
+                    # default: full teacher forcing (old behavior)
+                    y_in = y_seq[:, k - 1, :].detach()
+                else:
+                    # partial teacher forcing: only overwrite observed dims
+                    y_in = y_in.clone()
+                    idx = obs_idx.to(device=y_in.device, dtype=torch.long)
+                    y_in[:, idx] = y_seq[:, k - 1, idx].detach()
 
             feat = torch.cat([u_k, y_in], dim=-1)      # (B,U+P)
             x = self.lift(feat).unsqueeze(1)           # (B,1,lift_dim)

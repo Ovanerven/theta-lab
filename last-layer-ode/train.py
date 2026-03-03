@@ -132,6 +132,11 @@ class TrainConfig:
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
 
+    l1_regularization: bool = False  # if True, model learns constant theta (for ablation)
+    l2_regularization: bool = False  # if True, model learns constant theta (for ablation)
+
+    lambda_reg: float = 0.001
+
 
 def load_cfg(path: str | Path) -> TrainConfig:
     with open(path, "r") as f:
@@ -261,6 +266,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             path,
         )
 
+    obs_idx = torch.tensor([0, 12], device=device, dtype=torch.long)
+
     for ep in range(1, cfg.epochs + 1):
         ep_t0 = time.time()
         teacher_forcing = bool(cfg.teacher_forcing) and (ep < int(cfg.tf_drop_epoch))
@@ -280,15 +287,28 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             dt_seq = dt_seq.to(device)
 
             opt.zero_grad(set_to_none=True)
-            pred, _ = model(
+            pred, theta = model(
                 y0,
                 u_seq,
                 dt_seq,
                 y_seq=y_seq,
                 teacher_forcing=teacher_forcing,
                 tf_every=int(cfg.tf_every),
+                obs_idx=obs_idx,
             )
+            pred = pred[:, :, obs_idx] 
+            y_seq = y_seq[:, :, obs_idx]
+
             loss = loss_fn(pred, y_seq)
+
+            if cfg.l1_regularization:
+                reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
+                loss += cfg.lambda_reg * reg_loss
+
+            if cfg.l2_regularization:
+                reg_loss = torch.mean((theta[:,1:,:] - theta[:,:-1,:]).pow(2))
+                loss += cfg.lambda_reg * reg_loss
+
             loss.backward()
 
             if cfg.grad_clip and float(cfg.grad_clip) > 0:
@@ -322,8 +342,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     u_seq = u_seq.to(device)
                     dt_seq = dt_seq.to(device)
 
-                    pred, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
-
+                    pred, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False, obs_idx=obs_idx)
+                    pred = pred[:, :, obs_idx] 
+                    y_seq = y_seq[:, :, obs_idx]
                     loss = loss_fn(pred, y_seq)
                     va_total += float(loss.item())
 

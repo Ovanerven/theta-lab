@@ -210,3 +210,13 @@ python -m last-layer-ode.create_dataset \
   --zero-init \
   --k-noise 0.0 \
   --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced6_ABCDLM.npz"
+
+python last-layer-ode/create_dataset.py \
+  --n-samples 1000 \
+  --t-span 300.0 \
+  --n-steps 600 \
+  --control-indices "0,1,2,3,4,5,6,7,8,9,10,11,12" \
+  --obs-indices "0,12" \
+  --zero-init \
+  --k-noise 0.0 \
+  --output-file datasets/N1000_T300_steps600_zeros_knoise0.0_obs_AM_control_full13

@@ -11,4 +11,5 @@ tests
 slurm_outputs/
 slurm_jobs/
 
-startup.sh
+# macOS
+.DS_Store
