@@ -13,3 +13,8 @@ slurm_jobs/
 
 # macOS
 .DS_Store
+
+last-layer-ode/plot_comparison_mech_specificity.py
+last-layer-ode/plot_comparison.py
+last-layer-ode/reaggregate_nrmse_summary.py
+last-layer-ode/summarize_nrmse_mech_specificity.py
