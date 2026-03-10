@@ -20,3 +20,5 @@ last-layer-ode/reaggregate_nrmse_summary.py
 last-layer-ode/summarize_nrmse_mech_specificity.py
 
 .env
+
+last-layer-ode/thesis_plots
