@@ -38,10 +38,44 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def _test_subset(ds: ODEDataset, exp_dir: Path) -> ODEDataset | torch.utils.data.Subset:
+    """Return the test split subset if split.npz exists, else the full dataset."""
+    split_path = exp_dir / "split.npz"
+    if split_path.exists():
+        split = np.load(split_path)
+        test_idx = split["test_idx"].tolist()
+        if len(test_idx) > 0:
+            return torch.utils.data.Subset(ds, test_idx)
+    return ds
+
+
 def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[torch.nn.Module, ODEDataset, list[str], list[str]]:
     cfg = load_yaml(exp_dir / "config.yaml")
 
-    ds = ODEDataset(cfg["dataset_path"])
+    dataset_path = Path(cfg["dataset_path"])
+    if not dataset_path.is_absolute():
+        project_root = Path(__file__).resolve().parents[1]  # .../theta-lab
+        script_dir = Path(__file__).resolve().parent        # .../theta-lab/last-layer-ode
+        candidates_paths = [
+            dataset_path,                                         # relative to cwd
+            exp_dir / dataset_path,                               # relative to exp_dir
+            script_dir / dataset_path,                            # relative to this script
+            project_root / dataset_path,                          # relative to project root
+            Path(*dataset_path.parts[1:]) if dataset_path.parts[0] == ".." else None,  # strip leading ../
+            Path("datasets") / dataset_path.name,                # just filename in datasets/
+            script_dir / "datasets" / dataset_path.name,
+            project_root / "datasets" / dataset_path.name,
+        ]
+        dataset_path = next(
+            (p for p in candidates_paths if p is not None and p.exists()), None
+        )
+        if dataset_path is None:
+            raise FileNotFoundError(
+                f"Dataset not found: {cfg['dataset_path']} "
+                f"(checked cwd, {exp_dir}, {script_dir}, and {project_root}/datasets)"
+            )
+
+    ds = ODEDataset(dataset_path)
 
     scaffold_name = cfg.get("scaffold", "reduced5")
     scaffold = SCAFFOLDS[scaffold_name]
@@ -56,20 +90,36 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
 
     jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
 
-    model = ODERNN(
-        U=U,
-        scaffold=scaffold,
-        hidden=int(cfg.get("hidden", 128)),
-        lift_dim=int(cfg.get("lift_dim", 32)),
-        num_layers=int(cfg.get("num_layers", 1)),
-        dropout=float(cfg.get("dropout", 0.0)),
-        u_to_y_jump=jump,
-        theta_lo=float(cfg.get("theta_lo", 1e-3)),
-        theta_hi=float(cfg.get("theta_hi", 2.0)),
-        n_substeps=int(cfg.get("n_substeps", 1)),
-    ).to(device)
-
     ckpt = torch.load(exp_dir / "model.pt", map_location="cpu")
+    state_keys = list(ckpt["state_dict"].keys())
+
+    if any(k.startswith("mlp.") for k in state_keys):
+        # Baseline neural ODE (MLP-based, no GRU/lift/head)
+        from baselines.neural_ode import ODERNN as _ModelClass
+        model = _ModelClass(
+            U=U,
+            scaffold=scaffold,
+            hidden=int(cfg.get("hidden", 128)),
+            dropout=float(cfg.get("dropout", 0.0)),
+            u_to_y_jump=jump,
+            n_substeps=int(cfg.get("n_substeps", 1)),
+            use_basal=bool(cfg.get("use_basal", False)),
+        ).to(device)
+    else:
+        model = ODERNN(
+            U=U,
+            scaffold=scaffold,
+            hidden=int(cfg.get("hidden", 128)),
+            lift_dim=int(cfg.get("lift_dim", 32)),
+            num_layers=int(cfg.get("num_layers", 1)),
+            dropout=float(cfg.get("dropout", 0.0)),
+            u_to_y_jump=jump,
+            theta_lo=float(cfg.get("theta_lo", 1e-3)),
+            theta_hi=float(cfg.get("theta_hi", 2.0)),
+            n_substeps=int(cfg.get("n_substeps", 1)),
+            use_basal=bool(cfg.get("use_basal", False)),
+        ).to(device)
+
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
 
@@ -134,12 +184,15 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     plt.close(fig)
 
 
-def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device):
-    n_samples = min(int(n_samples), len(ds))
-    loader = torch.utils.data.DataLoader(ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate)
+def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None):
+    raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
+    plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
+    n_samples = min(int(n_samples), len(plot_ds))
+    loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate)
+    split_label = "test" if (exp_dir is not None and (exp_dir / "split.npz").exists()) else "train"
 
     y0, u_seq, y_seq = next(iter(loader))
-    dt_seq = torch.from_numpy(ds.dt)[None, :].expand(y0.shape[0], -1)
+    dt_seq = torch.from_numpy(raw_ds.dt)[None, :].expand(y0.shape[0], -1)
 
     y0 = y0.to(device)
     u_seq = u_seq.to(device)
@@ -147,7 +200,7 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     dt_seq = dt_seq.to(device)
 
     with torch.no_grad():
-        pred, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+        pred, _theta, _beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
@@ -169,23 +222,25 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
                 ax.legend()
 
         axes[-1].set_xlabel("Time")
-        fig.suptitle(f"Prediction vs truth (sample {i})")
+        fig.suptitle(f"Prediction vs truth [{split_label}] (sample {i})")
         fig.tight_layout()
         fig.savefig(out_dir / f"pred_vs_true_{i:03d}.png", dpi=150)
         plt.close(fig)
 
 
-def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sample_idx: int, device: torch.device):
+def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None):
     sample_idx = int(sample_idx)
-    y0, u_seq, _ = ds[sample_idx]
-    dt_seq = torch.from_numpy(ds.dt)
+    raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
+    plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
+    y0, u_seq, _ = plot_ds[sample_idx]
+    dt_seq = torch.from_numpy(raw_ds.dt)
 
     y0 = y0.unsqueeze(0).to(device)
     u_seq = u_seq.unsqueeze(0).to(device)
     dt_seq = dt_seq.unsqueeze(0).to(device)
 
     with torch.no_grad():
-        _, theta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+        _, theta, _beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
 
     theta_np = theta[0].cpu().numpy()  # (K, theta_dim)
     dt = dt_seq[0].cpu().numpy()
@@ -215,6 +270,45 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
     plt.close(fig)
 
 
+def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None):
+    """Plot the learned beta(t) residual terms (only meaningful for basal / beta_regularization runs)."""
+    sample_idx = int(sample_idx)
+    raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
+    plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
+    y0, u_seq, _ = plot_ds[sample_idx]
+    dt_seq = torch.from_numpy(raw_ds.dt)
+
+    y0 = y0.unsqueeze(0).to(device)
+    u_seq = u_seq.unsqueeze(0).to(device)
+    dt_seq = dt_seq.unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        _, _theta, beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+
+    beta_np = beta[0].cpu().numpy()  # (K, P)
+    dt = dt_seq[0].cpu().numpy()
+    t = np.concatenate([[0.0], np.cumsum(dt)])
+    tt = t[1:]
+
+    P = beta_np.shape[1]
+    fig, axes = plt.subplots(P, 1, figsize=(11, max(6, 2.0 * P)), sharex=True)
+    if P == 1:
+        axes = [axes]
+
+    for p, ax in enumerate(axes):
+        name = state_names[p] if p < len(state_names) else f"y{p}"
+        ax.plot(tt, beta_np[:, p], linewidth=1.8)
+        ax.axhline(0.0, color="k", linewidth=0.8, linestyle="--", alpha=0.4)
+        ax.set_ylabel(f"β({name})")
+        ax.grid(True, alpha=0.25)
+
+    axes[-1].set_xlabel("Time")
+    fig.suptitle(f"Learned β(t) residuals (sample {sample_idx})")
+    fig.tight_layout()
+    fig.savefig(out_dir / f"beta_sample{sample_idx}.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0) -> Path:
     exp_dir = Path(exp_dir)
     out_dir = exp_dir / "plots"
@@ -228,8 +322,13 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
         plot_loss_curves(loss_npz, out_dir)
         plot_val_species_losses(loss_npz, out_dir, state_names=state_names)
 
-    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device)
-    plot_theta(model, ds, param_names=param_names, out_dir=out_dir, sample_idx=sample_idx, device=device)
+    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir)
+    plot_theta(model, ds, param_names=param_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir)
+
+    # Plot beta residuals if use_basal was enabled
+    cfg = load_yaml(exp_dir / "config.yaml")
+    if cfg.get("use_basal", False):
+        plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir)
 
     print(f"Saved plots to {out_dir}")
     return out_dir
@@ -287,13 +386,14 @@ def plot_epoch_prediction_overlays(
         chosen = list(epochs)
 
     sample_idx = int(sample_idx)
+    raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     y0, u_seq, y_seq = ds[sample_idx]  # y_seq is (K,P) at t1..tK
-    dt = ds.dt.astype(np.float32)      # (K,)
+    dt = raw_ds.dt.astype(np.float32)  # (K,)
     t = np.cumsum(dt)                  # (K,) -> times for y_seq points (t1..tK)
 
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
-    dt_b = torch.from_numpy(ds.dt).unsqueeze(0).to(device)  # (1,K)
+    dt_b = torch.from_numpy(raw_ds.dt).unsqueeze(0).to(device)  # (1,K)
 
     y_true = y_seq.cpu().numpy()  # (K,P)
     P = int(y_true.shape[1])
@@ -308,7 +408,7 @@ def plot_epoch_prediction_overlays(
         model.load_state_dict(ckpt["state_dict"], strict=True)
         model.eval()
         with torch.no_grad():
-            pred, _ = model(y0_b, u_b, dt_b, y_seq=None, teacher_forcing=False)
+            pred, _theta, _beta = model(y0_b, u_b, dt_b, y_seq=None, teacher_forcing=False)
         preds[ep] = pred[0].detach().cpu().numpy()  # (K,P)
 
     fig_h = max(6.0, 2.0 * P)

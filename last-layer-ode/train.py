@@ -1,8 +1,9 @@
 # train.py
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+import re
 import time
 from datetime import datetime
 
@@ -13,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from scaffolds import SCAFFOLDS
-from ode_rnn import ODERNN
+from baselines.neural_ode import ODERNN
 from jumps import make_u_to_y_jump
 
 
@@ -98,7 +99,9 @@ def loss_fn_per_species(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor
 class TrainConfig:
     dataset_path: str
 
-    exp_name: str = "run"
+    study: str = "adhoc"
+    tags: list[str] | None = None
+    exp_name: str = "default"
     out_root: str = "experiments"
 
     save_model_name: str = "model.pt"  # saved in exp_dir/
@@ -109,7 +112,10 @@ class TrainConfig:
     batch_size: int = 256
     lr: float = 5e-4
     weight_decay: float = 0.0
-    val_frac: float = 0.15
+    val_n: int = 100   # fixed count for validation set
+    test_n: int = 100  # fixed count for held-out test set
+    # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
+    val_frac: float = 0.0
     seed: int = 42
 
     num_workers: int = 0
@@ -124,6 +130,10 @@ class TrainConfig:
     theta_hi: float = 2.0
     n_substeps: int = 1
 
+    use_basal: bool = False
+    beta_regularization: bool = False
+    lambda_beta: float = 1.0
+
     grad_clip: float = 1.0
     teacher_forcing: bool = True
     tf_every: int = 50
@@ -137,11 +147,138 @@ class TrainConfig:
 
     lambda_reg: float = 0.001
 
+    # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
+    # If null/None, supervises all observed species (default behaviour).
+    obs_idx: list[int] | None = None
+
+    wandb_enabled: bool = False
+    wandb_project: str = "theta-lab"
+    wandb_entity: str | None = None
+    wandb_group: str | None = None
+    wandb_job_type: str = "train"
+    wandb_name: str | None = None
+    wandb_mode: str | None = None
+
+    jit_scripting: bool = False
+    torch_compile: bool = False
+
 
 def load_cfg(path: str | Path) -> TrainConfig:
     with open(path, "r") as f:
         d = yaml.safe_load(f)
     return TrainConfig(**d)
+
+
+def slugify(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value).strip())
+    text = text.strip("-_.")
+    return text or "run"
+
+
+def build_run_dir(cfg: TrainConfig, now: datetime) -> tuple[Path, str, str]:
+    study_slug = slugify(cfg.study)
+    run_name = slugify(cfg.exp_name)
+    run_id = f"{now.strftime('%Y%m%d_%H%M%S')}_{run_name}"
+    date_folder = now.strftime("%Y-%m-%d")
+    run_dir = Path(cfg.out_root) / study_slug / date_folder / run_id
+    return run_dir, run_id, study_slug
+
+
+def init_wandb(cfg: TrainConfig, cfg_dict: dict, *, run_id: str, exp_dir: Path):
+    if not cfg.wandb_enabled:
+        return None, None
+
+    try:
+        import wandb
+    except ImportError:
+        print("[wandb] wandb is not installed; continuing without W&B logging.")
+        return None, None
+
+    raw_tags = cfg.tags or []
+    if isinstance(raw_tags, str):
+        tags = [raw_tags]
+    else:
+        tags = [str(tag) for tag in raw_tags]
+    if cfg.study not in tags:
+        tags.append(str(cfg.study))
+
+    init_kwargs = {
+        "project": cfg.wandb_project,
+        "entity": cfg.wandb_entity,
+        "group": cfg.wandb_group or cfg.study,
+        "job_type": cfg.wandb_job_type,
+        "name": cfg.wandb_name or run_id,
+        "tags": tags,
+        "config": cfg_dict,
+        "dir": str(exp_dir),
+    }
+    if cfg.wandb_mode is not None:
+        init_kwargs["mode"] = cfg.wandb_mode
+
+    try:
+        run = wandb.init(**{k: v for k, v in init_kwargs.items() if v is not None})
+    except Exception as exc:
+        print(f"[wandb] init failed: {exc}")
+        return None, None
+
+    if run is not None:
+        run.config.update(
+            {
+                "run_id": run_id,
+                "study": cfg.study,
+                "run_dir": str(exp_dir.resolve()),
+            },
+            allow_val_change=True,
+        )
+    return wandb, run
+
+
+def log_wandb_images(wandb, run, plots_dir: Path) -> None:
+    if wandb is None or run is None or not plots_dir.exists():
+        return
+
+    single_images = [
+        ("plots/loss_curves", plots_dir / "loss_curves.png"),
+        ("plots/val_species_heatmap", plots_dir / "val_species_heatmap.png"),
+        ("plots/val_species_final", plots_dir / "val_species_final.png"),
+        ("plots/pred_overlays", plots_dir / "pred_overlays_sample000.png"),
+        ("plots/theta_sample0", plots_dir / "theta_sample0.png"),
+    ]
+
+    payload = {}
+    for key, path in single_images:
+        if path.exists():
+            payload[key] = wandb.Image(str(path))
+
+    pred_paths = sorted(plots_dir.glob("pred_vs_true_*.png"))[:3]
+    if pred_paths:
+        payload["plots/pred_vs_true_examples"] = [
+            wandb.Image(str(path), caption=path.stem) for path in pred_paths
+        ]
+
+    if payload:
+        run.log(payload)
+
+
+def log_wandb_artifact(wandb, run, *, exp_dir: Path, run_id: str) -> None:
+    if wandb is None or run is None:
+        return
+
+    artifact = wandb.Artifact(run_id, type="experiment")
+    for rel_path in [
+        Path("config.yaml"),
+        Path("model.pt"),
+        Path("model_last.pt"),
+        Path("logs") / "loss_curves.npz",
+    ]:
+        path = exp_dir / rel_path
+        if path.exists():
+            artifact.add_file(str(path), name=str(rel_path))
+
+    try:
+        run.log_artifact(artifact)
+    except Exception as exc:
+        print(f"[wandb] artifact logging failed: {exc}")
 
 
 def device_auto() -> torch.device:
@@ -161,8 +298,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     device = device_auto()
     print(f"Using device: {device}")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    exp_dir = Path(cfg.out_root) / f"{timestamp}_{cfg.exp_name}"
+    now = datetime.now()
+    exp_dir, run_id, study_slug = build_run_dir(cfg, now)
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     logs_dir = exp_dir / "logs"
@@ -172,8 +309,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     # Save config for later reconstruction
-    (exp_dir / "config.yaml").write_text(yaml.safe_dump(cfg.__dict__, sort_keys=False))
+    cfg_dict = asdict(cfg)
+    (exp_dir / "config.yaml").write_text(yaml.safe_dump(cfg_dict, sort_keys=False))
     print(f"Experiment: {exp_dir}")
+    print(f"Study: {study_slug} | Run ID: {run_id}")
+
+    wandb, wandb_run = init_wandb(cfg, cfg_dict, run_id=run_id, exp_dir=exp_dir)
 
     ds = ODEDataset(cfg.dataset_path)
     N = len(ds)
@@ -182,13 +323,18 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     rng = np.random.default_rng(cfg.seed)
     rng.shuffle(idx)
 
-    if cfg.val_frac > 0.0 and N > 1:
-        n_val = max(1, int(N * cfg.val_frac))
-        val_idx = idx[:n_val]
-        train_idx = idx[n_val:]
-    else:
-        val_idx = np.array([], dtype=int)
-        train_idx = idx
+    # fixed-count split: test / val / train
+    n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
+    n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
+    if n_test + n_val >= N:
+        raise ValueError(f"val_n={n_val} + test_n={n_test} >= N={N}")
+    test_idx  = idx[:n_test]
+    val_idx   = idx[n_test:n_test + n_val]
+    train_idx = idx[n_test + n_val:]
+
+    # persist split so plotting always uses the correct test indices
+    np.savez(exp_dir / "split.npz",
+             train_idx=train_idx, val_idx=val_idx, test_idx=test_idx)
 
     train_loader = DataLoader(
         torch.utils.data.Subset(ds, train_idx.tolist()),
@@ -235,13 +381,31 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         theta_lo=cfg.theta_lo,
         theta_hi=cfg.theta_hi,
         n_substeps=cfg.n_substeps,
+        use_basal=cfg.use_basal,
     ).to(device)
+
+    compile_model = cfg.torch_compile
+    jit_scripting = cfg.jit_scripting
+
+    if jit_scripting == True:
+        try:
+            model = torch.jit.script(model)
+            print('The model compiled successfully')
+        except:
+            print('The model did not compile please check')
+
+    elif compile_model == True:
+        try:
+            model = torch.compile(model)
+        except: 
+            print('The model did not compile please check')
+
 
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg.lr), weight_decay=float(cfg.weight_decay))
 
     mech_names = ds.obs_names.tolist() if ds.obs_names is not None else None
 
-    print(f"Data: N={N} | train={len(train_idx)} | val={len(val_idx)}")
+    print(f"Data: N={N} | train={len(train_idx)} | val={len(val_idx)} | test={len(test_idx)}")
     print(f"Dims: P_obs={P_obs} | scaffold={cfg.scaffold} | U={U}")
     if mech_names is not None:
         print("Species:", ", ".join(str(x) for x in mech_names))
@@ -266,7 +430,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             path,
         )
 
-    obs_idx = torch.tensor([0, 12], device=device, dtype=torch.long)
+    if cfg.obs_idx is not None:
+        obs_idx = torch.tensor(cfg.obs_idx, device=device, dtype=torch.long)
+        print(f"Supervising only species indices: {cfg.obs_idx}")
+    else:
+        obs_idx = torch.arange(P_obs, device=device, dtype=torch.long)
+
+    dt_tensor = torch.from_numpy(ds.dt).to(device)
 
     for ep in range(1, cfg.epochs + 1):
         ep_t0 = time.time()
@@ -278,16 +448,14 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         tr_batches = 0
 
         for y0, u_seq, y_seq in train_loader:
-            dt_seq = torch.from_numpy(ds.dt)
-            dt_seq = dt_seq[None, :].expand(y0.shape[0], -1)
+            dt_seq = dt_tensor[None, :].expand(y0.shape[0], -1)  # no CPU transfer
 
             y0 = y0.to(device)
             y_seq = y_seq.to(device)
             u_seq = u_seq.to(device)
-            dt_seq = dt_seq.to(device)
 
             opt.zero_grad(set_to_none=True)
-            pred, theta = model(
+            pred, theta, _ = model(
                 y0,
                 u_seq,
                 dt_seq,
@@ -342,7 +510,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     u_seq = u_seq.to(device)
                     dt_seq = dt_seq.to(device)
 
-                    pred, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False, obs_idx=obs_idx)
+                    pred, _, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False, obs_idx=obs_idx)
                     pred = pred[:, :, obs_idx] 
                     y_seq = y_seq[:, :, obs_idx]
                     loss = loss_fn(pred, y_seq)
@@ -378,6 +546,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str} | {ep_time:.2f}s"
             )
 
+        if wandb_run is not None:
+            payload = {
+                "epoch": int(ep),
+                "train/loss": float(tr_loss),
+                "train/teacher_forcing": int(teacher_forcing),
+                "system/epoch_time_sec": float(ep_time),
+                "system/learning_rate": float(opt.param_groups[0]["lr"]),
+            }
+            if va_loss is not None:
+                payload["val/loss"] = float(va_loss)
+                payload["val/best_loss"] = float(best_val)
+            if sp_last is not None:
+                names = mech_names if mech_names is not None else [f"species_{i}" for i in range(len(sp_last))]
+                for name, value in zip(names, sp_last):
+                    payload[f"val_species/{name}"] = float(value)
+            wandb_run.log(payload, step=int(ep))
+
         # always keep "last" checkpoint
         _save_ckpt(exp_dir / cfg.save_last_name, ep, tag="last")
 
@@ -398,10 +583,66 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     if best_state is not None:
         model.load_state_dict(best_state)
 
+    # final test evaluation (on held-out test set, using best weights)
+    test_loss: float | None = None
+    test_species_loss: np.ndarray | None = None
+    if len(test_idx) > 0:
+        test_loader = DataLoader(
+            torch.utils.data.Subset(ds, test_idx.tolist()),
+            batch_size=cfg.batch_size,
+            shuffle=False,
+            num_workers=cfg.num_workers,
+            collate_fn=collate,
+            pin_memory=bool(cfg.pin_memory),
+        )
+        model.eval()
+        te_total = 0.0
+        te_batches = 0
+        sp_total = None
+        with torch.no_grad():
+            for y0, u_seq, y_seq in test_loader:
+                dt_seq = dt_tensor[None, :].expand(y0.shape[0], -1)
+                y0 = y0.to(device)
+                y_seq = y_seq.to(device)
+                u_seq = u_seq.to(device)
+                dt_seq = dt_seq.to(device)
+                pred, _, _ = model(y0, u_seq, dt_seq, obs_idx=obs_idx, y_seq=None, teacher_forcing=False)
+                pred = pred[:, :, obs_idx]
+                y_seq = y_seq[:, :, obs_idx]
+                loss = loss_fn(pred, y_seq)
+                te_total += float(loss.item())
+                sp = loss_fn_per_species(pred, y_seq).detach().cpu()
+                sp_total = sp if sp_total is None else sp_total + sp
+                te_batches += 1
+        test_loss = te_total / max(1, te_batches)
+        if sp_total is not None:
+            test_species_loss = (sp_total / max(1, te_batches)).numpy()
+            sp_str = "  [" + "  ".join(
+                f"{n}:{v:.4f}" for n, v in zip(
+                    mech_names if mech_names else [f"s{i}" for i in range(len(test_species_loss))],
+                    test_species_loss,
+                )
+            ) + "]"
+        else:
+            sp_str = ""
+        print(f"\nTest loss (best model): {test_loss:.6f}{sp_str}")
+
+    # write final loss_curves.npz including test results
+    np.savez(
+        logs_dir / cfg.save_curves_name,
+        train_losses=np.array(train_losses, dtype=np.float32),
+        val_losses=np.array(val_losses, dtype=np.float32) if len(val_losses) > 0 else None,
+        val_species_losses=np.array(val_species_losses, dtype=np.float32) if len(val_species_losses) > 0 else None,
+        test_loss=np.float32(test_loss) if test_loss is not None else None,
+        test_species_losses=test_species_loss.astype(np.float32) if test_species_loss is not None else None,
+    )
+
     # save best model (plot expects exp_dir/model.pt)
     save_path = exp_dir / cfg.save_model_name
     torch.save(
-        {"state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()}, "best_val": float(best_val)},
+        {"state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+         "best_val": float(best_val),
+         "test_loss": float(test_loss) if test_loss is not None else None},
         save_path,
     )
     print(f"Saved best model to {save_path}")
@@ -427,6 +668,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             print("[plot] plot_diagnostics.py not found; skipping plots.")
         except Exception as e:
             print(f"[plot] failed: {e}")
+
+    if wandb_run is not None:
+        plots_dir = exp_dir / "plots"
+        log_wandb_images(wandb, wandb_run, plots_dir)
+        log_wandb_artifact(wandb, wandb_run, exp_dir=exp_dir, run_id=run_id)
+        wandb_run.summary["run_dir"] = str(exp_dir.resolve())
+        wandb_run.summary["study"] = cfg.study
+        wandb_run.summary["scaffold"] = cfg.scaffold
+        wandb_run.summary["device"] = str(device)
+        wandb_run.summary["elapsed_seconds"] = float(elapsed)
+        if train_losses:
+            wandb_run.summary["final_train_loss"] = float(train_losses[-1])
+        if val_losses:
+            wandb_run.summary["final_val_loss"] = float(val_losses[-1])
+        if best_state is not None:
+            wandb_run.summary["best_val_loss"] = float(best_val)
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

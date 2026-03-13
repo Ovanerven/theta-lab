@@ -1,9 +1,9 @@
-dataset_path: ../datasets/N1000_T300_steps600_zeros_knoise0.0_reduced7_ADGJKLM.npz
-exp_name: reduced7_100ep_lr1e-3_substeps10_1layer
+dataset_path: datasets/N1000_T300_steps600_zeros_knoise0.0_reduced7_ADGJKLM.npz
+exp_name: 7_checkpoint_every1_10ep_lre1e-6_substeps1
 
-epochs: 100
+epochs: 10
 batch_size: 1000
-lr: 0.001
+lr: 0.000001
 weight_decay: 0.0085
 val_frac: 0.15
 seed: 42
@@ -21,4 +21,8 @@ scaffold: reduced7
 theta_lo: 1.0e-3
 theta_hi: 2.0
 
-n_substeps: 10
+n_substeps: 1
+
+study: reduced7_study
+
+ckpt_every: 1    # save checkpoint every 5 epochs (0 = disable)

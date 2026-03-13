@@ -1,0 +1,33 @@
+dataset_path: datasets/N1000_T300_steps600_zeros_knoise0.0_reduced7_ADGJKLM.npz
+exp_name: 7_eq_default_rk4_steps10
+
+epochs: 50
+batch_size: 1000
+lr: 0.001
+weight_decay: 0.0085
+val_n: 100
+test_n: 100
+seed: 42
+
+hidden: 128
+num_layers: 1
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 50
+tf_drop_epoch: 250
+
+use_basal: false
+beta_regularization: false
+lambda_beta: 0
+
+scaffold: reduced7
+
+theta_lo: 1.0e-3
+theta_hi: 2.0
+
+n_substeps: 10
+
+study: analytical_vs_rk4_7eq
+
+ckpt_every: 10    # save checkpoint every 5 epochs (0 = disable)

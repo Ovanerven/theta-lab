@@ -66,6 +66,21 @@ def rhs_4_noM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     dL =  kf3 * J - kr3 * L
     return torch.stack([dA, dG, dJ, dL], dim=-1)
 
+# -------------------------
+# reduced4_AEIM (even A/M-containing variant): [A, E, I, M]
+# systematic species-named family: uniformly coarsened chain from A to M.
+# theta: (B,6) [kf1,kf2,kf3, kr1,kr2,kr3]
+# -------------------------
+def rhs_4_AEIM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    A, E, I, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kr1, kr2, kr3 = theta.unbind(dim=-1)
+
+    dA = -kf1 * A + kr1 * E
+    dE =  kf1 * A - kr1 * E - kf2 * E + kr2 * I
+    dI =  kf2 * E - kr2 * I - kf3 * I + kr3 * M
+    dM =  kf3 * I - kr3 * M
+    return torch.stack([dA, dE, dI, dM], dim=-1)
+
 
 # -------------------------
 # reduced5 (odd): [A, D, G, J, M]
@@ -156,6 +171,23 @@ def rhs_6_ABCDLM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     return torch.stack([dA, dB, dC, dD, dL, dM], dim=-1)
 
 # -------------------------
+# reduced6_ACFHKM (even A/M-containing variant): [A, C, F, H, K, M]
+# systematic species-named family: uniformly coarsened chain from A to M.
+# theta: (B,10) [kf1..kf5, kr1..kr5]
+# -------------------------
+def rhs_6_ACFHKM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    A, C, F, H, K, M = y.unbind(dim=-1)
+    kf1, kf2, kf3, kf4, kf5, kr1, kr2, kr3, kr4, kr5 = theta.unbind(dim=-1)
+
+    dA = -kf1 * A + kr1 * C
+    dC =  kf1 * A - kr1 * C - kf2 * C + kr2 * F
+    dF =  kf2 * C - kr2 * F - kf3 * F + kr3 * H
+    dH =  kf3 * F - kr3 * H - kf4 * H + kr4 * K
+    dK =  kf4 * H - kr4 * K - kf5 * K + kr5 * M
+    dM =  kf5 * K - kr5 * M
+    return torch.stack([dA, dC, dF, dH, dK, dM], dim=-1)
+
+# -------------------------
 # reduced7 (odd): [A, D, G, J, K, L, M]
 # -------------------------
 def rhs_7_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
@@ -195,6 +227,52 @@ def rhs_8_noM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     dK =  kf10 * J - kf11 * K + kr11 * L
     dL =  kf11 * K - kr11 * L
     return torch.stack([dA, dD, dG, dH, dI, dJ, dK, dL], dim=-1)
+
+# -------------------------
+# reduced8_ACEGIJLM (even A/M-containing variant): [A, C, E, G, I, J, L, M]
+# systematic species-named family: uniformly coarsened chain from A to M.
+# theta: (B,14) [kf1..kf7, kr1..kr7]
+# -------------------------
+def rhs_8_ACEGIJLM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    A, C, E, G, I, J, L, M = y.unbind(dim=-1)
+    (
+        kf1, kf2, kf3, kf4, kf5, kf6, kf7,
+        kr1, kr2, kr3, kr4, kr5, kr6, kr7
+    ) = theta.unbind(dim=-1)
+
+    dA = -kf1 * A + kr1 * C
+    dC =  kf1 * A - kr1 * C - kf2 * C + kr2 * E
+    dE =  kf2 * C - kr2 * E - kf3 * E + kr3 * G
+    dG =  kf3 * E - kr3 * G - kf4 * G + kr4 * I
+    dI =  kf4 * G - kr4 * I - kf5 * I + kr5 * J
+    dJ =  kf5 * I - kr5 * J - kf6 * J + kr6 * L
+    dL =  kf6 * J - kr6 * L - kf7 * L + kr7 * M
+    dM =  kf7 * L - kr7 * M
+    return torch.stack([dA, dC, dE, dG, dI, dJ, dL, dM], dim=-1)
+
+
+# -------------------------
+# reduced8_ACEGIJLM (even A/M-containing variant): [A, C, E, G, I, J, L, M]
+# systematic species-named family: uniformly coarsened chain from A to M.
+# theta: (B,14) [kf1..kf7, kr1..kr7]
+# -------------------------
+def rhs_8_ADGHJKLM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    # states: [A, D, G, H, J, K, L, M]  — skips B,C,E,F,I
+    A, D, G, H, J, K, L, M = y.unbind(dim=-1)
+    (
+        kf1, kf2, kf3, kf4, kf5, kf6, kf7,
+        kr1, kr2, kr3, kr4, kr5, kr6, kr7
+    ) = theta.unbind(dim=-1)
+
+    dA = -kf1 * A + kr1 * D
+    dD =  kf1 * A - kr1 * D - kf2 * D + kr2 * G
+    dG =  kf2 * D - kr2 * G - kf3 * G + kr3 * H
+    dH =  kf3 * G - kr3 * H - kf4 * H + kr4 * J
+    dJ =  kf4 * H - kr4 * J - kf5 * J + kr5 * K
+    dK =  kf5 * J - kr5 * K - kf6 * K + kr6 * L
+    dL =  kf6 * K - kr6 * L - kf7 * L + kr7 * M
+    dM =  kf7 * L - kr7 * M
+    return torch.stack([dA, dD, dG, dH, dJ, dK, dL, dM], dim=-1)
 
 
 # -------------------------
@@ -331,15 +409,19 @@ SCAFFOLDS = {
     "reduced5": Scaffold(P=5, theta_dim=8, state_names=("A", "D", "G", "J", "M"), rhs=rhs_5_torch),
     "reduced7": Scaffold(P=7, theta_dim=11, state_names=("A", "D", "G", "J", "K", "L", "M"), rhs=rhs_7_torch),
     "reduced9": Scaffold(P=9, theta_dim=14, state_names=("A", "D", "G", "H", "I", "J", "K", "L", "M"), rhs=rhs_9_torch),
-    "reduced11": Scaffold(P=11, theta_dim=15, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "M"), rhs=rhs_11_torch),
+    "reduced11": Scaffold(P=11, theta_dim=16, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "M"), rhs=rhs_11_torch),
 
     "reduced4": Scaffold(P=4, theta_dim=6, state_names=("A", "G", "J", "L"), rhs=rhs_4_noM_torch),
+    "reduced4_AEIM": Scaffold(P=4, theta_dim=6, state_names=("A", "E", "I", "M"), rhs=rhs_4_AEIM_torch),
     "reduced6": Scaffold(P=6, theta_dim=10, state_names=("A", "B", "D", "G", "J", "L"), rhs=rhs_6_noM_torch),
     "reduced6_ADGJLM": Scaffold(P=6, theta_dim=10, state_names=("A", "D", "G", "J", "L", "M"), rhs=rhs_6_ADGJLM_torch),
     "reduced6_AGHILM": Scaffold(P=6, theta_dim=9, state_names=("A", "G", "H", "I", "L", "M"), rhs=rhs_6_AGHILM_torch),
     "reduced6_DGHILM": Scaffold(P=6, theta_dim=9, state_names=("D", "G", "H", "I", "L", "M"), rhs=rhs_6_DGHILM_torch),
     "reduced6_ABCDLM": Scaffold(P=6, theta_dim=9, state_names=("A", "B", "C", "D", "L", "M"), rhs=rhs_6_ABCDLM_torch),
+    "reduced6_ACFHKM": Scaffold(P=6, theta_dim=10, state_names=("A", "C", "F", "H", "K", "M"), rhs=rhs_6_ACFHKM_torch),
     "reduced8": Scaffold(P=8, theta_dim=12, state_names=("A", "D", "G", "H", "I", "J", "K", "L"), rhs=rhs_8_noM_torch),
+    "reduced8_ACEGIJLM": Scaffold(P=8, theta_dim=14, state_names=("A", "C", "E", "G", "I", "J", "L", "M"), rhs=rhs_8_ACEGIJLM_torch),
+    "reduced8_ADGHJKLM": Scaffold(P=8, theta_dim=14, state_names=("A", "D", "G", "H", "J", "K", "L", "M"), rhs=rhs_8_ADGHJKLM_torch),
     "reduced10": Scaffold(P=10, theta_dim=14, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "L"), rhs=rhs_10_noM_torch),
     "reduced12": Scaffold(P=12, theta_dim=17, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"), rhs=rhs_12_torch),
 
