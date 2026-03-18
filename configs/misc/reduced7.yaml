@@ -1,0 +1,29 @@
+dataset_path: datasets/N1000_T300_steps600_zeros_knoise0.0_reduced7_ADGJKLM.npz
+exp_name: 7eq_50epoch_logmse_loss
+
+epochs: 50
+batch_size: 1000
+lr: 0.001
+weight_decay: 0.0085
+n_val: 100
+n_test: 100
+seed: 42
+
+hidden: 128
+num_layers: 1
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 50
+tf_drop_epoch: 250
+
+scaffold: reduced7
+
+theta_lo: 1.0e-3
+theta_hi: 2.0
+
+n_substeps: 1
+
+study: last-layer-ode-simple-scenario-all-scaffolds
+
+ckpt_every: 5    # save checkpoint every 5 epochs (0 = disable)

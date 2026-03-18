@@ -111,15 +111,15 @@ export PYTHONPATH="$(pwd)/last-layer-ode"
 # -------------------------
 # reduced8 (even noM): [A, D, G, H, J, K, L, M] -> [0,3,6,7,8,9,10,11]
 # -------------------------
-python -m last-layer-ode.create_dataset \
-  --n-samples 1000 \
-  --t-span 300.0 \
-  --n-steps 600 \
-  --control-indices "0,3,6,7,9,10,11,12" \
-  --obs-indices "0,3,6,7,9,10,11,12" \
-  --zero-init \
-  --k-noise 0.0 \
-  --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced8_ADGHJKLM.npz"
+# python -m last-layer-ode.create_dataset \
+#   --n-samples 1000 \
+#   --t-span 300.0 \
+#   --n-steps 600 \
+#   --control-indices "0,3,6,7,9,10,11,12" \
+#   --obs-indices "0,3,6,7,9,10,11,12" \
+#   --zero-init \
+#   --k-noise 0.0 \
+#   --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced8_ADGHJKLM.npz"
 
 # # -------------------------
 # # reduced9 (odd): [A, D, G, H, I, J, K, L, M] -> [0,3,6,7,8,9,10,11,12]
@@ -234,3 +234,34 @@ python -m last-layer-ode.create_dataset \
 #   --zero-init \
 #   --k-noise 0.0 \
 #   --output-file datasets/N1000_T300_steps600_zeros_knoise0.0_obs_AM_control_full13
+
+# reduced10_with_M: [A,D,F,G,H,I,J,K,L,M] = indices 0,3,5,6,7,8,9,10,11,12
+python -m last-layer-ode.create_dataset \
+  --n-samples 1000 --t-span 300.0 --n-steps 600 \
+  --control-indices "0,3,5,6,7,8,9,10,11,12" \
+  --obs-indices     "0,3,5,6,7,8,9,10,11,12" \
+  --zero-init --k-noise 0.0 \
+  --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced10_ADFGHIJKLM.npz"
+
+# reduced11_with_M: [A,D,E,F,G,H,I,J,K,L,M] = indices 0,3,4,5,6,7,8,9,10,11,12
+python -m last-layer-ode.create_dataset \
+  --n-samples 1000 --t-span 300.0 --n-steps 600 \
+  --control-indices "0,3,4,5,6,7,8,9,10,11,12" \
+  --obs-indices     "0,3,4,5,6,7,8,9,10,11,12" \
+  --zero-init --k-noise 0.0 \
+  --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced11_ADEFGHIJKLM.npz"
+
+# reduced12_with_M: [A,B,D,E,F,G,H,I,J,K,L,M] = indices 0,1,3,4,5,6,7,8,9,10,11,12
+python -m last-layer-ode.create_dataset \
+  --n-samples 1000 --t-span 300.0 --n-steps 600 \
+  --control-indices "0,1,3,4,5,6,7,8,9,10,11,12" \
+  --obs-indices     "0,1,3,4,5,6,7,8,9,10,11,12" \
+  --zero-init --k-noise 0.0 \
+  --output-file "datasets/N1000_T300_steps600_zeros_knoise0.0_reduced12_ABDEFGHIJKLM.npz"
+
+python -u last-layer-ode/baselines/honest_rollout.py \     
+--dataset-dir datasets \
+--scaffolds reduced2,reduced3,reduced4,reduced5,reduced6_ADGJLM,reduced7,reduced8_ADGHJKLM,reduced9,reduced10_with_M,reduced11_with_M,reduced12_with_M,full13 \
+--sample-idx 0 \
+--gd-steps 400 \                
+--out results/honest_rollout.png

@@ -324,6 +324,28 @@ def rhs_10_noM_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     return torch.stack([dA, dB, dC, dD, dE, dF, dG, dH, dI, dL], dim=-1)
 
 
+def rhs_10_with_M(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    # states: [A, D, F, G, H, I, J, K, L, M]  — skips B, C, E
+    A, D, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
+    (
+        kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9,
+        kr1, kr4, kr6, kr8, kr9
+    ) = theta.unbind(dim=-1)  # 9 forward + 5 reverse = 14 total
+
+    dA =  -kf1 * A + kr1 * D
+    dD =   kf1 * A - kr1 * D - kf2 * D          # D->F irreversible (lumped from D->E->F)
+    dF =   kf2 * D - kf3 * F          # F->G irreversible
+    dG =   kf3 * F - kf4 * G + kr4 * H
+    dH =   kf4 * G - kr4 * H - kf5 * H
+    dI =   kf5 * H - kf6 * I + kr6 * J
+    dJ =   kf6 * I - kr6 * J - kf7 * J
+    dK =   kf7 * J - kf8 * K + kr8 * L
+    dL =   kf8 * K - kr8 * L - kf9 * L + kr9 * M
+    dM =   kf9 * L - kr9 * M
+
+    return torch.stack([dA, dD, dF, dG, dH, dI, dJ, dK, dL, dM], dim=-1)
+
+
 # -------------------------
 # reduced11 (odd): [A, B, C, D, E, F, G, H, I, J, M]
 # -------------------------
@@ -350,6 +372,27 @@ def rhs_11_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
 
     return torch.stack([dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dM], dim=-1)
 
+def rhs_11_with_M(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    # states: [A, D, E, F, G, H, I, J, K, L, M]  — skips B, C
+    A, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
+    (
+        kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10,
+        kr1, kr3, kr5, kr7, kr9, kr10
+    ) = theta.unbind(dim=-1)   # 10 + 6 = 16
+
+    dA =  -kf1 * A + kr1 * D
+    dD =   kf1 * A - kr1 * D  - kf2 * D        # D->E irrev
+    dE =   kf2 * D  - kf3 * E  + kr3 * F
+    dF =   kf3 * E  - kr3 * F  - kf4 * F       # F->G irrev
+    dG =   kf4 * F  - kf5 * G  + kr5 * H
+    dH =   kf5 * G  - kr5 * H  - kf6 * H       # H->I irrev
+    dI =   kf6 * H  - kf7 * I  + kr7 * J
+    dJ =   kf7 * I  - kr7 * J  - kf8 * J       # J->K irrev
+    dK =   kf8 * J  - kf9 * K  + kr9 * L
+    dL =   kf9 * K  - kr9 * L  - kf10 * L + kr10 * M
+    dM =   kf10 * L - kr10 * M
+
+    return torch.stack([dA, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM], dim=-1)
 
 # -------------------------
 # reduced12 (even variant): [A, B, C, D, E, F, G, H, I, J, K, L]  (this already excludes M)
@@ -376,6 +419,28 @@ def rhs_12_torch(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     dL =  kf11 * K - kr11 * L
     return torch.stack([dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dK, dL], dim=-1)
 
+def rhs_12_with_M(y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    # states: [A, B, D, E, F, G, H, I, J, K, L, M]  — skips C
+    A, B, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
+    (
+        kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11,
+        kr1, kr4, kr6, kr8, kr10, kr11
+    ) = theta.unbind(dim=-1)   # 11 + 6 = 17
+
+    dA =  -kf1 * A + kr1 * B
+    dB =   kf1 * A - kr1 * B  - kf2 * B        # B->D irrev (lump B->C->D)
+    dD =   kf2 * B             - kf3 * D        # D->E irrev
+    dE =   kf3 * D  - kf4 * E  + kr4 * F
+    dF =   kf4 * E  - kr4 * F  - kf5 * F       # F->G irrev
+    dG =   kf5 * F  - kf6 * G  + kr6 * H
+    dH =   kf6 * G  - kr6 * H  - kf7 * H       # H->I irrev
+    dI =   kf7 * H  - kf8 * I  + kr8 * J
+    dJ =   kf8 * I  - kr8 * J  - kf9 * J       # J->K irrev
+    dK =   kf9 * J  - kf10 * K + kr10 * L
+    dL =   kf10 * K - kr10 * L - kf11 * L + kr11 * M
+    dM =   kf11 * L - kr11 * M
+
+    return torch.stack([dA, dB, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM], dim=-1)
 
 # -------------------------
 # full13: keep original full model
@@ -423,7 +488,9 @@ SCAFFOLDS = {
     "reduced8_ACEGIJLM": Scaffold(P=8, theta_dim=14, state_names=("A", "C", "E", "G", "I", "J", "L", "M"), rhs=rhs_8_ACEGIJLM_torch),
     "reduced8_ADGHJKLM": Scaffold(P=8, theta_dim=14, state_names=("A", "D", "G", "H", "J", "K", "L", "M"), rhs=rhs_8_ADGHJKLM_torch),
     "reduced10": Scaffold(P=10, theta_dim=14, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "L"), rhs=rhs_10_noM_torch),
+    "reduced10_with_M": Scaffold(P=10,theta_dim=14,state_names=("A", "D", "F", "G", "H", "I", "J", "K", "L", "M"),rhs=rhs_10_with_M),
+    "reduced11_with_M": Scaffold(P=11, theta_dim=16, state_names=("A","D","E","F","G","H","I","J","K","L","M"), rhs=rhs_11_with_M),
+    "reduced12_with_M": Scaffold(P=12, theta_dim=17, state_names=("A","B","D","E","F","G","H","I","J","K","L","M"), rhs=rhs_12_with_M),
     "reduced12": Scaffold(P=12, theta_dim=17, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"), rhs=rhs_12_torch),
-
     "full13": Scaffold(P=13, theta_dim=19, state_names=("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"), rhs=rhs_13_torch),
 }
