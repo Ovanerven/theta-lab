@@ -45,8 +45,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scaffolds import SCAFFOLDS
 from jumps import make_u_to_y_jump
 
@@ -143,7 +143,7 @@ def run(scaffold_name, dataset_path, sample_idx,
         pred_rollout, thetas_rollout, losses_rollout
     """
     sc        = SCAFFOLDS[scaffold_name]
-    rhs       = sc.rhs
+    rhs       = sc
     theta_dim = sc.theta_dim
     P         = sc.P
 

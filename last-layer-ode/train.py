@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from scaffolds import SCAFFOLDS
-from baselines.neural_ode import ODERNN
+from models import MODELS
 from jumps import make_u_to_y_jump
 
 
@@ -161,6 +161,9 @@ class TrainConfig:
 
     jit_scripting: bool = False
     torch_compile: bool = False
+
+    # 'ode_rnn' (default, mechanistic scaffold) or 'neural_ode' (pure MLP baseline)
+    model_class: str = "ode_rnn"
 
 
 def load_cfg(path: str | Path) -> TrainConfig:
@@ -370,9 +373,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     u_to_y_jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)  # (U,P_obs)
 
-    model = ODERNN(
+    if cfg.model_class not in MODELS:
+        raise ValueError(f"Unknown model_class '{cfg.model_class}'. Available: {list(MODELS.keys())}")
+    model = MODELS[cfg.model_class](
         U=U,
-        scaffold=scaffold,
+        rhs=scaffold,
         u_to_y_jump=u_to_y_jump,
         hidden=cfg.hidden,
         lift_dim=cfg.lift_dim,
@@ -453,16 +458,17 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             y0 = y0.to(device)
             y_seq = y_seq.to(device)
             u_seq = u_seq.to(device)
+            dt_seq = dt_seq.to(device)
 
             opt.zero_grad(set_to_none=True)
             pred, theta, _ = model(
                 y0,
                 u_seq,
                 dt_seq,
-                y_seq=y_seq,
+                obs_idx,
+                y_seq,
                 teacher_forcing=teacher_forcing,
                 tf_every=int(cfg.tf_every),
-                obs_idx=obs_idx,
             )
             pred = pred[:, :, obs_idx] 
             y_seq = y_seq[:, :, obs_idx]
@@ -510,7 +516,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     u_seq = u_seq.to(device)
                     dt_seq = dt_seq.to(device)
 
-                    pred, _, _ = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False, obs_idx=obs_idx)
+                    pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
                     pred = pred[:, :, obs_idx] 
                     y_seq = y_seq[:, :, obs_idx]
                     loss = loss_fn(pred, y_seq)
@@ -606,7 +612,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 y_seq = y_seq.to(device)
                 u_seq = u_seq.to(device)
                 dt_seq = dt_seq.to(device)
-                pred, _, _ = model(y0, u_seq, dt_seq, obs_idx=obs_idx, y_seq=None, teacher_forcing=False)
+                pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
                 pred = pred[:, :, obs_idx]
                 y_seq = y_seq[:, :, obs_idx]
                 loss = loss_fn(pred, y_seq)

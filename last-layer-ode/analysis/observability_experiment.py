@@ -30,8 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from manual_theta_fit import (
     load_sample, nrmse, SCAFFOLDS,
@@ -54,7 +53,7 @@ def fit_with_obs_mask(
     Evaluate NRMSE on ALL species regardless.
     """
     sc = SCAFFOLDS["full13"]
-    rhs = sc.rhs
+    rhs = sc
     theta_dim = sc.theta_dim
     state_names = sc.state_names
     P = sc.P
@@ -122,7 +121,7 @@ def fit_rollout_with_obs_mask(
       step k starts from own previous prediction, not from true y[k].
     """
     sc = SCAFFOLDS["full13"]
-    rhs = sc.rhs
+    rhs = sc
     theta_dim = sc.theta_dim
     state_names = sc.state_names
     P = sc.P

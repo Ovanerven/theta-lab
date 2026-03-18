@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import yaml
 
 from train import ODEDataset, collate
-from ode_rnn import ODERNN
+from models import MODELS
 from scaffolds import SCAFFOLDS
 from jumps import make_u_to_y_jump
 
@@ -91,34 +91,22 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
     jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
 
     ckpt = torch.load(exp_dir / "model.pt", map_location="cpu")
-    state_keys = list(ckpt["state_dict"].keys())
 
-    if any(k.startswith("mlp.") for k in state_keys):
-        # Baseline neural ODE (MLP-based, no GRU/lift/head)
-        from baselines.neural_ode import ODERNN as _ModelClass
-        model = _ModelClass(
-            U=U,
-            scaffold=scaffold,
-            hidden=int(cfg.get("hidden", 128)),
-            dropout=float(cfg.get("dropout", 0.0)),
-            u_to_y_jump=jump,
-            n_substeps=int(cfg.get("n_substeps", 1)),
-            use_basal=bool(cfg.get("use_basal", False)),
-        ).to(device)
-    else:
-        model = ODERNN(
-            U=U,
-            scaffold=scaffold,
-            hidden=int(cfg.get("hidden", 128)),
-            lift_dim=int(cfg.get("lift_dim", 32)),
-            num_layers=int(cfg.get("num_layers", 1)),
-            dropout=float(cfg.get("dropout", 0.0)),
-            u_to_y_jump=jump,
-            theta_lo=float(cfg.get("theta_lo", 1e-3)),
-            theta_hi=float(cfg.get("theta_hi", 2.0)),
-            n_substeps=int(cfg.get("n_substeps", 1)),
-            use_basal=bool(cfg.get("use_basal", False)),
-        ).to(device)
+    model_class_name = cfg.get("model_class", "ode_rnn")
+    ModelClass = MODELS[model_class_name]
+    model = ModelClass(
+        U=U,
+        rhs=scaffold,
+        u_to_y_jump=jump,
+        hidden=int(cfg.get("hidden", 128)),
+        lift_dim=int(cfg.get("lift_dim", 32)),
+        num_layers=int(cfg.get("num_layers", 1)),
+        dropout=float(cfg.get("dropout", 0.0)),
+        theta_lo=float(cfg.get("theta_lo", 1e-3)),
+        theta_hi=float(cfg.get("theta_hi", 2.0)),
+        n_substeps=int(cfg.get("n_substeps", 1)),
+        use_basal=bool(cfg.get("use_basal", False)),
+    ).to(device)
 
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
