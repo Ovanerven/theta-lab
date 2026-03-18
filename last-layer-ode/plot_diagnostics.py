@@ -188,7 +188,8 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     dt_seq = dt_seq.to(device)
 
     with torch.no_grad():
-        pred, _theta, _beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
+        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
@@ -228,7 +229,8 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
     dt_seq = dt_seq.unsqueeze(0).to(device)
 
     with torch.no_grad():
-        _, theta, _beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
+        _, theta, _beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
 
     theta_np = theta[0].cpu().numpy()  # (K, theta_dim)
     dt = dt_seq[0].cpu().numpy()
@@ -271,7 +273,8 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     dt_seq = dt_seq.unsqueeze(0).to(device)
 
     with torch.no_grad():
-        _, _theta, beta = model(y0, u_seq, dt_seq, y_seq=None, teacher_forcing=False)
+        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
+        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
 
     beta_np = beta[0].cpu().numpy()  # (K, P)
     dt = dt_seq[0].cpu().numpy()
@@ -396,7 +399,8 @@ def plot_epoch_prediction_overlays(
         model.load_state_dict(ckpt["state_dict"], strict=True)
         model.eval()
         with torch.no_grad():
-            pred, _theta, _beta = model(y0_b, u_b, dt_b, y_seq=None, teacher_forcing=False)
+            obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
+            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, y_seq=None, teacher_forcing=False)
         preds[ep] = pred[0].detach().cpu().numpy()  # (K,P)
 
     fig_h = max(6.0, 2.0 * P)
