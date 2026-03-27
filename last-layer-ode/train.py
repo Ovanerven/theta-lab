@@ -67,26 +67,17 @@ def collate(batch):
     return torch.stack(y0), torch.stack(u), torch.stack(y)
 
 
-def loss_fn(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
-    """Compute MSE loss in log10 space."""
-    # Edit on 13/02: based on Bob's feedback, looked to fix the loss. Stopped clamping loss at 1
-    # eps = 1e-8 # small constant to avoid log(0) in the loss.
-    # log_y = torch.log10(y_seq + eps)
-    # log_pred = torch.log10(pred + eps)
-
-    # New proposal: we do log1p with no clampmin at 1. But does this drown out boluses?
-    log_y = torch.log1p(y_seq)
-    log_pred = torch.log1p(pred)
-    # log_y = y_seq
-    # log_pred = pred
-
-    # Old idea: clamp_min at 1, use log1p.
-    # y_clamped = y_seq.clamp_min(1.0)
-    # pred_clamped = pred.clamp_min(1.0)
-    # log_y = torch.log1p(y_clamped)
-    # log_pred = torch.log1p(pred_clamped)
-
-    return (log_pred - log_y).pow(2).mean()  # MSE
+def loss_fn(
+    pred: torch.Tensor,
+    y_seq: torch.Tensor,
+) -> torch.Tensor:
+    """Compute MSE loss in log1p space."""
+    # log_y = torch.log1p(y_seq)
+    # log_pred = torch.log1p(pred)
+    log_y = y_seq
+    log_pred = pred
+    se = (log_pred - log_y).pow(2)  # (B,K,P)
+    return se.mean()
 
 
 def loss_fn_per_species(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
@@ -162,7 +153,8 @@ class TrainConfig:
     jit_scripting: bool = False
     torch_compile: bool = False
 
-    # 'ode_rnn' (default, mechanistic scaffold) or 'neural_ode' (pure MLP baseline)
+    # 'ode_rnn' (default), 'ode_rnn_2020' (latent ODE-RNN style),
+    # or 'neural_ode' (pure MLP baseline)
     model_class: str = "ode_rnn"
 
 
@@ -170,6 +162,7 @@ def load_cfg(path: str | Path) -> TrainConfig:
     with open(path, "r") as f:
         d = yaml.safe_load(f)
     return TrainConfig(**d)
+
 
 
 def slugify(value: str) -> str:

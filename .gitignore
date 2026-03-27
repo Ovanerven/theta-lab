@@ -22,3 +22,8 @@ last-layer-ode/summarize_nrmse_mech_specificity.py
 .env
 
 last-layer-ode/thesis_plots
+
+CLAUDE.md
+.agents
+.claude
+AGENTS.md

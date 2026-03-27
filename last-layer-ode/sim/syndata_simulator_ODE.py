@@ -175,6 +175,90 @@ def simulate_chain_with_bolus(model,
     return np.array(times), np.vstack(states)
 
 
+def simulate_ivp_with_bolus(
+    model,
+    k: np.ndarray,
+    y0: np.ndarray,
+    t_start: float,
+    t_end: float,
+    bolus_gen: Iterator[BolusEvent] = None,
+    species_names: List[str] = None,
+    method: str = "BDF",
+    rtol: float = 1e-6,
+    atol: float = 1e-8,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Simulate a model with bolus inputs using scipy.integrate.solve_ivp.
+
+    Same bolus logic as simulate_chain_with_bolus — random events at random
+    times on random control channels — but uses an adaptive stiff solver
+    instead of fixed-step RK4. Recommended for the MOF synthesis model where
+    fractional-power nucleation terms (SBU^3) create stiff transients.
+
+    Boluses are handled piecewise: solve_ivp is called on each continuous
+    segment between bolus events, the bolus is applied instantaneously at the
+    segment boundary, then integration resumes. Output format is identical to
+    simulate_chain_with_bolus so create_dataset.py interpolation is unchanged.
+    """
+    from scipy.integrate import solve_ivp
+
+    k = np.asarray(k, dtype=float)
+    y = np.asarray(y0, dtype=float).copy()
+
+    if species_names is None:
+        species_names = []
+    species_index: Dict[str, int] = {name: i for i, name in enumerate(species_names)}
+
+    # Materialise all bolus events so we can build segment breakpoints
+    all_events: List[BolusEvent] = sorted(bolus_gen, key=lambda e: e[0]) if bolus_gen is not None else []
+
+    # Group boluses by time
+    boluses_at: Dict[float, List[Tuple[str, float]]] = {}
+    for bt, bspec, bamt in all_events:
+        if bt not in boluses_at:
+            boluses_at[bt] = []
+        boluses_at[bt].append((bspec, bamt))
+
+    # Segment endpoints: bolus times strictly inside (t_start, t_end), then t_end
+    inner_times = sorted({bt for bt in boluses_at if t_start < bt < t_end})
+    segment_ends = inner_times + [t_end]
+
+    def rhs(t: float, y_loc: np.ndarray) -> np.ndarray:
+        return model(t, y_loc, k)
+
+    times_out: List[float] = [t_start]
+    states_out: List[np.ndarray] = [y.copy()]
+
+    # Apply any boluses at t_start before first integration
+    for bspec, bamt in boluses_at.get(t_start, []):
+        if bspec in species_index:
+            y[species_index[bspec]] += bamt
+
+    t_cur = t_start
+    for t_next in segment_ends:
+        if t_next <= t_cur:
+            continue
+
+        sol = solve_ivp(rhs, [t_cur, t_next], y, method=method, rtol=rtol, atol=atol)
+
+        if not sol.success:
+            y[:] = np.nan  # caught by NaN check in create_dataset.py
+            break
+
+        times_out.extend(sol.t[1:].tolist())
+        states_out.extend(sol.y[:, 1:].T.tolist())
+        y = np.maximum(0.0, sol.y[:, -1])
+        t_cur = t_next
+
+        # Apply boluses at the boundary before the next segment
+        if t_next < t_end:
+            for bspec, bamt in boluses_at.get(t_next, []):
+                if bspec in species_index:
+                    y[species_index[bspec]] += bamt
+
+    return np.array(times_out, dtype=float), np.vstack(states_out)
+
+
 ###############################################################################
 ###############################################################################
 ###############################################################################

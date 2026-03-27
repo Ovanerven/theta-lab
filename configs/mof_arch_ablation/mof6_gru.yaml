@@ -1,0 +1,28 @@
+dataset_path: datasets/mof_synthesis_6.npz
+exp_name: mof6_gru
+
+epochs: 100
+batch_size: 512
+lr: 0.001
+weight_decay: 0.0085
+val_n: 100
+test_n: 100
+seed: 42
+
+hidden: 128
+lift_dim: 32
+num_layers: 1
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 50
+tf_drop_epoch: 500
+
+scaffold: mof_synthesis_6
+theta_lo: 1.0e-3
+theta_hi: 2.0
+n_substeps: 1
+
+study: mof_arch_ablation
+ckpt_every: 0
+model_class: ode_rnn
