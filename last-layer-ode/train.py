@@ -103,6 +103,7 @@ class TrainConfig:
     batch_size: int = 256
     lr: float = 5e-4
     weight_decay: float = 0.0
+    warmup_epochs: int = 0  # linear LR warmup; 0 disables
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
@@ -401,6 +402,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg.lr), weight_decay=float(cfg.weight_decay))
 
+    scheduler = None
+    if cfg.warmup_epochs > 0:
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            opt, start_factor=1e-6, end_factor=1.0, total_iters=int(cfg.warmup_epochs)
+        )
+        print(f"LR warmup: {cfg.warmup_epochs} epochs ({cfg.lr:.2e} target)")
+
     mech_names = ds.obs_names.tolist() if ds.obs_names is not None else None
 
     print(f"Data: N={N} | train={len(train_idx)} | val={len(val_idx)} | test={len(test_idx)}")
@@ -488,6 +496,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
         tr_loss = tr_total / max(1, tr_batches)
         train_losses.append(tr_loss)
+
+        if scheduler is not None:
+            scheduler.step()
 
         # ---- val
         va_loss = None
