@@ -1,10 +1,11 @@
 dataset_path: datasets/mof_synthesis_12.npz
 exp_name: mof12_transformer
 
-epochs: 100
+epochs: 50
 batch_size: 32
 lr: 0.001
 weight_decay: 0.0085
+warmup_epochs: 10
 val_n: 100
 test_n: 100
 seed: 42
@@ -24,6 +25,6 @@ theta_hi: 2.0
 n_substeps: 1
 
 study: mof_arch_ablation
-ckpt_every: 0
+ckpt_every: 10
 jit_scripting: false
 model_class: ode_transformer

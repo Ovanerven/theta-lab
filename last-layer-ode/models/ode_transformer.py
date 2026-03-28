@@ -83,6 +83,16 @@ class OdeTransformer(nn.Module):
 
         head_out = self.theta_dim + self.P if use_basal else self.theta_dim
         self.head = nn.Linear(hidden, head_out)
+        # Small-weight init: keeps raw≈0 at start so gamma maps to the midpoint
+        # of [theta_lo, theta_hi] regardless of transformer output magnitude.
+        # Default Kaiming init on a large-residual-stack output saturates theta
+        # toward theta_hi, destabilising the ODE on the first forward pass.
+        nn.init.normal_(self.head.weight, std=0.01)
+        nn.init.zeros_(self.head.bias)
+
+        # Pos-embed at N(0,0.02) instead of the default N(0,1) — standard
+        # transformer practice (GPT-2 / BERT style) to reduce initial variance.
+        nn.init.normal_(self.pos_embed.weight, std=0.02)
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(

@@ -1,10 +1,11 @@
 dataset_path: datasets/mof_synthesis_4.npz
 exp_name: mof4_transformer
 
-epochs: 100
+epochs: 50
 batch_size: 32        # smaller than GRU: O(K * context_len^2 * B) memory
-lr: 0.001
+lr: 0.0001
 weight_decay: 0.0085
+warmup_epochs: 10
 val_n: 100
 test_n: 100
 seed: 42
@@ -24,6 +25,6 @@ theta_hi: 2.0
 n_substeps: 1
 
 study: mof_arch_ablation
-ckpt_every: 0
+ckpt_every: 10
 jit_scripting: false   # TransformerEncoder is not scriptable
 model_class: ode_transformer
