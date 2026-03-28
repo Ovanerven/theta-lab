@@ -46,161 +46,20 @@ class ModelConfig:
     simulator: str = "rk4"
 
 
-def _mof_max_config() -> ModelConfig:
-    """
-    Physically informed parameter ranges for MOF_Mechanistic_Max (44 params, 18 states).
-
-    Parameter order (from MOF_model.py):
-      0  ka_L       acid dissoc linker
-      1  kma_L      reprotonat linker
-      2  ka_B       acid dissoc modulator
-      3  kma_B      reprotonat modulator
-      4  k1f        M+Lm -> C1
-      5  k1r        C1 -> M+Lm
-      6  k2f        C1+Lm -> C2
-      7  k2r        C2 reverse
-      8  k3f        C2+Lm -> C3
-      9  k3r        C3 reverse
-      10 kBf        M+Bm -> CB
-      11 kBr        CB reverse
-      12 nu         exponent C2->P
-      13 kp_f       cluster formation
-      14 kp_r       cluster dissolution
-      15 m          condensation exponent
-      16 kcond      condensation rate
-      17 alphaA     autocatalytic factor
-      18 nA         Hill exponent (cryst)
-      19 KA         Hill half-sat (cryst)
-      20 kcryst     crystallization rate
-      21 Peq0       equilibrium baseline
-      22 Eeq        activation energy
-      23 betaH      proton modifier
-      24 betaB      modulator modifier
-      25 betaS      solvent modifier
-      26 Tmin       temp clamp lower
-      27 Tmax       temp clamp upper
-      28 kJ         nucleation prefactor
-      29 Bcnt       CNT barrier
-      30 pJ         nucleation exponent
-      31 ksec       secondary nucleation
-      32 qsec       secondary nucleation exp
-      33 shape      shape factor
-      34 kagg       aggregation
-      35 kg         growth rate
-      36 gG         growth exponent
-      37 KiB        modulator inhibition
-      38 kdiss      dissolution
-      39 chi        consumption factor
-      40 kDf        defect formation
-      41 KD         defect Hill half-sat
-      42 kDa        defect annealing
-      43 EaD        defect annealing Ea
-    """
-    param_ranges = [
-        (0.1, 2.0),    # 0  ka_L
-        (0.1, 2.0),    # 1  kma_L
-        (0.1, 2.0),    # 2  ka_B
-        (0.1, 2.0),    # 3  kma_B
-        (0.05, 0.8),   # 4  k1f
-        (0.01, 0.5),   # 5  k1r
-        (0.05, 0.8),   # 6  k2f
-        (0.01, 0.5),   # 7  k2r
-        (0.02, 0.5),   # 8  k3f
-        (0.01, 0.3),   # 9  k3r
-        (0.02, 0.5),   # 10 kBf
-        (0.01, 0.3),   # 11 kBr
-        (1.5, 2.5),    # 12 nu       — should be ~2 (dimerization-like)
-        (0.005, 0.2),   # 13 kp_f
-        (0.01, 0.3),   # 14 kp_r
-        (1.0, 2.0),    # 15 m        — condensation order ~1-2
-        (0.01, 0.3),   # 16 kcond
-        (0.1, 2.0),    # 17 alphaA   — autocatalytic strength
-        (1.0, 3.0),    # 18 nA       — Hill exponent
-        (0.5, 5.0),    # 19 KA       — Hill half-sat
-        (0.05, 0.5),   # 20 kcryst
-        (0.005, 0.05), # 21 Peq0     — equilibrium baseline
-        (0.5, 3.0),    # 22 Eeq      — careful: enters exp(-Eeq/T), with _R_GAS=1 and T~350
-        (0.0, 0.5),    # 23 betaH
-        (0.0, 0.5),    # 24 betaB
-        (0.0, 0.5),    # 25 betaS
-        (280.0, 300.0), # 26 Tmin    — CRITICAL: must be physical temperature
-        (400.0, 500.0), # 27 Tmax    — CRITICAL
-        (0.01, 0.5),   # 28 kJ       — nucleation prefactor (keep moderate)
-        (0.5, 5.0),    # 29 Bcnt     — CNT barrier (very sensitive, keep modest)
-        (0.0, 1.5),    # 30 pJ       — nucleation exponent on (S-1)
-        (0.01, 0.3),   # 31 ksec     — secondary nucleation
-        (1.0, 2.0),    # 32 qsec     — secondary nucleation exponent
-        (0.8, 1.2),    # 33 shape    — geometric factor, near 1
-        (0.0001, 0.005), # 34 kagg     — aggregation (keep small)
-        (0.01, 0.3),   # 35 kg       — growth rate
-        (1.0, 2.0),    # 36 gG       — growth exponent
-        (0.1, 2.0),    # 37 KiB      — inhibition constant
-        (0.0001, 0.005), # 38 kdiss    — dissolution (smaller than growth)
-        (0.001, 0.03), # 39 chi      — consumption factor (sensitive with SA)
-        (0.01, 0.3),   # 40 kDf      — defect formation
-        (0.1, 1.0),    # 41 KD       — defect Hill half-sat
-        (0.01, 0.3),   # 42 kDa      — defect annealing
-        (0.5, 3.0),    # 43 EaD      — defect Ea
-    ]
-
-    # Initial conditions for all 18 states:
-    # [M, LH, Lm, H, BH, Bm, C1, C2, C3, CB, P, A, N, R, D, T, Solv, I]
-    x0_default = [
-        1.0,   # M   — start with some metal
-        1.0,   # LH  — start with some protonated linker
-        0.1,   # Lm  — small amount deprotonated
-        0.01,  # H   — low initial proton concentration
-        0.5,   # BH  — some modulator
-        0.05,  # Bm  — small amount deprotonated modulator
-        0.0,   # C1  — no complexes initially
-        0.0,   # C2
-        0.0,   # C3
-        0.0,   # CB
-        0.0,   # P   — no clusters
-        0.0,   # A   — no amorphous
-        0.0,   # N   — no crystals
-        0.0,   # R   — no size
-        0.0,   # D   — no defects
-        350.0, # T   — ~350K (typical solvothermal)
-        1.0,   # Solv — solvent quality = 1
-        0.0,   # I   — no impurity
-    ]
-
-    # Bolus amounts per channel — reagents get normal amounts,
-    # temperature gets small perturbations (±20K-ish)
-    bolus_ranges = {
-        "M":    (0.2, 2.0),
-        "LH":   (0.2, 2.0),
-        "BH":   (0.1, 1.5),
-        "T":    (5.0, 30.0),    # temperature step changes in K
-        "Solv": (0.1, 1.0),
-        "I":    (0.05, 0.5),
-    }
-
-    return ModelConfig(
-        param_ranges=param_ranges,
-        x0_default=x0_default,
-        bolus_ranges=bolus_ranges,
-        bolus_default=(0.2, 2.0),
-        bolus_count_range=(3, 30),  # fewer boluses for stability
-    )
-
-
 def _mof_synthesis_config() -> ModelConfig:
     """
-    Fixed kinetic parameters from supervisor's MOF_synthesis.py script.
+    Fixed kinetic parameters for MOF_Synthesis (16 params, 12 states).
 
     Parameters in order (16):
       k_deprot=5.0, k_prot=1.0, k_oli=3.0, k_cap=2.0, k_uncap=0.5,
       K_I=0.1, knuc_A=10.0, kgro_A=1.0, kagg_A=1.0, n_A=3.0,
       knuc_C=0.5, kgro_C=4.0, kagg_C=1.0, n_C=1.5, a=1.0, b=1.0
 
-    Control channels: Base (idx 4) and Mod (idx 5) — matching the
-    supervisor's dosing strategy.  Use --t-span 30 when generating.
+    Control channels: Base (idx 4) and Mod (idx 5).  Use --t-span 30 when generating.
     """
-    supervisor_params = [5.0, 1.0, 3.0, 2.0, 0.5, 0.1, 10.0, 1.0, 1.0, 3.0,
-                         0.5, 4.0, 1.0, 1.5, 1.0, 1.0]
-    param_ranges = [(v, v) for v in supervisor_params]
+    default_params = [5.0, 1.0, 3.0, 2.0, 0.5, 0.1, 10.0, 1.0, 1.0, 3.0,
+                      0.5, 4.0, 1.0, 1.5, 1.0, 1.0]
+    param_ranges = [(v, v) for v in default_params]
 
     # [Met, LigH, Lig_minus, H_plus, Base, Mod, SBU, SBU_capped, Nuc_A, Am, Nuc_C, MOF_C]
     x0_default = [2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
