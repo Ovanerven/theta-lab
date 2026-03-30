@@ -2,6 +2,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from scaffolds import MechanisticScaffold
 
@@ -32,6 +33,7 @@ class OdeRNN(nn.Module):
         theta_hi: float = 2.0,
         n_substeps: int = 1,
         use_basal: bool = False,
+        theta_bounded: bool = True,
         **kwargs,
     ):
         super().__init__()
@@ -39,10 +41,11 @@ class OdeRNN(nn.Module):
         self.P = int(rhs.P)
         self.theta_dim = int(rhs.theta_dim)
         self.rhs = rhs
-        self.n_substeps = int(n_substeps)
-        self.use_basal = bool(use_basal)
-        self.theta_lo = float(theta_lo)
-        self.theta_hi = float(theta_hi)
+        self.n_substeps   = int(n_substeps)
+        self.use_basal    = bool(use_basal)
+        self.theta_lo     = float(theta_lo)
+        self.theta_hi     = float(theta_hi)
+        self.theta_bounded = bool(theta_bounded)
 
         self.lift = nn.Sequential(
             nn.Linear(self.U + self.P, lift_dim),
@@ -103,13 +106,20 @@ class OdeRNN(nn.Module):
             raw = self.head(z.squeeze(1))
 
             if self.use_basal:
-                theta_k = gamma(raw[:, :self.theta_dim], self.theta_lo, self.theta_hi)
+                raw_theta = raw[:, :self.theta_dim]
+                if self.theta_bounded:
+                    theta_k = gamma(raw_theta, self.theta_lo, self.theta_hi)
+                else:
+                    theta_k = F.softplus(raw_theta)
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 beta_out[:, k, :] = beta_k
                 y = y_prev + (u_k @ self.u_to_y_jump)
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
-                theta_k = gamma(raw, self.theta_lo, self.theta_hi)
+                if self.theta_bounded:
+                    theta_k = gamma(raw, self.theta_lo, self.theta_hi)
+                else:
+                    theta_k = F.softplus(raw)
                 y = y_prev + (u_k @ self.u_to_y_jump)
                 y = self._rk4_substeps(y, dt_k, theta_k)
 

@@ -106,6 +106,7 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         theta_hi=float(cfg.get("theta_hi", 2.0)),
         n_substeps=int(cfg.get("n_substeps", 1)),
         use_basal=bool(cfg.get("use_basal", False)),
+        theta_bounded=bool(cfg.get("theta_bounded", True)),
     ).to(device)
 
     model.load_state_dict(ckpt["state_dict"])

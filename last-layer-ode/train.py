@@ -72,10 +72,8 @@ def loss_fn(
     y_seq: torch.Tensor,
 ) -> torch.Tensor:
     """Compute MSE loss in log1p space."""
-    # log_y = torch.log1p(y_seq)
-    # log_pred = torch.log1p(pred)
-    log_y = y_seq
-    log_pred = pred
+    log_y = torch.log1p(y_seq)
+    log_pred = torch.log1p(pred)
     se = (log_pred - log_y).pow(2)  # (B,K,P)
     return se.mean()
 
@@ -125,6 +123,8 @@ class TrainConfig:
     use_basal: bool = False
     beta_regularization: bool = False
     lambda_beta: float = 1.0
+
+    theta_bounded: bool = True   # if False, use softplus (unbounded above) instead of gamma
 
     grad_clip: float = 1.0
     teacher_forcing: bool = True
@@ -380,6 +380,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         theta_hi=cfg.theta_hi,
         n_substeps=cfg.n_substeps,
         use_basal=cfg.use_basal,
+        theta_bounded=cfg.theta_bounded,
     ).to(device)
 
     compile_model = cfg.torch_compile
@@ -704,7 +705,15 @@ if __name__ == "__main__":
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--plot-samples", type=int, default=5)
     parser.add_argument("--plot-sample-idx", type=int, default=0)
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override any config field, e.g. --set lr=1e-3 --set scaffold=mof_synthesis_8")
     args = parser.parse_args()
 
     cfg = load_cfg(args.config)
+    for kv in args.set:
+        key, val = kv.split("=", 1)
+        if not hasattr(cfg, key):
+            raise ValueError(f"Unknown config field: {key!r}. Valid fields: {list(vars(cfg).keys())}")
+        setattr(cfg, key, yaml.safe_load(val))
+
     train(cfg, no_plot=bool(args.no_plot), plot_samples=int(args.plot_samples), plot_sample_idx=int(args.plot_sample_idx))

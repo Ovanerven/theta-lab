@@ -198,6 +198,77 @@ def make_nrmse_vs_P(loaded, scaffold_order, show_species, out_path):
     print(f"NRMSE vs P    -> {out_path}")
 
 
+def make_pred_overlays(loaded: dict, scaffold_order: list, sample_idx: int,
+                       out_dir: Path, fmt: str) -> None:
+    """Per-scaffold prediction overlay: truth / one-step / rollout per species."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for sn in scaffold_order:
+        res = loaded[sn]
+        state_names = res["state_names"]
+        tt = res["time"]
+        P = len(state_names)
+
+        fig, axes = plt.subplots(P, 1, figsize=(11, max(6, 2.0 * P)), sharex=True)
+        if P == 1:
+            axes = [axes]
+
+        for i, (ax, sp) in enumerate(zip(axes, state_names)):
+            ax.plot(tt, res["true"][:, i],    lw=2.0, color="tab:blue",   label="truth")
+            ax.plot(tt, res["onestep"][:, i], lw=1.5, color="tab:green",  ls="--", label="one-step oracle")
+            ax.plot(tt, res["rollout"][:, i], lw=1.5, color="tab:red",    ls=":",  label="honest rollout")
+            ax.set_ylabel(sp)
+            ax.grid(True, alpha=0.25)
+            if i == 0:
+                ax.legend(fontsize=9)
+
+        axes[-1].set_xlabel("Time")
+        P_sc = SCAFFOLDS[sn].P if sn in SCAFFOLDS else "?"
+        fig.suptitle(f"Oracle theta fit — {sn} (P={P_sc})  sample {sample_idx}")
+        fig.tight_layout()
+        out_path = out_dir / f"pred_overlay_{sn}.{fmt}"
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Pred overlay  -> {out_path}")
+
+
+def make_theta_plots(export_dir: Path, scaffold_order: list, sample_idx: int,
+                     out_dir: Path, fmt: str) -> None:
+    """Per-scaffold theta trajectory plot (rollout theta over time)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for sn in scaffold_order:
+        theta_path = export_dir / sn / f"theta_rollout_sample{sample_idx}.csv"
+        if not theta_path.exists():
+            continue
+
+        data = np.loadtxt(theta_path, delimiter=",", skiprows=1)
+        tt = data[:, 0]
+        thetas = data[:, 1:]
+        D = thetas.shape[1]
+
+        n_cols = 2
+        n_rows = (D + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(n_cols * 4.5, n_rows * 2.5),
+                                 squeeze=False)
+        for j in range(D):
+            ax = axes[j // n_cols][j % n_cols]
+            ax.plot(tt, thetas[:, j], lw=1.5, color="tab:purple")
+            ax.set_ylabel(f"θ{j}", fontsize=10)
+            ax.grid(True, alpha=0.25)
+        # hide unused panels
+        for j in range(D, n_rows * n_cols):
+            axes[j // n_cols][j % n_cols].axis("off")
+
+        axes[-1][0].set_xlabel("Time")
+        P_sc = SCAFFOLDS[sn].P if sn in SCAFFOLDS else "?"
+        fig.suptitle(f"Oracle theta trajectories (rollout) — {sn} (P={P_sc})  sample {sample_idx}")
+        fig.tight_layout()
+        out_path = out_dir / f"theta_{sn}.{fmt}"
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Theta plot    -> {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Plot per_step_theta_fit results from CSV exports.",
@@ -249,11 +320,19 @@ def main():
     fmt  = args.fmt.strip(".").lower()
     stem = Path(args.out)
 
+    out_dir = stem.parent
+
     make_summary_grid(loaded, scaffold_order, show_species, args.sample_idx,
-                      stem.parent / f"{stem.name}_grid.{fmt}", max_cols=args.max_cols)
+                      out_dir / f"{stem.name}_grid.{fmt}", max_cols=args.max_cols)
 
     make_nrmse_vs_P(loaded, scaffold_order, show_species,
-                    stem.parent / f"{stem.name}_nrmse_vs_P.{fmt}")
+                    out_dir / f"{stem.name}_nrmse_vs_P.{fmt}")
+
+    make_pred_overlays(loaded, scaffold_order, args.sample_idx,
+                       out_dir / "pred_overlays", fmt)
+
+    make_theta_plots(export_dir, scaffold_order, args.sample_idx,
+                     out_dir / "theta", fmt)
 
     print("\nDone.")
 
