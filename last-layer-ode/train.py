@@ -176,8 +176,7 @@ def build_run_dir(cfg: TrainConfig, now: datetime) -> tuple[Path, str, str]:
     study_slug = slugify(cfg.study)
     run_name = slugify(cfg.exp_name)
     run_id = f"{now.strftime('%Y%m%d_%H%M%S')}_{run_name}"
-    date_folder = now.strftime("%Y-%m-%d")
-    run_dir = Path(cfg.out_root) / study_slug / date_folder / run_id
+    run_dir = Path(cfg.out_root) / study_slug / run_id
     return run_dir, run_id, study_slug
 
 

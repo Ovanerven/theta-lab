@@ -1,7 +1,7 @@
 dataset_path: datasets/mof_synthesis_6.npz
-exp_name: mof6_mlp
+exp_name: mof6_mlp_lr1e-3_50ep
 
-epochs: 100
+epochs: 50
 batch_size: 512
 lr: 0.001
 weight_decay: 0.0085

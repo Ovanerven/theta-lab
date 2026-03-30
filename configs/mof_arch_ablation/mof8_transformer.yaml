@@ -1,5 +1,5 @@
 dataset_path: datasets/mof_synthesis_8.npz
-exp_name: mof8_transformer
+exp_name: mof8_transformer_lr1e-3_50ep
 
 epochs: 50
 batch_size: 32

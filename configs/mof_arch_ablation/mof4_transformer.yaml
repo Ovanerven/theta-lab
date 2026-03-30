@@ -1,9 +1,9 @@
 dataset_path: datasets/mof_synthesis_4.npz
-exp_name: mof4_transformer
+exp_name: mof4_transformer_lr1e-3_50ep
 
 epochs: 50
 batch_size: 32        # smaller than GRU: O(K * context_len^2 * B) memory
-lr: 0.0001
+lr: 0.001
 weight_decay: 0.0085
 warmup_epochs: 10
 val_n: 100
