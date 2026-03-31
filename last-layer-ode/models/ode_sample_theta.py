@@ -16,16 +16,19 @@ def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tens
     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 
-class OdeFixedTheta(nn.Module):
+class OdeSampleTheta(nn.Module):
     """
-    Ablation: single global learnable theta shared across all samples and timesteps.
+    Ablation: per-sample constant theta.
 
-    No encoder, no recurrence — theta is a raw nn.Parameter of shape (theta_dim,)
-    that is bounded via gamma(·) and broadcast to every (batch, timestep).
+    An MLP encodes the initial condition y0 into a single theta vector that is
+    held fixed across all timesteps for that sample. Theta varies across samples
+    but not across time — sitting between OdeFixedTheta (one global theta) and
+    OdeRNN (time-varying theta per sample).
 
-    Serves as the "constant theta" baseline: if this matches the GRU model,
-    time-varying theta prediction is unnecessary; if it underperforms, the
-    dynamic theta is load-bearing.
+    Architecture:
+      y0 -> MLP -> theta (constant for all K timesteps)
+      y_k = y_{k-1} + u_k @ jump
+      y_k = RK4(scaffold, theta) over dt_k
     """
 
     def __init__(
@@ -34,6 +37,10 @@ class OdeFixedTheta(nn.Module):
         U: int,
         rhs: MechanisticScaffold,
         u_to_y_jump: torch.Tensor,   # (U, P)
+        hidden: int = 128,
+        lift_dim: int = 32,
+        num_layers: int = 1,
+        dropout: float = 0.0,
         theta_lo: float = 1e-3,
         theta_hi: float = 2.0,
         n_substeps: int = 1,
@@ -58,8 +65,16 @@ class OdeFixedTheta(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
-        # Single global theta — all samples and timesteps share the same value
-        self.raw_theta = nn.Parameter(torch.zeros(self.theta_dim))
+        layers: list[nn.Module] = [nn.Linear(self.P, lift_dim), nn.SiLU()]
+        in_dim = lift_dim
+        for _ in range(max(1, num_layers)):
+            layers.append(nn.Linear(in_dim, hidden))
+            layers.append(nn.SiLU())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            in_dim = hidden
+        self.mlp = nn.Sequential(*layers)
+        self.head = nn.Linear(hidden, self.theta_dim)
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(
@@ -74,16 +89,16 @@ class OdeFixedTheta(nn.Module):
         u_seq: torch.Tensor,                   # (B, K, U)
         dt_seq: torch.Tensor,                  # (B, K)
         obs_idx: torch.Tensor,
-        y_seq: Optional[torch.Tensor] = None,  # unused — no teacher forcing needed
+        y_seq: Optional[torch.Tensor] = None,
         teacher_forcing: bool = True,
         tf_every: int = 50,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         device, dtype = y0.device, y0.dtype
 
-        # Bound and broadcast theta: (theta_dim,) -> (B, theta_dim)
-        theta = log_gamma(self.raw_theta, self.theta_lo_vec, self.theta_hi_vec)
-        theta = theta.unsqueeze(0).expand(B, -1)  # (B, theta_dim)
+        # Encode y0 into a single theta per sample — fixed for all timesteps
+        raw = self.head(self.mlp(y0))
+        theta = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)  # (B, theta_dim)
 
         y_out  = torch.empty(B, K, self.P,         device=device, dtype=dtype)
         th_out = torch.empty(B, K, self.theta_dim, device=device, dtype=dtype)

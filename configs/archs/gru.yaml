@@ -13,9 +13,10 @@ val_n: 100
 test_n: 100
 seed: 42
 
-hidden: 128
+hidden: 256
 lift_dim: 32
-num_layers: 1
+num_layers: 2
+dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true
@@ -29,4 +30,5 @@ theta_hi: 2.0
 n_substeps: 1
 
 ckpt_every: 10
+jit_scripting: true
 model_class: ode_rnn

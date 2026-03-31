@@ -11,6 +11,15 @@ def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
+def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    # Linear alternative (DO NOT USE for wide bounds):
+    #   return lo + (hi - lo) * torch.sigmoid(x)
+    # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
+    # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
+    # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+
+
 class OdeRNN(nn.Module):
     """
     Closed-loop mechanistic model:
@@ -46,6 +55,16 @@ class OdeRNN(nn.Module):
         self.theta_lo     = float(theta_lo)
         self.theta_hi     = float(theta_hi)
         self.theta_bounded = bool(theta_bounded)
+
+        # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
+        if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
+            lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
+            hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
+        else:
+            lo = torch.full((self.theta_dim,), theta_lo)
+            hi = torch.full((self.theta_dim,), theta_hi)
+        self.register_buffer("theta_lo_vec", lo)
+        self.register_buffer("theta_hi_vec", hi)
 
         self.lift = nn.Sequential(
             nn.Linear(self.U + self.P, lift_dim),
@@ -108,7 +127,7 @@ class OdeRNN(nn.Module):
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]
                 if self.theta_bounded:
-                    theta_k = gamma(raw_theta, self.theta_lo, self.theta_hi)
+                    theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
                 else:
                     theta_k = F.softplus(raw_theta)
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
@@ -117,7 +136,7 @@ class OdeRNN(nn.Module):
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
                 if self.theta_bounded:
-                    theta_k = gamma(raw, self.theta_lo, self.theta_hi)
+                    theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
                 else:
                     theta_k = F.softplus(raw)
                 y = y_prev + (u_k @ self.u_to_y_jump)

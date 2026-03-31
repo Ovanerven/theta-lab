@@ -5,6 +5,7 @@ from models.neural_ode import NeuralODE
 from models.ode_transformer import OdeTransformer
 from models.ode_mlp import OdeMLP
 from models.ode_fixed_theta import OdeFixedTheta
+from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 
 MODELS: dict = {
@@ -16,5 +17,6 @@ MODELS: dict = {
     "ode_transformer":    OdeTransformer,
     "ode_mlp":            OdeMLP,
     "ode_fixed_theta":    OdeFixedTheta,
+    "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
 }

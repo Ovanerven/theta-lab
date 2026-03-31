@@ -109,7 +109,9 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         theta_bounded=bool(cfg.get("theta_bounded", True)),
     ).to(device)
 
-    model.load_state_dict(ckpt["state_dict"])
+    # strict=False: tolerates buffers added after a model was saved (e.g. theta_lo_vec/theta_hi_vec).
+    # Those buffers are always re-initialised from the scaffold in __init__, so values are correct.
+    model.load_state_dict(ckpt["state_dict"], strict=False)
     model.eval()
 
     state_names = ds.obs_names.tolist() if ds.obs_names is not None else [f"y{i}" for i in range(P_obs)]

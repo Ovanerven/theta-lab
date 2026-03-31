@@ -8,6 +8,9 @@ class MechanisticScaffold(nn.Module):
         self.P = int(P)
         self.theta_dim = int(theta_dim)
         self.state_names: list[str] = []
+        # Per-parameter bounds — set by subclasses. None means use scalar fallback.
+        self.theta_lo_vec: "list[float] | None" = None
+        self.theta_hi_vec: "list[float] | None" = None
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
@@ -646,6 +649,17 @@ class MOFSynthesis12Scaffold(MechanisticScaffold):
             "Base", "Mod", "SBU", "SBU_capped",
             "Nuc_A", "Am", "Nuc_C", "MOF_C",
         ]
+        # Per-parameter bounds (true values: k_deprot=5, k_prot=1, k_oli=3, k_cap=2,
+        # k_uncap=0.5, K_I=0.1, knuc_A=10, kgro_A=1, kagg_A=1, n_A=3,
+        # knuc_C=0.5, kgro_C=4, kagg_C=1, n_C=1.5, a=1, b=1)
+        self.theta_lo_vec = [0.1,  0.01, 0.01, 0.01, 0.001, 0.001,
+                             0.1,  0.01, 0.01, 0.5,
+                             0.001, 0.01, 0.01, 0.5,
+                             0.1, 0.1]
+        self.theta_hi_vec = [50.0, 20.0, 30.0, 20.0, 10.0, 2.0,
+                             100.0, 20.0, 20.0, 10.0,
+                             20.0, 50.0, 20.0, 8.0,
+                             5.0, 5.0]
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         (
@@ -754,6 +768,14 @@ class MOFSynthesis8Scaffold(MechanisticScaffold):
             "Base", "Mod", "SBU", "SBU_capped",
             "Nuc_A", "Am", "Nuc_C", "MOF_C",
         ]
+        # Per-parameter bounds (k_base_decay, k_oli_eff, k_cap, k_uncap, K_I,
+        # knuc_A, kgro_A, kagg_A, n_A, knuc_C, kgro_C, kagg_C, n_C)
+        self.theta_lo_vec = [0.1,  0.01, 0.01, 0.001, 0.001,
+                             0.1,  0.01, 0.01, 0.5,
+                             0.001, 0.01, 0.01, 0.5]
+        self.theta_hi_vec = [50.0, 30.0, 20.0, 10.0,  2.0,
+                             100.0, 20.0, 20.0, 10.0,
+                             20.0,  50.0, 20.0, 8.0]
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         Base, Mod, SBU, SBU_capped, Nuc_A, Am, Nuc_C, MOF_C = y.unbind(dim=-1)
@@ -837,6 +859,10 @@ class MOFSynthesis6Scaffold(MechanisticScaffold):
     def __init__(self):
         super().__init__(P=6, theta_dim=10)
         self.state_names = ["Base", "Mod", "SBU", "Am", "Nuc_C", "MOF_C"]
+        # Per-parameter bounds (k_base_decay, k_oli_eff, knuc_A, kgro_A, n_A,
+        # knuc_C, kgro_C, kagg_C, n_C, K_I)
+        self.theta_lo_vec = [0.1,  0.01, 0.1,  0.01, 0.5,  0.001, 0.01, 0.01, 0.5,  0.001]
+        self.theta_hi_vec = [50.0, 30.0, 100.0, 20.0, 10.0, 20.0, 50.0, 20.0, 8.0,  2.0]
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         Base, Mod, SBU, Am, Nuc_C, MOF_C = y.unbind(dim=-1)
@@ -904,6 +930,9 @@ class MOFSynthesis4Scaffold(MechanisticScaffold):
     def __init__(self):
         super().__init__(P=4, theta_dim=7)
         self.state_names = ["Base", "Mod", "Am", "MOF_C"]
+        # Per-parameter bounds (k_base, k_mod, k_nuc_A, k_gro_A, k_nuc_C, k_gro_C, K_I)
+        self.theta_lo_vec = [0.1,  0.001, 0.1,  0.01, 0.001, 0.01, 0.001]
+        self.theta_hi_vec = [50.0, 10.0, 100.0, 20.0, 20.0,  50.0, 2.0]
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         Base, Mod, Am, MOF_C = y.unbind(dim=-1)
