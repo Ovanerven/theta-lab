@@ -162,9 +162,10 @@ def make_nrmse_vs_P(loaded, scaffold_order, show_species, out_path):
     """Line plot: x = scaffold size P, y = rollout NRMSE, one line per species.
     Scaffolds with the same P are averaged."""
     fig, ax = plt.subplots(figsize=(7, 4))
-    colors = {"A": "tab:blue", "M": "tab:orange"}
+    _default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    _color_map = {"A": "tab:blue", "M": "tab:orange"}
 
-    for sp in show_species:
+    for _ci, sp in enumerate(show_species):
         # accumulate per-P values then average
         from collections import defaultdict
         p_vals: dict = defaultdict(list)
@@ -182,7 +183,8 @@ def make_nrmse_vs_P(loaded, scaffold_order, show_species, out_path):
         nrmses = [float(np.mean(p_vals[p])) for p in ps]
 
         ax.plot(ps, nrmses, "o-", lw=2, markersize=6,
-                label=f"species {sp}", color=colors.get(sp))
+                label=f"species {sp}",
+                color=_color_map.get(sp, _default_colors[_ci % len(_default_colors)]))
 
     ax.set_xlabel("Scaffold size (P)", fontsize=12)
     ax.set_ylabel("NRMSE (honest rollout)", fontsize=12)
@@ -314,8 +316,7 @@ def main():
     scaffold_order.sort(key=lambda sn: (SCAFFOLDS[sn].P if sn in SCAFFOLDS else 999, sn))
     print(f"Loaded: {', '.join(scaffold_order)}")
 
-    show_species = [s.strip().upper() for s in args.show_species.split(",")
-                    if s.strip().upper() in FULL_SPECIES]
+    show_species = [s.strip() for s in args.show_species.split(",") if s.strip()]
 
     fmt  = args.fmt.strip(".").lower()
     stem = Path(args.out)

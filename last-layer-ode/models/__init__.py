@@ -7,6 +7,8 @@ from models.ode_mlp import OdeMLP
 from models.ode_fixed_theta import OdeFixedTheta
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
+from models.ode_mamba import OdeMamba
+from models.ode_mamba_ssm import OdeMambaSSM
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
@@ -19,4 +21,6 @@ MODELS: dict = {
     "ode_fixed_theta":    OdeFixedTheta,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
+    "ode_mamba":          OdeMamba,
+    "ode_mamba_ssm":      OdeMambaSSM,
 }

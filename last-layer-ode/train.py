@@ -120,6 +120,11 @@ class TrainConfig:
     theta_hi: float = 2.0
     n_substeps: int = 1
 
+    # Mamba-specific (ignored by non-Mamba models via **kwargs)
+    d_state: int = 16
+    expand: int = 2
+    d_conv: int = 4
+
     use_basal: bool = False
     beta_regularization: bool = False
     lambda_beta: float = 1.0
@@ -381,6 +386,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         n_substeps=cfg.n_substeps,
         use_basal=cfg.use_basal,
         theta_bounded=cfg.theta_bounded,
+        d_state=cfg.d_state,
+        expand=cfg.expand,
+        d_conv=cfg.d_conv,
     ).to(device)
 
     compile_model = cfg.torch_compile

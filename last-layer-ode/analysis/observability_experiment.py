@@ -32,10 +32,9 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from manual_theta_fit import (
-    load_sample, nrmse, SCAFFOLDS,
-    make_u_to_y_jump, gamma, rk4,
-)
+from analysis.per_step_theta_fit import load_sample, nrmse, log_gamma, rk4
+from scaffolds import SCAFFOLDS
+from jumps import make_u_to_y_jump
 
 
 def fit_with_obs_mask(
@@ -75,19 +74,22 @@ def fit_with_obs_mask(
     y_next = y_sc[1:]
     y_after_jump = y_prev + (u_tensor @ jump)
 
+    lo_t = torch.full((theta_dim,), theta_lo, device=device)
+    hi_t = torch.full((theta_dim,), theta_hi, device=device)
+
     raw = torch.zeros(K, theta_dim, device=device, requires_grad=True)
     opt = torch.optim.Adam([raw], lr=lr)
 
     for i in range(gd_steps):
         opt.zero_grad()
-        theta_batch = gamma(raw, theta_lo, theta_hi)
+        theta_batch = log_gamma(raw, lo_t, hi_t)
         y_hat = rk4(rhs, y_after_jump, dt_tensor, theta_batch, n_substeps)
         loss = (torch.log1p(y_hat[:, obs_idx]) - torch.log1p(y_next[:, obs_idx])).pow(2).mean()
         loss.backward()
         opt.step()
 
     with torch.no_grad():
-        theta_batch = gamma(raw, theta_lo, theta_hi)
+        theta_batch = log_gamma(raw, lo_t, hi_t)
         y_hat = rk4(rhs, y_after_jump, dt_tensor, theta_batch, n_substeps)
         final_loss = (torch.log1p(y_hat[:, obs_idx]) - torch.log1p(y_next[:, obs_idx])).pow(2).mean().item()
 
@@ -139,6 +141,9 @@ def fit_rollout_with_obs_mask(
         device=device,
     )
 
+    lo_t = torch.full((theta_dim,), theta_lo, device=device)
+    hi_t = torch.full((theta_dim,), theta_hi, device=device)
+
     y_target = y_sc[1:]
     pred_rollout = torch.zeros(K, P, device=device)
     y_cur = y_sc[0].unsqueeze(0).clone()
@@ -155,14 +160,14 @@ def fit_rollout_with_obs_mask(
 
         for _ in range(gd_steps):
             opt.zero_grad()
-            theta_k = gamma(raw, theta_lo, theta_hi)
+            theta_k = log_gamma(raw, lo_t, hi_t)
             y_hat = rk4(rhs, y_after_jump_k.detach(), dt_k, theta_k, n_substeps)
             loss = (torch.log1p(y_hat[:, obs_idx]) - torch.log1p(y_next_true[:, obs_idx])).pow(2).mean()
             loss.backward()
             opt.step()
 
         with torch.no_grad():
-            theta_k = gamma(raw, theta_lo, theta_hi)
+            theta_k = log_gamma(raw, lo_t, hi_t)
             y_hat = rk4(rhs, y_after_jump_k, dt_k, theta_k, n_substeps)
             last_loss = float((torch.log1p(y_hat[:, obs_idx]) - torch.log1p(y_next_true[:, obs_idx])).pow(2).mean())
 

@@ -98,6 +98,12 @@ def gamma(x, lo, hi):
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
+def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    """Log-space sigmoid: geometric midpoint sqrt(lo*hi) at init (x=0).
+    Use instead of linear gamma when bounds span orders of magnitude."""
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+
+
 def rk4(rhs, y, dt, theta, n_sub=4):
     if dt.ndim == 1:
         dt = dt.unsqueeze(1)
@@ -150,6 +156,14 @@ def run(scaffold_name, dataset_path, sample_idx,
         device=device,
     )
 
+    # Per-parameter bounds: use scaffold-defined vectors if available, else scalar fallback
+    if sc.theta_lo_vec is not None and sc.theta_hi_vec is not None:
+        lo_t = torch.tensor(sc.theta_lo_vec, dtype=torch.float32, device=device)
+        hi_t = torch.tensor(sc.theta_hi_vec, dtype=torch.float32, device=device)
+    else:
+        lo_t = torch.full((theta_dim,), theta_lo, device=device)
+        hi_t = torch.full((theta_dim,), theta_hi, device=device)
+
     # ── 1) One-step oracle (batched) ──────────────────────────────────────────
     y_prev           = y_true[:-1]
     y_next           = y_true[1:]
@@ -160,14 +174,14 @@ def run(scaffold_name, dataset_path, sample_idx,
 
     for _ in range(gd_steps):
         opt_os.zero_grad()
-        theta_b = gamma(raw_os, theta_lo, theta_hi)
+        theta_b = log_gamma(raw_os, lo_t, hi_t)
         y_hat_b = rk4(rhs, y_after_jump_all, dt_t, theta_b, n_substeps)
         loss = (torch.log1p(y_hat_b) - torch.log1p(y_next)).pow(2).mean()
         loss.backward()
         opt_os.step()
 
     with torch.no_grad():
-        theta_os = gamma(raw_os, theta_lo, theta_hi)
+        theta_os = log_gamma(raw_os, lo_t, hi_t)
         y_hat_os = rk4(rhs, y_after_jump_all, dt_t, theta_os, n_substeps)
         losses_os = (torch.log1p(y_hat_os) - torch.log1p(y_next)).pow(2).mean(dim=-1).cpu().numpy()
 
@@ -194,14 +208,14 @@ def run(scaffold_name, dataset_path, sample_idx,
 
         for _ in range(gd_steps):
             opt.zero_grad()
-            theta_k = gamma(raw, theta_lo, theta_hi)
+            theta_k = log_gamma(raw, lo_t, hi_t)
             y_hat   = rk4(rhs, y_after_jump_k.detach(), dt_k, theta_k, n_substeps)
             loss    = (torch.log1p(y_hat) - torch.log1p(y_target)).pow(2).mean()
             loss.backward()
             opt.step()
 
         with torch.no_grad():
-            theta_k = gamma(raw, theta_lo, theta_hi)
+            theta_k = log_gamma(raw, lo_t, hi_t)
             y_hat   = rk4(rhs, y_after_jump_k, dt_k, theta_k, n_substeps)
             final_loss = (torch.log1p(y_hat) - torch.log1p(y_target)).pow(2).mean()
 
@@ -335,8 +349,7 @@ def main():
         print()
         run_items = [(sn, sd_map[sn]) for sn in valid]
 
-    show_species = [s.strip().upper() for s in args.show_species.split(",")
-                    if s.strip().upper() in FULL_SPECIES]
+    show_species = [s.strip() for s in args.show_species.split(",") if s.strip()]
 
     all_results    = {}
     scaffold_order = []
