@@ -8,7 +8,12 @@ from models.ode_fixed_theta import OdeFixedTheta
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
-from models.ode_mamba_ssm import OdeMambaSSM
+
+try:
+    from models.ode_mamba_ssm import OdeMambaSSM
+    _mamba_ssm_available = True
+except ImportError:
+    _mamba_ssm_available = False
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
@@ -22,5 +27,5 @@ MODELS: dict = {
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
     "ode_mamba":          OdeMamba,
-    "ode_mamba_ssm":      OdeMambaSSM,
+    **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),
 }

@@ -106,7 +106,8 @@ class TrainConfig:
     test_n: int = 100  # fixed count for held-out test set
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
     val_frac: float = 0.0
-    seed: int = 42
+    seed: int = 42        # controls model init + training stochasticity only
+    split_seed: int = 0   # controls train/val/test split — keep fixed across seeds
 
     num_workers: int = 0
     pin_memory: bool = True
@@ -295,6 +296,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
 
     device = device_auto()
     print(f"Using device: {device}")
@@ -321,7 +323,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     N = len(ds)
 
     idx = np.arange(N)
-    rng = np.random.default_rng(cfg.seed)
+    rng = np.random.default_rng(cfg.split_seed)
     rng.shuffle(idx)
 
     # fixed-count split: test / val / train
