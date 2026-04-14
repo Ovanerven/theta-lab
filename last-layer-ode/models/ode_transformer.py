@@ -24,8 +24,6 @@ class OdeTransformer(nn.Module):
       enc  : TransformerEncoder, d_model=hidden, nhead=hidden//32, num_layers
       head : hidden -> theta_dim
 
-    Memory: O(K * context_len^2 * B) — use batch_size ~32 vs ~1000 for GRU.
-
     Note: jit_scripting must be false (nn.TransformerEncoder is not scriptable).
     """
 
@@ -39,6 +37,7 @@ class OdeTransformer(nn.Module):
         lift_dim: int = 32,
         num_layers: int = 2,
         dropout: float = 0.0,
+        ff_mult: int = 2,
         theta_lo: float = 1e-3,
         theta_hi: float = 2.0,
         n_substeps: int = 1,
@@ -70,7 +69,7 @@ class OdeTransformer(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden,
             nhead=nhead,
-            dim_feedforward=hidden * 2,
+            dim_feedforward=hidden * ff_mult,
             dropout=dropout,
             batch_first=True,
             norm_first=True,   # Pre-LN: more stable at small batch sizes

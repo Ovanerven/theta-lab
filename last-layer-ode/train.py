@@ -107,7 +107,7 @@ class TrainConfig:
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
     val_frac: float = 0.0
     seed: int = 42        # controls model init + training stochasticity only
-    split_seed: int = 0   # controls train/val/test split — keep fixed across seeds
+    split_seed: int = 42   # controls train/val/test split — keep fixed across seeds
 
     num_workers: int = 0
     pin_memory: bool = True
@@ -120,6 +120,11 @@ class TrainConfig:
     theta_lo: float = 1e-3
     theta_hi: float = 2.0
     n_substeps: int = 1
+
+    ff_mult: int = 2  # feedforward multiplier inside each transformer layer (2=current, 4=standard)
+
+    # Transformer-specific (ignored by non-Transformer models via **kwargs)
+    context_len: int = 64  # sliding window size; set >= sequence length for full context
 
     # Mamba-specific (ignored by non-Mamba models via **kwargs)
     d_state: int = 16
@@ -383,10 +388,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         lift_dim=cfg.lift_dim,
         num_layers=cfg.num_layers,
         dropout=cfg.dropout,
+        ff_mult=cfg.ff_mult,
         theta_lo=cfg.theta_lo,
         theta_hi=cfg.theta_hi,
         n_substeps=cfg.n_substeps,
         use_basal=cfg.use_basal,
+        context_len=cfg.context_len,
         theta_bounded=cfg.theta_bounded,
         d_state=cfg.d_state,
         expand=cfg.expand,

@@ -9,11 +9,13 @@ from scipy.interpolate import interp1d
 
 from sim.benchmark_models import FullModel
 from sim.MOF_model import MOF_Synthesis
+from sim.Single_enzyme import SingleEnzyme
 from sim.syndata_simulator_ODE import simulate_chain_with_bolus, simulate_ivp_with_bolus, single_event_generator
 
 SIM_MODELS = {
     "full13":        FullModel,
     "mof_synthesis": MOF_Synthesis,
+    "single_enzyme": SingleEnzyme,
 }
 
 
@@ -79,9 +81,44 @@ def _mof_synthesis_config() -> ModelConfig:
     )
 
 
+def _single_enzyme_config() -> ModelConfig:
+    """
+    Kinetic parameters for SingleEnzyme (6 params, 6 states).
+
+    One theta is sampled uniformly from the supervisor's ranges at dataset
+    generation time (reproducible via --seed) and shared across all trajectories.
+
+    Parameter ranges (from SingleEnzymeODE.PARAM_RANGES):
+      kcat_f, kcat_r, Ka, Kb, Kc, Kd : each U(1.0, 200.0)
+
+    Control channels: A (idx 0) and B (idx 1) receive substrate bolus additions.
+    Use --t-span 10 --n-steps 200 when generating.
+    """
+    # Supervisor-defined ranges (from SingleEnzymeODE.PARAM_RANGES)
+    param_ranges = [(1.0, 200.0)] * 6  # kcat_f, kcat_r, Ka, Kb, Kc, Kd
+
+    # [A, B, C, D, E, I]  — start with substrates at 1.0 and enzyme at 1.0
+    x0_default = [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]
+
+    bolus_ranges = {
+        "A": (0.5, 5.0),
+        "B": (0.5, 5.0),
+    }
+
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.5, 5.0),
+        bolus_count_range=(2, 8),
+        simulator="ivp",
+    )
+
+
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "full13":        ModelConfig(),
     "mof_synthesis": _mof_synthesis_config(),
+    "single_enzyme": _single_enzyme_config(),
 }
 
 
@@ -407,7 +444,8 @@ def main():
     parser.add_argument("--model", type=str, default="full13",
                         choices=list(SIM_MODELS.keys()),
                         help="Simulation model to use for data generation. "
-                             "Use --t-span 30 for mof_synthesis.")
+                             "Use --t-span 30 for mof_synthesis. "
+                             "Use --t-span 10 --n-steps 200 for single_enzyme.")
     parser.add_argument("--n-samples", type=int, default=1000)
     parser.add_argument("--t-span", type=float, default=300.0)
     parser.add_argument("--n-steps", type=int, default=600)
