@@ -119,10 +119,18 @@ if __name__ == "__main__":
     parser.add_argument("--csv", type=str, default=None, help="Save summary CSV to this path")
     parser.add_argument("--plot", action="store_true", help="Save a bar chart")
     parser.add_argument("--plot-out", type=str, default=None)
+    parser.add_argument("--no-split", action="store_true",
+                        help="Ignore saved train/test split; evaluate on full dataset. "
+                             "Useful for models trained on a different dataset size.")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="Override dataset path for all runs (e.g. a small eval set). "
+                             "Automatically skips cache.")
     args = parser.parse_args()
 
     root = Path(args.root)
-    rows = load_or_compute(root, recompute=args.recompute)
+    rows = load_or_compute(root, recompute=args.recompute,
+                           no_split=args.no_split,
+                           dataset_override=args.dataset)
     runs = _aggregate(rows)
     print_table(runs)
 

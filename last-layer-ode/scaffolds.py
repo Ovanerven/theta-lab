@@ -822,6 +822,175 @@ class MOFSynthesis4Scaffold(MechanisticScaffold):
         return torch.stack((dBase, dMod, dAm, dMOF_C), dim=-1)
 
 
+class SingleEnzymeLumpedScaffold(MechanisticScaffold):
+    """
+    2-state reduced scaffold for the Single Enzyme scenario.
+
+    The full 6-state system is simulated but only A (substrate, idx 0) and
+    C (product, idx 2) are observed. The scaffold approximates the dynamics
+    with a simple first-order reversible reaction:
+
+        dA_approx = -kf * A + kr * C
+        dC_approx =  kf * A - kr * C
+
+    This is structurally wrong in two ways:
+      1. The true reaction is bimolecular (rate ∝ A·B); B is hidden
+      2. There is no saturation / denominator term
+
+    The neural network must learn time-varying kf(t) and kr(t) to compensate
+    for the missing B dependence and the wrong kinetics.
+
+    States (2): S ↔ A (observed substrate), P ↔ C (observed product)
+    Control: A-bolus maps to S; B-bolus is a hidden input (seen by the GRU
+             via u_seq but not directly reflected in the observed state)
+    Parameters θ (2): kf (effective forward rate), kr (effective reverse rate)
+
+    Use with: datasets/single_enzyme_lumped.npz  (--obs-indices 0,2)
+    """
+    def __init__(self):
+        super().__init__(P=2, theta_dim=2)
+        self.state_names = ["S", "P"]
+        # True rates are kcat_f·E ≈ 10 and kcat_r·E ≈ 2, but with the denominator
+        # the effective observed rate is much lower; use wide bounds.
+        self.theta_lo_vec = [0.001, 0.001]
+        self.theta_hi_vec = [100.0,  50.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        S, P = y.unbind(dim=-1)
+        kf, kr = theta.unbind(dim=-1)
+
+        S_p = torch.clamp_min(S, 0.0)
+        P_p = torch.clamp_min(P, 0.0)
+        kf  = torch.clamp_min(kf, 0.0)
+        kr  = torch.clamp_min(kr, 0.0)
+
+        v = kf * S_p - kr * P_p
+
+        dS = -v
+        dP =  v
+
+        return torch.stack((dS, dP), dim=-1)
+
+
+class SingleEnzymeReduced4Scaffold(MechanisticScaffold):
+    """
+    Reduced 4-state mass-action scaffold for the Single Enzyme scenario.
+
+    The true system uses Reversible Bi-Bi (Michaelis-Menten) kinetics with a
+    nonlinear denominator. This scaffold intentionally simplifies to plain
+    mass-action, dropping the inert states E and I (which are constant in the
+    data: E=1, I=0) and removing the denominator entirely:
+
+        v  = kf * A * B  −  kr * C * D
+
+    The scaffold structure (A+B → C+D reversibly) is topologically correct,
+    but the kinetics are wrong. The neural network must learn time-varying
+    kf(t) and kr(t) to compensate for the missing saturation terms.
+
+    States (4): A, B, C, D
+    Control inputs (bolused): A (idx 0), B (idx 1)
+    Parameters θ (2): kf (effective forward rate), kr (effective reverse rate)
+
+    Use with: datasets/single_enzyme_4.npz  (--obs-indices 0,1,2,3)
+    Ground-truth Bi-Bi values for reference: kcat_f·E=10, kcat_r·E=2
+    """
+    def __init__(self):
+        super().__init__(P=4, theta_dim=2)
+        self.state_names = ["A", "B", "C", "D"]
+        # Bounds: true effective forward rate ≈ 10, reverse ≈ 2
+        self.theta_lo_vec = [0.01, 0.001]
+        self.theta_hi_vec = [200.0, 100.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        A, B, C, D = y.unbind(dim=-1)
+        kf, kr = theta.unbind(dim=-1)
+
+        A_p = torch.clamp_min(A, 0.0)
+        B_p = torch.clamp_min(B, 0.0)
+        C_p = torch.clamp_min(C, 0.0)
+        D_p = torch.clamp_min(D, 0.0)
+
+        kf = torch.clamp_min(kf, 0.0)
+        kr = torch.clamp_min(kr, 0.0)
+
+        v = kf * A_p * B_p - kr * C_p * D_p
+
+        dA = -v
+        dB = -v
+        dC =  v
+        dD =  v
+
+        return torch.stack((dA, dB, dC, dD), dim=-1)
+
+
+class SingleEnzymeScaffold(MechanisticScaffold):
+    """
+    6-state Reversible Bi-Bi enzyme kinetics scaffold.
+
+    Reaction: A + B <-> C + D  (catalysed by enzyme E, inhibitor I inert)
+
+    States (6): A, B, C, D, E, I
+    Control inputs (bolused): A (idx 0), B (idx 1)
+
+    Parameters θ (6):
+      0  kcat_f : forward catalytic rate constant
+      1  kcat_r : reverse catalytic rate constant
+      2  Ka     : Michaelis constant for substrate A
+      3  Kb     : Michaelis constant for substrate B
+      4  Kc     : Michaelis constant for product C
+      5  Kd     : Michaelis constant for product D
+
+    Ground-truth values: kcat_f=10.0, kcat_r=2.0, Ka=2.0, Kb=2.0, Kc=5.0, Kd=5.0
+    Dataset: datasets/single_enzyme_6.npz  (--t-span 10 --n-steps 200)
+    """
+    def __init__(self):
+        super().__init__(P=6, theta_dim=6)
+        self.state_names = ["A", "B", "C", "D", "E", "I"]
+        # Per-parameter bounds: wide enough to contain the true values with room to search
+        self.theta_lo_vec = [0.1,  0.01, 0.01, 0.01, 0.01, 0.01]
+        self.theta_hi_vec = [100.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        A, B, C, D, E, I = y.unbind(dim=-1)
+        kcat_f, kcat_r, Ka, Kb, Kc, Kd = theta.unbind(dim=-1)
+
+        eps: float = 1e-12
+
+        A_p = torch.clamp_min(A, 0.0)
+        B_p = torch.clamp_min(B, 0.0)
+        C_p = torch.clamp_min(C, 0.0)
+        D_p = torch.clamp_min(D, 0.0)
+        E_p = torch.clamp_min(E, 0.0)
+
+        Ka = torch.clamp_min(Ka, eps)
+        Kb = torch.clamp_min(Kb, eps)
+        Kc = torch.clamp_min(Kc, eps)
+        Kd = torch.clamp_min(Kd, eps)
+
+        Vf = kcat_f * E_p
+        Vr = kcat_r * E_p
+
+        D0 = Ka * Kb
+        denom = (
+            D0 * (1.0 + C_p / Kc + D_p / Kd + (C_p * D_p) / (Kc * Kd))
+            + (Kb * A_p) * (1.0 + D_p / Kd)
+            + (Ka * B_p) * (1.0 + C_p / Kc)
+            + (A_p * B_p)
+            + eps
+        )
+
+        v = (Vf * A_p * B_p - Vr * C_p * D_p) / denom
+
+        dA = -v
+        dB = -v
+        dC =  v
+        dD =  v
+        dE = E * 0.0   # conserved: always zero
+        dI = I * 0.0   # inert: always zero
+
+        return torch.stack((dA, dB, dC, dD, dE, dI), dim=-1)
+
+
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "reduced2":          Reduced2Scaffold(),
     "reduced3":          Reduced3Scaffold(),
@@ -850,4 +1019,7 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_8":   MOFSynthesis8Scaffold(),
     "mof_synthesis_6":   MOFSynthesis6Scaffold(),
     "mof_synthesis_4":   MOFSynthesis4Scaffold(),
+    "single_enzyme_6":   SingleEnzymeScaffold(),
+    "single_enzyme_4":   SingleEnzymeReduced4Scaffold(),
+    "single_enzyme_lumped": SingleEnzymeLumpedScaffold(),
 }

@@ -38,15 +38,18 @@ def _find_exp_dirs(exp_root: Path) -> list[Path]:
     )
 
 
-def _compute_run(exp_dir: Path, device: torch.device) -> list[dict]:
+def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
+                 dataset_override: "str | None" = None) -> list[dict]:
     import yaml
 
     cfg = yaml.safe_load((exp_dir / "config.yaml").read_text())
+    if dataset_override is not None:
+        cfg["dataset_path"] = dataset_override
     scaffold = cfg.get("scaffold", exp_dir.name)
     P = SCAFFOLDS[scaffold].P if scaffold in SCAFFOLDS else 0
 
     model, ds, obs_names, _ = rebuild_model_from_experiment(exp_dir, device)
-    test_subset = _test_subset(ds, exp_dir)
+    test_subset = ds if no_split else _test_subset(ds, exp_dir)
 
     model.eval()
     dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
@@ -105,7 +108,9 @@ def _load_cache(path: Path) -> list[dict]:
     return rows
 
 
-def load_or_compute(exp_root: Path, recompute: bool = False) -> list[dict]:
+def load_or_compute(exp_root: Path, recompute: bool = False,
+                    no_split: bool = False,
+                    dataset_override: "str | None" = None) -> list[dict]:
     """Return NRMSE rows for all runs under exp_root.
 
     Each run's results are cached in <run_dir>/nrmse_cache.csv so they travel
@@ -125,14 +130,15 @@ def load_or_compute(exp_root: Path, recompute: bool = False) -> list[dict]:
     for exp_dir in exp_dirs:
         cache_path = exp_dir / CACHE_NAME
 
-        if cache_path.exists() and not recompute:
+        if cache_path.exists() and not recompute and dataset_override is None:
             rows = _load_cache(cache_path)
             print(f"  {exp_dir.name}  (cached)")
             all_rows.extend(rows)
             continue
 
         try:
-            rows = _compute_run(exp_dir, device)
+            rows = _compute_run(exp_dir, device, no_split=no_split,
+                                dataset_override=dataset_override)
         except Exception as e:
             print(f"  skip {exp_dir.name}: {e}")
             continue

@@ -107,6 +107,11 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         n_substeps=int(cfg.get("n_substeps", 1)),
         use_basal=bool(cfg.get("use_basal", False)),
         theta_bounded=bool(cfg.get("theta_bounded", True)),
+        context_len=int(cfg.get("context_len", 64)),
+        ff_mult=int(cfg.get("ff_mult", 2)),
+        d_state=int(cfg.get("d_state", 16)),
+        expand=int(cfg.get("expand", 2)),
+        d_conv=int(cfg.get("d_conv", 4)),
     ).to(device)
 
     # strict=False: tolerates buffers added after a model was saved (e.g. theta_lo_vec/theta_hi_vec).
