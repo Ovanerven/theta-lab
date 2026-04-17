@@ -8,6 +8,7 @@ from models.ode_fixed_theta import OdeFixedTheta
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
+from models.lstm_rnn import LstmRNN
 
 try:
     from models.ode_mamba_ssm import OdeMambaSSM
@@ -17,6 +18,7 @@ except ImportError:
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
+    "lstm_rnn":           LstmRNN,
     "ode_rnn_analytical": AnalyticalOdeRNN,
     "ode_rnn_2020":       OdeRNN2020,
     "neural_ode":         NeuralODE,

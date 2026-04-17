@@ -83,19 +83,20 @@ def _mof_synthesis_config() -> ModelConfig:
 
 def _single_enzyme_config() -> ModelConfig:
     """
-    Kinetic parameters for SingleEnzyme (6 params, 6 states).
+    Fixed ground-truth kinetic parameters for SingleEnzyme (6 params, 6 states).
 
-    One theta is sampled uniformly from the supervisor's ranges at dataset
-    generation time (reproducible via --seed) and shared across all trajectories.
+    Parameters chosen so Km values are comparable to substrate concentrations
+    (initial [A]=[B]=1, boluses of 0.5-5.0), ensuring interesting saturation
+    and reversibility dynamics within the observation window.
 
-    Parameter ranges (from SingleEnzymeODE.PARAM_RANGES):
-      kcat_f, kcat_r, Ka, Kb, Kc, Kd : each U(1.0, 200.0)
+    Parameters in order (6):
+      kcat_f=10.0, kcat_r=2.0, Ka=2.0, Kb=2.0, Kc=5.0, Kd=5.0
 
     Control channels: A (idx 0) and B (idx 1) receive substrate bolus additions.
     Use --t-span 10 --n-steps 200 when generating.
     """
-    # Supervisor-defined ranges (from SingleEnzymeODE.PARAM_RANGES)
-    param_ranges = [(1.0, 200.0)] * 6  # kcat_f, kcat_r, Ka, Kb, Kc, Kd
+    default_params = [10.0, 2.0, 2.0, 2.0, 5.0, 5.0]
+    param_ranges = [(v, v) for v in default_params]
 
     # [A, B, C, D, E, I]  — start with substrates at 1.0 and enzyme at 1.0
     x0_default = [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]

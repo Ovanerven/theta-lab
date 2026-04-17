@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 from scaffolds import MechanisticScaffold
 
@@ -155,12 +156,16 @@ class OdeTransformer(nn.Module):
             pos_ids = torch.arange(W, device=device, dtype=torch.long)
             seq = seq + self.pos_embed(pos_ids).unsqueeze(0)
 
-            causal_mask = torch.triu(
-                torch.full((W, W), float("-inf"), device=device, dtype=dtype),
-                diagonal=1,
-            )
+            # Don't need the causal mask
+            # causal_mask = torch.triu(
+            #     torch.full((W, W), float("-inf"), device=device, dtype=dtype),
+            #     diagonal=1,
+            # )
 
-            out = self.transformer(seq, mask=causal_mask)  # (B, W, hidden)
+            with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):  # raises if flash can't run
+                out = self.transformer(seq, is_causal=True)
+
+            # out = self.transformer(seq, is_causal=True)  # (B, W, hidden)
             z   = out[:, -1, :]                            # (B, hidden)
             raw = self.head(z)
 
