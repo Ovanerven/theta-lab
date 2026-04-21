@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Optional
+import math
 from pathlib import Path
 import re
 import time
@@ -102,6 +104,7 @@ class TrainConfig:
     lr: float = 5e-4
     weight_decay: float = 0.0
     warmup_epochs: int = 0  # linear LR warmup; 0 disables
+    cosine_decay: bool = False  # cosine decay from lr to lr*cosine_decay_min after warmup
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
@@ -130,6 +133,9 @@ class TrainConfig:
     d_state: int = 16
     expand: int = 2
     d_conv: int = 4
+
+    forget_bias_init: Optional[float] = None  # None = PyTorch default; 1.0 = Gers/Jozefowicz positive shift
+    legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
 
     use_basal: bool = False
     beta_regularization: bool = False
@@ -164,6 +170,7 @@ class TrainConfig:
 
     jit_scripting: bool = False
     torch_compile: bool = False
+    autocast_bf16: bool = False
 
     # 'ode_rnn' (default), 'ode_rnn_2020' (latent ODE-RNN style),
     # or 'neural_ode' (pure MLP baseline)
@@ -398,7 +405,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_state=cfg.d_state,
         expand=cfg.expand,
         d_conv=cfg.d_conv,
+        forget_bias_init=cfg.forget_bias_init,
+        legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
     ).to(device)
+
+    # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
+    if cfg.autocast_bf16 and cfg.model_class == "ode_transformer" and device.type == "cuda":
+        _B, _W, _H = 2, 8, model.hidden
+        _x = torch.randn(_B, _W, _H, device=device, dtype=torch.bfloat16)
+        _mask = nn.Transformer.generate_square_subsequent_mask(_W, device=device).to(torch.bfloat16)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+                try:
+                    model.transformer(_x, mask=_mask, is_causal=True)
+                    print("Flash Attention: OK")
+                except Exception as e:
+                    print(f"Flash Attention: NOT available ({e})")
+        del _x, _mask
 
     compile_model = cfg.torch_compile
     jit_scripting = cfg.jit_scripting
@@ -412,19 +435,40 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     elif compile_model == True:
         try:
-            model = torch.compile(model)
-        except: 
-            print('The model did not compile please check')
+            # dynamic=True: generates one symbolic kernel per distinct graph instead of
+            # recompiling for every new tensor shape. Critical for the OdeTransformer
+            # whose attention window W grows 1..context_len during the forward loop —
+            # without this, Dynamo recompiles 64 times (~hours on GPFS clusters).
+            model = torch.compile(model, dynamic=True)
+            print("torch.compile: OK (dynamic=True)")
+        except Exception as e:
+            print(f'The model did not compile: {e}')
 
 
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg.lr), weight_decay=float(cfg.weight_decay))
 
     scheduler = None
-    if cfg.warmup_epochs > 0:
+    if cfg.warmup_epochs > 0 and cfg.cosine_decay:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            opt, start_factor=1e-6, end_factor=1.0, total_iters=int(cfg.warmup_epochs)
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=max(1, cfg.epochs - cfg.warmup_epochs), eta_min=float(cfg.lr) * 0.01
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            opt, schedulers=[warmup, cosine], milestones=[int(cfg.warmup_epochs)]
+        )
+        print(f"LR warmup: {cfg.warmup_epochs} epochs ({cfg.lr:.2e} target) + cosine decay to {float(cfg.lr)*0.01:.2e}")
+    elif cfg.warmup_epochs > 0:
         scheduler = torch.optim.lr_scheduler.LinearLR(
             opt, start_factor=1e-6, end_factor=1.0, total_iters=int(cfg.warmup_epochs)
         )
         print(f"LR warmup: {cfg.warmup_epochs} epochs ({cfg.lr:.2e} target)")
+    elif cfg.cosine_decay:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=cfg.epochs, eta_min=float(cfg.lr) * 0.01
+        )
+        print(f"LR cosine decay: {cfg.lr:.2e} → {float(cfg.lr)*0.01:.2e} over {cfg.epochs} epochs")
 
     mech_names = ds.obs_names.tolist() if ds.obs_names is not None else None
 
@@ -479,15 +523,16 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             dt_seq = dt_seq.to(device)
 
             opt.zero_grad(set_to_none=True)
-            pred, theta, _ = model(
-                y0,
-                u_seq,
-                dt_seq,
-                obs_idx,
-                y_seq,
-                teacher_forcing=teacher_forcing,
-                tf_every=int(cfg.tf_every),
-            )
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
+                pred, theta, _ = model(
+                    y0,
+                    u_seq,
+                    dt_seq,
+                    obs_idx,
+                    y_seq,
+                    teacher_forcing=teacher_forcing,
+                    tf_every=int(cfg.tf_every),
+                )
             pred = pred[:, :, obs_idx] 
             y_seq = y_seq[:, :, obs_idx]
 
@@ -537,8 +582,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     u_seq = u_seq.to(device)
                     dt_seq = dt_seq.to(device)
 
-                    pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
-                    pred = pred[:, :, obs_idx] 
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
+                        pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+                    pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
                     loss = loss_fn(pred, y_seq)
                     va_total += float(loss.item())
@@ -572,6 +618,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             print(
                 f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str} | {ep_time:.2f}s"
             )
+
+        if math.isnan(tr_loss) or math.isnan(va_loss):
+            print(f"NaN detected at epoch {ep} — stopping early.")
+            break
 
         if wandb_run is not None:
             payload = {
@@ -676,6 +726,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     elapsed = time.time() - t0
     print(f"\nTraining completed in {elapsed:.2f}s ({elapsed/60:.2f}m)")
+    if device.type == "cuda":
+        print(f"Peak GPU memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
 
     # plots ONLY at the end (including epoch evolution overlays from checkpoints)
     if not no_plot:
@@ -731,6 +783,13 @@ if __name__ == "__main__":
         key, val = kv.split("=", 1)
         if not hasattr(cfg, key):
             raise ValueError(f"Unknown config field: {key!r}. Valid fields: {list(vars(cfg).keys())}")
-        setattr(cfg, key, yaml.safe_load(val))
+        parsed = yaml.safe_load(val)
+        # yaml.safe_load("None") → str "None", not Python None — fix explicitly
+        if isinstance(parsed, str) and parsed == "None":
+            parsed = None
+        orig_type = type(getattr(cfg, key))
+        if parsed is not None and orig_type is not type(None) and not isinstance(parsed, orig_type):
+            parsed = orig_type(parsed)
+        setattr(cfg, key, parsed)
 
     train(cfg, no_plot=bool(args.no_plot), plot_samples=int(args.plot_samples), plot_sample_idx=int(args.plot_sample_idx))

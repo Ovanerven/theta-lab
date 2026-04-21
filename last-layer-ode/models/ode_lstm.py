@@ -20,7 +20,7 @@ def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tens
     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 
-class LstmRNN(nn.Module):
+class OdeLSTM(nn.Module):
     """
     Closed-loop mechanistic model:
       (u_k, y_{k-1}) -> lstm -> theta_k
@@ -43,6 +43,8 @@ class LstmRNN(nn.Module):
         n_substeps: int = 1,
         use_basal: bool = False,
         theta_bounded: bool = True,
+        forget_bias_init: Optional[float] = None,
+        legacy_forget_bias_bug: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -82,6 +84,35 @@ class LstmRNN(nn.Module):
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim
         self.head = nn.Linear(hidden, head_out)
 
+        # PyTorch LSTM bias layout per layer: [i, f, g, o], each block of size hidden.
+        #
+        # Three init modes:
+        #   1. forget_bias_init=None           -> do nothing, keep PyTorch default
+        #   2. forget_bias_init=1.0 (correct)  -> add_ to bias_ih only; preserves random
+        #                                         init and gives an effective shift of
+        #                                         exactly forget_bias_init (Gers/Jozefowicz).
+        #   3. legacy_forget_bias_bug=True     -> reproduce the OLD buggy behavior:
+        #                                         fill_ both bias_ih AND bias_hh forget
+        #                                         blocks with forget_bias_init. This
+        #                                         (a) destroys the random init and
+        #                                         (b) doubles the effective bias because
+        #                                             the two biases are summed inside the
+        #                                             LSTM. Kept for A/B reproducibility
+        #                                             of pre-fix runs.
+        if legacy_forget_bias_bug:
+            fb = 0.0 if forget_bias_init is None else float(forget_bias_init)
+            n = hidden
+            for name, p in self.lstm.named_parameters():
+                if "bias" in name:  # matches both bias_ih_l* and bias_hh_l* (the bug)
+                    with torch.no_grad():
+                        p[n:2*n].fill_(fb)
+        elif forget_bias_init is not None:
+            n = hidden
+            for name, p in self.lstm.named_parameters():
+                if "bias_ih" in name:
+                    with torch.no_grad():
+                        p[n:2*n].add_(float(forget_bias_init))
+
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
@@ -101,7 +132,10 @@ class LstmRNN(nn.Module):
         th_out   = torch.empty(B, K, self.theta_dim, device=y0.device, dtype=y0.dtype)
         beta_out = torch.zeros(B, K, self.P, device=y0.device, dtype=y0.dtype)
 
-        h = torch.zeros(self.lstm.num_layers, B, self.lstm.hidden_size, device=y0.device, dtype=y0.dtype)
+        h = (
+            torch.zeros(self.lstm.num_layers, B, self.lstm.hidden_size, device=y0.device, dtype=y0.dtype),
+            torch.zeros(self.lstm.num_layers, B, self.lstm.hidden_size, device=y0.device, dtype=y0.dtype),
+        )
 
         use_partial = obs_idx.numel() > 0
 

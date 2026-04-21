@@ -1,0 +1,23 @@
+# LSTM Stage 1 — LR sweep at fixed hidden=128, num_layers=1.
+# Run this first, pick the best 1-2 LRs, then fill them into lstm_stage2_arch.yaml.
+
+study: lstm_stage1_lr
+runs_per_job: 5
+time: "01:00:00"
+compare_time: "01:00:00"
+partition: gpu_a100
+
+fixed:
+  model_class: lstm_rnn
+  hidden: 128
+  num_layers: 1
+  dropout: 0.0
+  epochs: 100
+  dataset_path: datasets/mof_synthesis_4.npz
+  scaffold: mof_synthesis_4
+
+grid:
+  lr: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+  seed: [42, 0, 1]
+
+exp_name: "lstm_lr{lr}_s{seed}"

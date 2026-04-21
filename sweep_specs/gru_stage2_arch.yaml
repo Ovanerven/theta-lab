@@ -1,0 +1,27 @@
+# GRU Stage 2 — arch sweep + l1 regularization test.
+# hidden x num_layers x lambda_reg x 2 datasets = 3x3x2x2 = 36 runs, single seed.
+# GRU ~33s/epoch on A100 → 5 runs/job x 100 epochs = ~2.75h, fits in 4h.
+
+study: gru_stage2_arch
+runs_per_job: 5
+time: "06:00:00"
+compare_time: "01:00:00"
+partition: gpu_a100
+base_config: configs/archs/gru.yaml
+
+fixed:
+  lr: 1e-3
+  epochs: 100
+  batch_size: 32
+  seed: 42
+  l1_regularization: true
+
+grid:
+  hidden: [128, 256, 512]
+  num_layers: [1, 2, 3]
+  lambda_reg: [0.0, 0.01]
+  dataset_path: [datasets/mof_synthesis_4.npz, datasets/single_enzyme_lumped.npz]
+
+derived:
+  scaffold: "'mof_synthesis_4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'single_enzyme_lumped'"
+  exp_name: "f\"gru_{'mof4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'enzyme'}_h{hidden}_l{num_layers}_reg{lambda_reg}\""

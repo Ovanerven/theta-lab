@@ -1,0 +1,58 @@
+# Flash attention ablation on mof_synthesis_8 (8 species).
+# Hypothesis: ODE bottleneck dominates for mof8, so flash attention / batch size
+# have minimal impact on epoch time unlike mof4.
+
+study: transformer_flash_attention_mof8_5ep
+runs_per_job: 1
+time: "03:00:00"
+compare_time: "01:00:00"
+partition: gpu_h100
+
+runs:
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_no_flash_bs32
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: false
+    batch_size: 32
+    epochs: 5
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_no_flash_bs500
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: false
+    batch_size: 500
+    epochs: 5
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_no_flash_bs1000
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: false
+    batch_size: 1000
+    epochs: 5
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_flash_bs32
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: true
+    batch_size: 32
+    epochs: 5
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_flash_bs500
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: true
+    batch_size: 500
+    epochs: 5
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof8_flash_bs1000
+    dataset_path: datasets/mof_synthesis_8.npz
+    scaffold: mof_synthesis_8
+    autocast_bf16: true
+    batch_size: 1000
+    epochs: 5

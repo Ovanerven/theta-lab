@@ -60,15 +60,28 @@ def pick_dataset_index(exp_dir: Path, sample_pos: int) -> int:
     return max(0, int(sample_pos))
 
 
-def predict_sample(model, ds, dataset_idx: int, device: torch.device):
+def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict = None):
     y0, u_seq, y_seq = ds[dataset_idx]
     dt = torch.tensor(ds.dt.astype(np.float32)).unsqueeze(0).to(device)
+
+    import inspect
+    forward_params = inspect.signature(model.forward).parameters
+    needs_obs_idx = "obs_idx" in forward_params
+
+    extra = {}
+    if needs_obs_idx:
+        if cfg and cfg.get("obs_idx") is not None:
+            obs_idx = torch.tensor(cfg["obs_idx"], device=device, dtype=torch.long)
+        else:
+            obs_idx = torch.arange(y0.shape[-1], device=device, dtype=torch.long)
+        extra["obs_idx"] = obs_idx
 
     with torch.no_grad():
         out = model(
             y0.unsqueeze(0).to(device),
             u_seq.unsqueeze(0).to(device),
             dt,
+            **extra,
             y_seq=None,
             teacher_forcing=False,
         )
@@ -122,7 +135,7 @@ def main():
         if dataset_idx >= len(ds):
             continue
 
-        t, y_true, y_fit = predict_sample(model, ds, dataset_idx, device)
+        t, y_true, y_fit = predict_sample(model, ds, dataset_idx, device, cfg=cfg)
         panel_data.append({
             "exp_dir": exp_dir,
             "scaffold": scaffold,

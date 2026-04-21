@@ -1,0 +1,32 @@
+# LSTM forget-bias init comparison.
+# Previous code used fill_(0.0) which overwrote PyTorch's random init entirely.
+# Fix: null = keep PyTorch default (uniform ±1/sqrt(H)); 1.0 = add positive shift.
+# Reruns the best config per dataset from lstm_stage2_arch to measure the impact.
+# Baseline (fill_=0.0) is already in results/lstm_stage2_arch.csv.
+# 2 forget_bias values x 2 datasets = 4 runs.
+
+study: lstm_forget_bias
+runs_per_job: 4
+time: "02:00:00"
+compare_time: "00:30:00"
+partition: gpu_a100
+base_config: configs/archs/lstm.yaml
+
+fixed:
+  lr: 1e-3
+  epochs: 100
+  batch_size: 32
+  seed: 42
+  lambda_reg: 0.0
+  l1_regularization: true
+
+grid:
+  forget_bias_init: [null, 1.0]
+  # best config from stage2 per dataset: enzyme->h128_l2, mof4->h512_l3
+  dataset_path: [datasets/single_enzyme_lumped.npz, datasets/mof_synthesis_4.npz]
+
+derived:
+  scaffold: "'mof_synthesis_4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'single_enzyme_lumped'"
+  hidden:     "128 if dataset_path == 'datasets/single_enzyme_lumped.npz' else 512"
+  num_layers: "2   if dataset_path == 'datasets/single_enzyme_lumped.npz' else 3"
+  exp_name: "f\"lstm_fb{'none' if forget_bias_init is None else forget_bias_init}_{'mof4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'enzyme'}_h{hidden}_l{num_layers}\""

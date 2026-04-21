@@ -1,0 +1,17 @@
+# Batch size sweep for LSTM — 3 batch sizes x 2 datasets x 3 seeds = 18 runs.
+
+study: bs_sweep_lstm
+runs_per_job: 10
+time: "04:00:00"
+compare_time: "01:00:00"
+partition: gpu_a100
+base_config: configs/archs/lstm.yaml
+
+grid:
+  batch_size: [32, 64, 256, 500, 1000]
+  dataset_path: [datasets/mof_synthesis_4.npz, datasets/single_enzyme_lumped.npz]
+  seed: [42, 0, 1]
+
+derived:
+  scaffold: "'mof_synthesis_4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'single_enzyme_lumped'"
+  exp_name: "f\"lstm_{'mof4' if dataset_path == 'datasets/mof_synthesis_4.npz' else 'enzyme'}_bs{batch_size}_s{seed}\""

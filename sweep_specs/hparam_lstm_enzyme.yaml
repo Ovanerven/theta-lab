@@ -1,0 +1,20 @@
+# Hyperparameter search: lstm_rnn on single enzyme kinetics (single_enzyme_lumped).
+# Same grid as MOF but enzyme runs are faster (~5 min), so 5 per job → 2 jobs.
+
+study: hparam_lstm_enzyme
+base_config: configs/archs/gru.yaml
+dataset_path: datasets/single_enzyme_lumped.npz
+scaffold: single_enzyme_lumped
+model_class: lstm_rnn
+exp_name: "lstm_h{hidden}_l{num_layers}"
+
+grid:
+  hidden: [64, 128, 256]
+  num_layers: [1, 2, 3]
+
+derived:
+  dropout: "0.0 if num_layers == 1 else 0.1"
+
+runs_per_job: 5
+time: "01:00:00"
+compare_time: "00:30:00"

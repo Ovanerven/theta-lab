@@ -1,0 +1,24 @@
+# LSTM Stage 3 — forget-gate bias ablation on best config from Stage 2.
+# Fill in best hidden, num_layers, lr, dropout from Stage 2 before running.
+
+study: lstm_stage3_forget_bias
+runs_per_job: 1
+time: "01:30:00"
+compare_time: "01:00:00"
+partition: gpu_h100
+
+fixed:
+  model_class: lstm_rnn
+  epochs: 100
+  dataset_path: datasets/mof_synthesis_4.npz
+  scaffold: mof_synthesis_4
+  hidden: FILL_IN_BEST_HIDDEN      # e.g. 128
+  num_layers: FILL_IN_BEST_LAYERS  # e.g. 2
+  lr: FILL_IN_BEST_LR              # e.g. 1e-3
+  dropout: FILL_IN_BEST_DROPOUT    # e.g. 0.1
+
+grid:
+  forget_bias_init: [0.0, 1.0]
+  seed: [42, 0, 1]
+
+exp_name: "lstm_fb{forget_bias_init}_s{seed}"

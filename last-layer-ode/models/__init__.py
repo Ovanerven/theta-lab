@@ -8,7 +8,7 @@ from models.ode_fixed_theta import OdeFixedTheta
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
-from models.lstm_rnn import LstmRNN
+from models.ode_lstm import OdeLSTM
 
 try:
     from models.ode_mamba_ssm import OdeMambaSSM
@@ -18,7 +18,7 @@ except ImportError:
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
-    "lstm_rnn":           LstmRNN,
+    "lstm_rnn":           OdeLSTM,
     "ode_rnn_analytical": AnalyticalOdeRNN,
     "ode_rnn_2020":       OdeRNN2020,
     "neural_ode":         NeuralODE,
@@ -28,6 +28,7 @@ MODELS: dict = {
     "ode_fixed_theta":    OdeFixedTheta,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
-    "ode_mamba":          OdeMamba,
+    # "ode_mamba":          OdeMamba,
+    # "ode_transformer_kvcache": OdeTransformer_transformer,  # alias — same class, explicit name for ablation table
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),
 }

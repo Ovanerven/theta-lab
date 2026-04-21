@@ -1,0 +1,49 @@
+# Transformer — batch size × LR scaling sweep (linear scaling rule: lr ∝ bs/32).
+# 2 LRs per batch size (scaled and scaled/3), 3 seeds = 30 runs total.
+# Flash attention enabled via autocast_bf16=true.
+# Timing reference: bs=32 ~110min, bs=1000 ~7min on A100 → H100 should be faster.
+# runs_per_job=1 so all 30 jobs run in parallel overnight.
+
+study: transformer_bs_lr_scaling
+runs_per_job: 5
+time: "20:00:00"
+compare_time: "01:00:00"
+partition: gpu_h100
+base_config: configs/archs/transformer.yaml
+
+runs:
+  # bs=32 — base LR
+  - {batch_size: 32,   lr: 1e-3,  seed: 42, exp_name: trans_bs32_lr1e-3_s42}
+  - {batch_size: 32,   lr: 1e-3,  seed: 0,  exp_name: trans_bs32_lr1e-3_s0}
+  - {batch_size: 32,   lr: 1e-3,  seed: 1,  exp_name: trans_bs32_lr1e-3_s1}
+  - {batch_size: 32,   lr: 3e-4,  seed: 42, exp_name: trans_bs32_lr3e-4_s42}
+  - {batch_size: 32,   lr: 3e-4,  seed: 0,  exp_name: trans_bs32_lr3e-4_s0}
+  - {batch_size: 32,   lr: 3e-4,  seed: 1,  exp_name: trans_bs32_lr3e-4_s1}
+  # bs=128 — 4× base
+  - {batch_size: 128,  lr: 4e-3,  seed: 42, exp_name: trans_bs128_lr4e-3_s42}
+  - {batch_size: 128,  lr: 4e-3,  seed: 0,  exp_name: trans_bs128_lr4e-3_s0}
+  - {batch_size: 128,  lr: 4e-3,  seed: 1,  exp_name: trans_bs128_lr4e-3_s1}
+  - {batch_size: 128,  lr: 1e-3,  seed: 42, exp_name: trans_bs128_lr1e-3_s42}
+  - {batch_size: 128,  lr: 1e-3,  seed: 0,  exp_name: trans_bs128_lr1e-3_s0}
+  - {batch_size: 128,  lr: 1e-3,  seed: 1,  exp_name: trans_bs128_lr1e-3_s1}
+  # bs=256 — 8× base
+  - {batch_size: 256,  lr: 8e-3,  seed: 42, exp_name: trans_bs256_lr8e-3_s42}
+  - {batch_size: 256,  lr: 8e-3,  seed: 0,  exp_name: trans_bs256_lr8e-3_s0}
+  - {batch_size: 256,  lr: 8e-3,  seed: 1,  exp_name: trans_bs256_lr8e-3_s1}
+  - {batch_size: 256,  lr: 3e-3,  seed: 42, exp_name: trans_bs256_lr3e-3_s42}
+  - {batch_size: 256,  lr: 3e-3,  seed: 0,  exp_name: trans_bs256_lr3e-3_s0}
+  - {batch_size: 256,  lr: 3e-3,  seed: 1,  exp_name: trans_bs256_lr3e-3_s1}
+  # bs=500 — ~16× base
+  - {batch_size: 500,  lr: 1.5e-2, seed: 42, exp_name: trans_bs500_lr15e-3_s42}
+  - {batch_size: 500,  lr: 1.5e-2, seed: 0,  exp_name: trans_bs500_lr15e-3_s0}
+  - {batch_size: 500,  lr: 1.5e-2, seed: 1,  exp_name: trans_bs500_lr15e-3_s1}
+  - {batch_size: 500,  lr: 5e-3,  seed: 42, exp_name: trans_bs500_lr5e-3_s42}
+  - {batch_size: 500,  lr: 5e-3,  seed: 0,  exp_name: trans_bs500_lr5e-3_s0}
+  - {batch_size: 500,  lr: 5e-3,  seed: 1,  exp_name: trans_bs500_lr5e-3_s1}
+  # bs=1000 — 31× base
+  - {batch_size: 1000, lr: 3e-2,  seed: 42, exp_name: trans_bs1000_lr3e-2_s42}
+  - {batch_size: 1000, lr: 3e-2,  seed: 0,  exp_name: trans_bs1000_lr3e-2_s0}
+  - {batch_size: 1000, lr: 3e-2,  seed: 1,  exp_name: trans_bs1000_lr3e-2_s1}
+  - {batch_size: 1000, lr: 1e-2,  seed: 42, exp_name: trans_bs1000_lr1e-2_s42}
+  - {batch_size: 1000, lr: 1e-2,  seed: 0,  exp_name: trans_bs1000_lr1e-2_s0}
+  - {batch_size: 1000, lr: 1e-2,  seed: 1,  exp_name: trans_bs1000_lr1e-2_s1}

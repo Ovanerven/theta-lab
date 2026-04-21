@@ -1,0 +1,27 @@
+# Transformer Stage 2 — arch sweep with full context window (context_len=299).
+# Sweeps hidden, num_layers, ff_mult, and lambda_reg on single seed for efficiency.
+# 3 x 3 x 2 x 2 = 36 runs, all parallel overnight on H100.
+
+study: transformer_stage2_arch
+runs_per_job: 1
+time: "10:00:00"
+compare_time: "01:00:00"
+partition: gpu_h100
+base_config: configs/archs/transformer.yaml
+
+fixed:
+  context_len: 299
+  batch_size: 32
+  epochs: 100
+  seed: 42
+  dataset_path: datasets/mof_synthesis_4.npz
+  scaffold: mof_synthesis_4
+  l1_regularization: true
+
+grid:
+  hidden: [128, 256, 512]
+  num_layers: [1, 2, 3]
+  ff_mult: [2, 4]
+  lambda_reg: [0.0, 0.1]
+
+exp_name: "trans_h{hidden}_l{num_layers}_ff{ff_mult}_reg{lambda_reg}"

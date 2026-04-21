@@ -1,0 +1,21 @@
+# Hyperparameter search: lstm_rnn on MOF crystal synthesis (mof_synthesis_6).
+# Grid: hidden x num_layers — dropout derived from num_layers.
+# 9 runs total, batched 3 per job → 3 jobs.
+
+study: hparam_lstm_mof6
+base_config: configs/archs/gru.yaml
+dataset_path: datasets/mof_synthesis_6.npz
+scaffold: mof_synthesis_6
+model_class: lstm_rnn
+exp_name: "lstm_h{hidden}_l{num_layers}"
+
+grid:
+  hidden: [64, 128, 256]
+  num_layers: [1, 2, 3]
+
+derived:
+  dropout: "0.0 if num_layers == 1 else 0.1"
+
+runs_per_job: 3
+time: "01:30:00"
+compare_time: "01:00:00"

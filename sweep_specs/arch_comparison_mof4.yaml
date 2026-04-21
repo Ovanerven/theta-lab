@@ -1,0 +1,30 @@
+# Architecture comparison on MOF crystal synthesis (mof_synthesis_4).
+# Mirrors arch_comparison_mof4.sh but driven by the launcher.
+# Mamba-SSM uses mamba_env — the launcher automatically puts it in its own job.
+
+study: arch_comparison_mof4_2
+dataset_path: datasets/mof_synthesis_4.npz
+scaffold: mof_synthesis_4
+
+runs_per_job: 2
+time: "04:00:00"
+compare_time: "01:00:00"
+
+runs:
+  - model_class: ode_rnn
+    base_config: configs/archs/gru.yaml
+    exp_name: mof4_gru
+
+  - model_class: ode_transformer
+    base_config: configs/archs/transformer.yaml
+    exp_name: mof4_transformer
+    context_len: 128
+    epochs: 100
+    warmup_epochs: 10
+
+  - model_class: ode_mamba_ssm
+    base_config: configs/archs/mamba_ssm.yaml
+    exp_name: mof4_mamba_ssm
+    dropout: 0.1
+    env: mamba_env
+    time: "02:00:00"

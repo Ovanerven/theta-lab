@@ -1,0 +1,76 @@
+# Flash attention ablation: no-flash vs flash at different batch sizes.
+# Tests whether flash attention affects accuracy, and how batch size impacts speed.
+# Runs on both mof_synthesis_4 and single_enzyme_lumped to check generalization.
+
+study: transformer_flash_attention_test
+runs_per_job: 1
+time: "03:00:00"
+compare_time: "01:00:00"
+partition: gpu_h100
+
+runs:
+  # ── mof_synthesis_4 ──────────────────────────────────────────────────────
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof4_no_flash_bs32
+    dataset_path: datasets/mof_synthesis_4.npz
+    scaffold: mof_synthesis_4
+    autocast_bf16: false
+    batch_size: 32
+    epochs: 100
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof4_flash_bs32
+    dataset_path: datasets/mof_synthesis_4.npz
+    scaffold: mof_synthesis_4
+    autocast_bf16: true
+    batch_size: 32
+    epochs: 100
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof4_flash_bs500
+    dataset_path: datasets/mof_synthesis_4.npz
+    scaffold: mof_synthesis_4
+    autocast_bf16: true
+    batch_size: 500
+    epochs: 100
+
+  - base_config: configs/archs/transformer.yaml
+    exp_name: mof4_flash_bs1000
+    dataset_path: datasets/mof_synthesis_4.npz
+    scaffold: mof_synthesis_4
+    autocast_bf16: true
+    batch_size: 1000
+    epochs: 100
+
+  # ── single_enzyme_lumped ─────────────────────────────────────────────────
+  # - base_config: configs/archs/transformer.yaml
+  #   exp_name: enzyme_no_flash_bs32
+  #   dataset_path: datasets/single_enzyme_lumped.npz
+  #   scaffold: single_enzyme_lumped
+  #   autocast_bf16: false
+  #   batch_size: 32
+  #   epochs: 100
+
+  # - base_config: configs/archs/transformer.yaml
+  #   exp_name: enzyme_flash_bs32
+  #   dataset_path: datasets/single_enzyme_lumped.npz
+  #   scaffold: single_enzyme_lumped
+  #   autocast_bf16: true
+  #   batch_size: 32
+  #   epochs: 100
+
+  # - base_config: configs/archs/transformer.yaml
+  #   exp_name: enzyme_flash_bs500
+  #   dataset_path: datasets/single_enzyme_lumped.npz
+  #   scaffold: single_enzyme_lumped
+  #   autocast_bf16: true
+  #   batch_size: 500
+  #   epochs: 100
+
+  # - base_config: configs/archs/transformer.yaml
+  #   exp_name: enzyme_flash_bs1000
+  #   dataset_path: datasets/single_enzyme_lumped.npz
+  #   scaffold: single_enzyme_lumped
+  #   autocast_bf16: true
+  #   batch_size: 1000
+  #   epochs: 100

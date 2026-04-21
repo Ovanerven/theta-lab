@@ -1,0 +1,28 @@
+# Architecture comparison on single enzyme kinetics (single_enzyme_lumped).
+# Mirrors single_enzyme_arch_comparison.sh but driven by the launcher.
+
+study: arch_comparison_enzyme
+dataset_path: datasets/single_enzyme_lumped.npz
+scaffold: single_enzyme_lumped
+
+runs_per_job: 2
+time: "03:00:00"
+compare_time: "00:30:00"
+
+runs:
+  - model_class: ode_rnn
+    base_config: configs/archs/gru.yaml
+    exp_name: gru
+
+  - model_class: lstm_rnn
+    base_config: configs/archs/gru.yaml
+    exp_name: lstm
+
+  - model_class: ode_transformer
+    base_config: configs/archs/transformer.yaml
+    exp_name: transformer
+
+  - model_class: ode_mamba
+    base_config: configs/archs/mamba.yaml
+    exp_name: mamba
+    env: mamba_env
