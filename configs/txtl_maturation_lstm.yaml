@@ -2,8 +2,8 @@
 # States [R, m, mm, p, pm, DNA]; DNA is driven by u_to_y_jump from the "DNA c"
 # column of u_seq (dilution-corrected concentration delta).
 
-study: real_ivtt
-exp_name: txtl_maturation
+study: real_ivtt_test
+exp_name: txtl_lstm_default
 out_root: experiments
 
 epochs: 100

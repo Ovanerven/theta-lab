@@ -13,7 +13,6 @@ val_n: 100
 test_n: 100
 seed: 42
 
-# hidden: 256
 hidden: 128
 lift_dim: 32
 num_layers: 2

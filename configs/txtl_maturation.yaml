@@ -14,7 +14,7 @@ val_n: 64
 test_n: 64
 seed: 42
 
-hidden: 256
+hidden: 128
 lift_dim: 32
 num_layers: 2
 dropout: 0.1

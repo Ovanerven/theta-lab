@@ -2,8 +2,8 @@
 # States [R, m, mm, p, pm, DNA]; DNA is driven by u_to_y_jump from the "DNA c"
 # column of u_seq (dilution-corrected concentration delta).
 
-study: real_ivtt
-exp_name: txtl_maturation
+study: real_ivtt_test
+exp_name: txtl_mamba_default
 out_root: experiments
 
 epochs: 100
@@ -19,6 +19,11 @@ lift_dim: 32
 num_layers: 2
 dropout: 0.1
 grad_clip: 1.0
+
+# Mamba-specific
+d_state: 16
+expand: 2
+d_conv: 4
 
 teacher_forcing: true
 tf_every: 50
@@ -39,4 +44,4 @@ n_substeps: 1
 
 ckpt_every: 10
 jit_scripting: true
-model_class: ode_rnn
+model_class: ode_mambapy

@@ -2,7 +2,7 @@
 # States [R, m, mm, p, pm, DNA]; DNA is driven by u_to_y_jump from the "DNA c"
 # column of u_seq (dilution-corrected concentration delta).
 
-study: real_ivtt
+study: real_ivtt_test
 exp_name: txtl_transformer_test
 out_root: experiments
 
