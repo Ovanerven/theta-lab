@@ -9,6 +9,7 @@ from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
 from models.ode_lstm import OdeLSTM
+from models.ode_mambapy import OdeMambapySSM
 
 try:
     from models.ode_mamba_ssm import OdeMambaSSM
@@ -28,7 +29,8 @@ MODELS: dict = {
     "ode_fixed_theta":    OdeFixedTheta,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
+    "ode_mambapy":       OdeMambapySSM,        
     # "ode_mamba":          OdeMamba,
-    # "ode_transformer_kvcache": OdeTransformer_transformer,  # alias — same class, explicit name for ablation table
+    # "ode_transformer_kvcache": OdeTransformer_transformer,
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),
 }

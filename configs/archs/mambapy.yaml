@@ -1,8 +1,9 @@
-# Base config for GRU (ode_rnn).
-# Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
+# Mamba encoder using mambapy (pure-PyTorch, CPU/MPS/CUDA compatible).
+# Install: pip install mambapy
+# Override study/exp_name/scaffold/dataset_path per run via --set.
 
-study: LSTM_bias_check
-exp_name: GRU
+study: mambapy_test
+exp_name: mambapy_test1
 out_root: experiments
 
 epochs: 100
@@ -13,13 +14,16 @@ val_n: 100
 test_n: 100
 seed: 42
 
-# hidden: 256
 hidden: 128
 lift_dim: 32
-# num_layers: 2
-num_layers: 1
+num_layers: 2
 dropout: 0.0
 grad_clip: 1.0
+
+# Mamba-specific
+d_state: 16
+expand: 2
+d_conv: 4
 
 teacher_forcing: true
 tf_every: 50
@@ -32,5 +36,5 @@ theta_hi: 2.0
 n_substeps: 1
 
 ckpt_every: 10
-jit_scripting: true
-model_class: ode_rnn
+jit_scripting: false
+model_class: ode_mambapy
