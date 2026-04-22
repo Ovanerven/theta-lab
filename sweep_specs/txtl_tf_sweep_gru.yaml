@@ -1,0 +1,41 @@
+# Teacher-forcing frequency sweep (GRU, TXTL maturation).
+#
+# All runs drop TF at epoch 70, so the last 30 epochs are fully free-running.
+# We vary tf_every (how often ground-truth is injected during TF epochs).
+#
+#   TF1  No teacher forcing at all (baseline reference)
+#   TF2  tf_every=50, drop at 70  (default frequency, sensible drop)
+#   TF3  tf_every=25, drop at 70  (2x more frequent)
+#   TF4  tf_every=10, drop at 70  (5x more frequent)
+#   TF5  tf_every=50, never drop  (current default — TF throughout all 100 epochs)
+
+study: txtl_tf_sweep_gru
+runs_per_job: 3
+time: "04:00:00"
+partition: gpu_a100
+no_plot: true
+
+fixed:
+  base_config: configs/archs/gru.yaml
+  dataset_path: datasets/real_ivtt_full.npz
+  scaffold: txtl_maturation_dna
+  obs_idx: "[2,4]"
+  theta_lo: 1.0e-6
+  theta_hi: 1.0
+  val_n: 64
+  test_n: 64
+  seed: 42
+  lift_dim: 32
+  epochs: 100
+
+runs:
+  # TF1 — no teacher forcing
+  - {exp_name: TF1_no_tf,          teacher_forcing: false}
+  # TF2 — default frequency, drop at epoch 70
+  - {exp_name: TF2_every50_drop70, tf_every: 50, tf_drop_epoch: 70}
+  # TF3 — 2x more frequent, drop at epoch 70
+  - {exp_name: TF3_every25_drop70, tf_every: 25, tf_drop_epoch: 70}
+  # TF4 — 5x more frequent, drop at epoch 70
+  - {exp_name: TF4_every10_drop70, tf_every: 10, tf_drop_epoch: 70}
+  # TF5 — default frequency, never drops (current default behaviour)
+  - {exp_name: TF5_every50_nodrop, tf_every: 50, tf_drop_epoch: 500}
