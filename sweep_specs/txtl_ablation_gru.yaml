@@ -13,10 +13,10 @@
 #   A8  ode_rnn            — + gamma bounds + L2 theta smoothness
 
 study: txtl_ablation_gru
-runs_per_job: 3
-time: "04:00:00"
+runs_per_job: 1
+time: "04:30:00"
 partition: gpu_a100
-no_plot: true
+no_plot: false
 
 fixed:
   dataset_path: datasets/real_ivtt_full.npz

@@ -10,6 +10,8 @@ from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
 from models.ode_lstm import OdeLSTM
 from models.ode_mambapy import OdeMambapySSM
+from models.ode_transformer_grouped import OdeTransformerGrouped
+
 
 try:
     from models.ode_mamba_ssm import OdeMambaSSM
@@ -29,7 +31,8 @@ MODELS: dict = {
     "ode_fixed_theta":    OdeFixedTheta,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
-    "ode_mambapy":       OdeMambapySSM,        
+    "ode_mambapy":       OdeMambapySSM,
+    "ode_transformer_grouped": OdeTransformerGrouped,
     # "ode_mamba":          OdeMamba,
     # "ode_transformer_kvcache": OdeTransformer_transformer,
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),

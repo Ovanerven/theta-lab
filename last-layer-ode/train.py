@@ -175,6 +175,8 @@ class TrainConfig:
 
     # Transformer-specific (ignored by non-Transformer models via **kwargs)
     context_len: int = 64  # sliding window size; set >= sequence length for full context
+    tf_group_size: int = 32  # grouped-TF chunk size for ode_transformer_grouped
+    ar_gap: int = 4  # autoregressive steps inserted between grouped-TF chunks
 
     # Mamba-specific (ignored by non-Mamba models via **kwargs)
     d_state: int = 16
@@ -450,6 +452,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         n_substeps=cfg.n_substeps,
         use_basal=cfg.use_basal,
         context_len=cfg.context_len,
+        tf_group_size=cfg.tf_group_size,
+        ar_gap=cfg.ar_gap,
         theta_bounded=cfg.theta_bounded,
         d_state=cfg.d_state,
         expand=cfg.expand,
@@ -459,7 +463,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
-    if cfg.autocast_bf16 and cfg.model_class == "ode_transformer" and device.type == "cuda":
+    if cfg.autocast_bf16 and cfg.model_class in {"ode_transformer", "ode_transformer_grouped"} and device.type == "cuda":
         _B, _W, _H = 2, 8, model.hidden
         _x = torch.randn(_B, _W, _H, device=device, dtype=torch.bfloat16)
         _mask = nn.Transformer.generate_square_subsequent_mask(_W, device=device).to(torch.bfloat16)
@@ -553,6 +557,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         obs_idx = torch.arange(P_obs, device=device, dtype=torch.long)
 
     dt_tensor = torch.from_numpy(ds.dt).to(device)
+    grouped_model = cfg.model_class == "ode_transformer_grouped"
 
     for ep in range(1, cfg.epochs + 1):
         ep_t0 = time.time()
@@ -575,6 +580,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 batch_lengths = batch_lengths.to(device)
 
             opt.zero_grad(set_to_none=True)
+            model_kwargs = {
+                "teacher_forcing": teacher_forcing,
+                "tf_every": int(cfg.tf_every),
+            }
+            if grouped_model and batch_lengths is not None:
+                model_kwargs["lengths"] = batch_lengths
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
                 pred, theta, _ = model(
                     y0,
@@ -582,8 +593,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     dt_seq,
                     obs_idx,
                     y_seq,
-                    teacher_forcing=teacher_forcing,
-                    tf_every=int(cfg.tf_every),
+                    **model_kwargs,
                 )
             pred = pred[:, :, obs_idx] 
             y_seq = y_seq[:, :, obs_idx]
@@ -637,8 +647,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
 
+                    model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                    if grouped_model and batch_lengths is not None:
+                        model_kwargs["lengths"] = batch_lengths
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
-                        pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+                        pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
                     pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
                     loss = loss_fn(pred, y_seq, batch_lengths)
@@ -741,7 +754,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 dt_seq = dt_seq.to(device)
                 if batch_lengths is not None:
                     batch_lengths = batch_lengths.to(device)
-                pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+                model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                if grouped_model and batch_lengths is not None:
+                    model_kwargs["lengths"] = batch_lengths
+                pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
                 pred = pred[:, :, obs_idx]
                 y_seq = y_seq[:, :, obs_idx]
                 loss = loss_fn(pred, y_seq, batch_lengths)

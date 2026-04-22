@@ -10,6 +10,10 @@ def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
+def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+
+
 class OdeTransformer(nn.Module):
     """
     Causal Transformer encoder replacing the GRU history encoder.
@@ -56,6 +60,15 @@ class OdeTransformer(nn.Module):
         self.theta_hi   = float(theta_hi)
         self.hidden     = int(hidden)
         self.context_len = int(context_len)
+
+        if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
+            lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
+            hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
+        else:
+            lo = torch.full((self.theta_dim,), theta_lo)
+            hi = torch.full((self.theta_dim,), theta_hi)
+        self.register_buffer("theta_lo_vec", lo)
+        self.register_buffer("theta_hi_vec", hi)
 
         self.lift = nn.Sequential(
             nn.Linear(self.U + self.P, lift_dim),
@@ -176,13 +189,13 @@ class OdeTransformer(nn.Module):
             raw = self.head(z)
 
             if self.use_basal:
-                theta_k = gamma(raw[:, :self.theta_dim], self.theta_lo, self.theta_hi)
+                theta_k = log_gamma(raw[:, :self.theta_dim], self.theta_lo_vec, self.theta_hi_vec)
                 beta_k  = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 beta_out[:, k, :] = beta_k
                 y = y_prev + (u_k @ self.u_to_y_jump)
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
-                theta_k = gamma(raw, self.theta_lo, self.theta_hi)
+                theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
                 y = y_prev + (u_k @ self.u_to_y_jump)
                 y = self._rk4_substeps(y, dt_k, theta_k)
 
