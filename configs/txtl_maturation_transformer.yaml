@@ -18,7 +18,6 @@ hidden: 128
 lift_dim: 32
 num_layers: 2
 ff_mult: 4
-dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true

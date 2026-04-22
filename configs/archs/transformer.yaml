@@ -2,7 +2,7 @@
 # Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
 
 study: transformer_test
-exp_name: run
+exp_name: transformer_test
 out_root: experiments
 
 epochs: 200
@@ -17,7 +17,7 @@ seed: 42
 hidden: 128
 lift_dim: 32
 num_layers: 2
-ff_mult: 2
+ff_mult: 4
 grad_clip: 1.0
 
 teacher_forcing: true
