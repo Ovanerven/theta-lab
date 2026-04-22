@@ -6,7 +6,7 @@ exp_name: run
 out_root: experiments
 
 epochs: 100
-batch_size: 1000
+batch_size: 32
 lr: 0.001
 weight_decay: 0.0085
 val_n: 100

@@ -31,6 +31,9 @@ class ODEDataset(Dataset):
       obs_indices     : (P_obs,)
     Optional:
       names_full, control_names, obs_names
+      lengths : (N,) — per-sample valid sequence length.
+                When present, __getitem__ returns trimmed tensors
+                and collate_varlen pads each batch to its own max.
     """
 
     def __init__(self, npz_path: str | Path):
@@ -53,10 +56,25 @@ class ODEDataset(Dataset):
         self.control_names = d["control_names"].astype(str) if "control_names" in d else None
         self.obs_names = d["obs_names"].astype(str) if "obs_names" in d else None
 
+        # Variable-length support
+        if "lengths" in d:
+            self.lengths = d["lengths"].astype(np.int64)  # (N,)
+            self.variable_length = True
+        else:
+            self.lengths = None
+            self.variable_length = False
+
     def __len__(self) -> int:
         return self.y0.shape[0]
 
     def __getitem__(self, i: int):
+        if self.variable_length:
+            L = int(self.lengths[i])
+            return (
+                torch.from_numpy(self.y0[i]),          # (P_obs,)
+                torch.from_numpy(self.u_seq[i, :L]),   # (L,U)
+                torch.from_numpy(self.y_seq[i, :L]),   # (L,P_obs)
+            )
         return (
             torch.from_numpy(self.y0[i]),  # (P_obs,)
             torch.from_numpy(self.u_seq[i]),  # (K,U)
@@ -66,24 +84,53 @@ class ODEDataset(Dataset):
 
 def collate(batch):
     y0, u, y = zip(*batch)
-    return torch.stack(y0), torch.stack(u), torch.stack(y)
+    return torch.stack(y0), torch.stack(u), torch.stack(y), None
+
+
+def collate_varlen(batch):
+    """Pad each batch to its own max length; return lengths tensor."""
+    y0_list, u_list, y_list = zip(*batch)
+    lengths = torch.tensor([u.shape[0] for u in u_list], dtype=torch.long)
+    y0 = torch.stack(y0_list)
+    u_padded = torch.nn.utils.rnn.pad_sequence(u_list, batch_first=True)   # (B, K_batch, U)
+    y_padded = torch.nn.utils.rnn.pad_sequence(y_list, batch_first=True)   # (B, K_batch, P)
+    return y0, u_padded, y_padded, lengths
+
+
+def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> torch.Tensor:
+    """Build (B, K) boolean mask: True for valid timesteps."""
+    return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
 
 
 def loss_fn(
     pred: torch.Tensor,
     y_seq: torch.Tensor,
+    lengths: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Compute MSE loss in log1p space."""
+    """Compute MSE loss in log1p space, optionally masking padded timesteps."""
     log_y = torch.log1p(y_seq)
     log_pred = torch.log1p(pred)
     se = (log_pred - log_y).pow(2)  # (B,K,P)
+    if lengths is not None:
+        mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
+        se = se * mask.unsqueeze(-1)  # zero out padded positions
+        return se.sum() / (mask.sum() * se.shape[-1])
     return se.mean()
 
 
-def loss_fn_per_species(pred: torch.Tensor, y_seq: torch.Tensor) -> torch.Tensor:
+def loss_fn_per_species(
+    pred: torch.Tensor,
+    y_seq: torch.Tensor,
+    lengths: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     log_y = torch.log1p(y_seq)
     log_pred = torch.log1p(pred)
-    return (log_pred - log_y).pow(2).mean(dim=(0, 1))
+    se = (log_pred - log_y).pow(2)
+    if lengths is not None:
+        mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
+        se = se * mask.unsqueeze(-1)
+        return se.sum(dim=(0, 1)) / mask.sum()
+    return se.mean(dim=(0, 1))
 
 
 @dataclass
@@ -351,12 +398,14 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     np.savez(exp_dir / "split.npz",
              train_idx=train_idx, val_idx=val_idx, test_idx=test_idx)
 
+    collate_fn = collate_varlen if ds.variable_length else collate
+
     train_loader = DataLoader(
         torch.utils.data.Subset(ds, train_idx.tolist()),
         batch_size=cfg.batch_size,
         shuffle=True,
         num_workers=cfg.num_workers,
-        collate_fn=collate,
+        collate_fn=collate_fn,
         pin_memory=bool(cfg.pin_memory),
     )
 
@@ -367,7 +416,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             batch_size=cfg.batch_size,
             shuffle=False,
             num_workers=cfg.num_workers,
-            collate_fn=collate,
+            collate_fn=collate_fn,
             pin_memory=bool(cfg.pin_memory),
         )
 
@@ -514,13 +563,16 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         tr_total = 0.0
         tr_batches = 0
 
-        for y0, u_seq, y_seq in train_loader:
-            dt_seq = dt_tensor[None, :].expand(y0.shape[0], -1)  # no CPU transfer
+        for y0, u_seq, y_seq, batch_lengths in train_loader:
+            K_batch = u_seq.shape[1]
+            dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
 
             y0 = y0.to(device)
             y_seq = y_seq.to(device)
             u_seq = u_seq.to(device)
             dt_seq = dt_seq.to(device)
+            if batch_lengths is not None:
+                batch_lengths = batch_lengths.to(device)
 
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -536,7 +588,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             pred = pred[:, :, obs_idx] 
             y_seq = y_seq[:, :, obs_idx]
 
-            loss = loss_fn(pred, y_seq)
+            loss = loss_fn(pred, y_seq, batch_lengths)
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -573,23 +625,26 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_total = None
 
             with torch.no_grad():
-                for y0, u_seq, y_seq in val_loader:
-                    dt_seq = torch.from_numpy(ds.dt)
+                for y0, u_seq, y_seq, batch_lengths in val_loader:
+                    K_batch = u_seq.shape[1]
+                    dt_seq = torch.from_numpy(ds.dt[:K_batch])
                     dt_seq = dt_seq[None, :].expand(y0.shape[0], -1)
 
                     y0 = y0.to(device)
                     y_seq = y_seq.to(device)
                     u_seq = u_seq.to(device)
                     dt_seq = dt_seq.to(device)
+                    if batch_lengths is not None:
+                        batch_lengths = batch_lengths.to(device)
 
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
                         pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
                     pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
-                    loss = loss_fn(pred, y_seq)
+                    loss = loss_fn(pred, y_seq, batch_lengths)
                     va_total += float(loss.item())
 
-                    sp = loss_fn_per_species(pred, y_seq).detach().cpu()
+                    sp = loss_fn_per_species(pred, y_seq, batch_lengths).detach().cpu()
                     sp_total = sp if sp_total is None else sp_total + sp
                     va_batches += 1
 
@@ -669,7 +724,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             batch_size=cfg.batch_size,
             shuffle=False,
             num_workers=cfg.num_workers,
-            collate_fn=collate,
+            collate_fn=collate_fn,
             pin_memory=bool(cfg.pin_memory),
         )
         model.eval()
@@ -677,18 +732,21 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_batches = 0
         sp_total = None
         with torch.no_grad():
-            for y0, u_seq, y_seq in test_loader:
-                dt_seq = dt_tensor[None, :].expand(y0.shape[0], -1)
+            for y0, u_seq, y_seq, batch_lengths in test_loader:
+                K_batch = u_seq.shape[1]
+                dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
                 y0 = y0.to(device)
                 y_seq = y_seq.to(device)
                 u_seq = u_seq.to(device)
                 dt_seq = dt_seq.to(device)
+                if batch_lengths is not None:
+                    batch_lengths = batch_lengths.to(device)
                 pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
                 pred = pred[:, :, obs_idx]
                 y_seq = y_seq[:, :, obs_idx]
-                loss = loss_fn(pred, y_seq)
+                loss = loss_fn(pred, y_seq, batch_lengths)
                 te_total += float(loss.item())
-                sp = loss_fn_per_species(pred, y_seq).detach().cpu()
+                sp = loss_fn_per_species(pred, y_seq, batch_lengths).detach().cpu()
                 sp_total = sp if sp_total is None else sp_total + sp
                 te_batches += 1
         test_loss = te_total / max(1, te_batches)

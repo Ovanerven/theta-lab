@@ -1,0 +1,39 @@
+# Real IVTT data, minimal 3-state TXTL scaffold.
+# States [mm, pm, DNA]; DNA is driven by u_to_y_jump from the "DNA c"
+# column of u_seq. Pure cascade mm → pm with no maturation structure.
+
+study: real_ivtt
+exp_name: txtl_simple
+out_root: experiments
+
+epochs: 100
+batch_size: 32
+lr: 0.001
+weight_decay: 0.0085
+val_n: 64
+test_n: 64
+seed: 42
+
+hidden: 256
+lift_dim: 32
+num_layers: 2
+dropout: 0.1
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 50
+tf_drop_epoch: 500
+
+scaffold: txtl_simple_dna
+dataset_path: datasets/real_ivtt_simple.npz
+
+# Observed states are mm (idx 0) and pm (idx 1); DNA (idx 2) is hidden.
+obs_idx: [0, 1]
+
+theta_lo: 1.0e-5
+theta_hi: 1.0e-1
+n_substeps: 1
+
+ckpt_every: 10
+jit_scripting: true
+model_class: ode_rnn
