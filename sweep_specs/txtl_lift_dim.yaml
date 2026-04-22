@@ -1,0 +1,39 @@
+# lift_dim sweep on real IVTT data (txtl_maturation_dna scaffold).
+# 3 archs x 5 lift_dim values = 15 runs.
+
+study: txtl_lift_dim
+runs_per_job: 3
+time: "04:00:00"
+partition: gpu_a100
+no_plot: true
+
+fixed:
+  dataset_path: datasets/real_ivtt_full.npz
+  scaffold: txtl_maturation_dna
+  obs_idx: "[2,4]"
+  theta_lo: 1.0e-6
+  theta_hi: 1.0
+  val_n: 64
+  test_n: 64
+  seed: 42
+  epochs: 100
+
+runs:
+  # --- LSTM ---
+  - {base_config: configs/archs/lstm.yaml,    lift_dim: 8,   exp_name: lstm_lift8}
+  - {base_config: configs/archs/lstm.yaml,    lift_dim: 16,  exp_name: lstm_lift16}
+  - {base_config: configs/archs/lstm.yaml,    lift_dim: 32,  exp_name: lstm_lift32}
+  - {base_config: configs/archs/lstm.yaml,    lift_dim: 64,  exp_name: lstm_lift64}
+  - {base_config: configs/archs/lstm.yaml,    lift_dim: 128, exp_name: lstm_lift128}
+  # --- GRU ---
+  - {base_config: configs/archs/gru.yaml,     lift_dim: 8,   exp_name: gru_lift8}
+  - {base_config: configs/archs/gru.yaml,     lift_dim: 16,  exp_name: gru_lift16}
+  - {base_config: configs/archs/gru.yaml,     lift_dim: 32,  exp_name: gru_lift32}
+  - {base_config: configs/archs/gru.yaml,     lift_dim: 64,  exp_name: gru_lift64}
+  - {base_config: configs/archs/gru.yaml,     lift_dim: 128, exp_name: gru_lift128}
+  # --- MambaP ---
+  - {base_config: configs/archs/mambapy.yaml, lift_dim: 8,   exp_name: mamba_lift8}
+  - {base_config: configs/archs/mambapy.yaml, lift_dim: 16,  exp_name: mamba_lift16}
+  - {base_config: configs/archs/mambapy.yaml, lift_dim: 32,  exp_name: mamba_lift32}
+  - {base_config: configs/archs/mambapy.yaml, lift_dim: 64,  exp_name: mamba_lift64}
+  - {base_config: configs/archs/mambapy.yaml, lift_dim: 128, exp_name: mamba_lift128}

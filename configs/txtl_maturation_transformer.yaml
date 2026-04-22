@@ -3,7 +3,7 @@
 # column of u_seq (dilution-corrected concentration delta).
 
 study: real_ivtt
-exp_name: txtl_maturation
+exp_name: txtl_transformer_test
 out_root: experiments
 
 epochs: 100
@@ -14,9 +14,10 @@ val_n: 64
 test_n: 64
 seed: 42
 
-hidden: 256
+hidden: 128
 lift_dim: 32
 num_layers: 2
+ff_mult: 4
 dropout: 0.1
 grad_clip: 1.0
 
@@ -39,4 +40,6 @@ n_substeps: 1
 
 ckpt_every: 10
 jit_scripting: false
-model_class: lstm_rnn
+torch_compile: false
+autocast_bf16: true
+model_class: ode_transformer

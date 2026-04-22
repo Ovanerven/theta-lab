@@ -1,11 +1,11 @@
 # Base config for GRU (ode_rnn).
 # Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
 
-study: LSTM_bias_check
-exp_name: GRU
+study: gru_test
+exp_name: gru_test1
 out_root: experiments
 
-epochs: 100
+epochs: 200
 batch_size: 32
 lr: 0.001
 weight_decay: 0.0085
@@ -16,9 +16,8 @@ seed: 42
 # hidden: 256
 hidden: 128
 lift_dim: 32
-# num_layers: 2
-num_layers: 1
-dropout: 0.0
+num_layers: 2
+dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true

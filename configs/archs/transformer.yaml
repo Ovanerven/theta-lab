@@ -1,7 +1,7 @@
 # Base config for Transformer (ode_transformer).
 # Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
 
-study: adhoc
+study: transformer_test
 exp_name: run
 out_root: experiments
 

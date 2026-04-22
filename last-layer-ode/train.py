@@ -198,8 +198,8 @@ class TrainConfig:
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
 
-    l1_regularization: bool = False  # if True, model learns constant theta (for ablation)
-    l2_regularization: bool = False  # if True, model learns constant theta (for ablation)
+    l1_regularization: bool = False   # smoothness: penalizes mean |theta[t] - theta[t-1]|
+    l2_regularization: bool = False   # smoothness: penalizes mean (theta[t] - theta[t-1])^2
 
     lambda_reg: float = 0.001
 

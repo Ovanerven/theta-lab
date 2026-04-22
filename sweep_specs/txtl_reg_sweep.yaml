@@ -1,0 +1,55 @@
+# L1 and L2 smoothness regularization sweep on real IVTT data.
+# Both flags penalize theta changes across time steps (not magnitude).
+# 3 archs x 2 reg types x 4 lambdas = 24 runs.
+
+study: txtl_reg_sweep
+runs_per_job: 3
+time: "04:00:00"
+partition: gpu_a100
+no_plot: true
+
+fixed:
+  dataset_path: datasets/real_ivtt_full.npz
+  scaffold: txtl_maturation_dna
+  obs_idx: "[2,4]"
+  theta_lo: 1.0e-6
+  theta_hi: 1.0
+  val_n: 64
+  test_n: 64
+  seed: 42
+  lift_dim: 32
+  epochs: 100
+
+runs:
+  # --- L1 smoothness ---
+  # LSTM
+  - {base_config: configs/archs/lstm.yaml,    l1_regularization: true, lambda_reg: 0.0001, exp_name: lstm_l1_1e-4}
+  - {base_config: configs/archs/lstm.yaml,    l1_regularization: true, lambda_reg: 0.001,  exp_name: lstm_l1_1e-3}
+  - {base_config: configs/archs/lstm.yaml,    l1_regularization: true, lambda_reg: 0.01,   exp_name: lstm_l1_1e-2}
+  - {base_config: configs/archs/lstm.yaml,    l1_regularization: true, lambda_reg: 0.1,    exp_name: lstm_l1_1e-1}
+  # GRU
+  - {base_config: configs/archs/gru.yaml,     l1_regularization: true, lambda_reg: 0.0001, exp_name: gru_l1_1e-4}
+  - {base_config: configs/archs/gru.yaml,     l1_regularization: true, lambda_reg: 0.001,  exp_name: gru_l1_1e-3}
+  - {base_config: configs/archs/gru.yaml,     l1_regularization: true, lambda_reg: 0.01,   exp_name: gru_l1_1e-2}
+  - {base_config: configs/archs/gru.yaml,     l1_regularization: true, lambda_reg: 0.1,    exp_name: gru_l1_1e-1}
+  # MambaP
+  - {base_config: configs/archs/mambapy.yaml, l1_regularization: true, lambda_reg: 0.0001, exp_name: mamba_l1_1e-4}
+  - {base_config: configs/archs/mambapy.yaml, l1_regularization: true, lambda_reg: 0.001,  exp_name: mamba_l1_1e-3}
+  - {base_config: configs/archs/mambapy.yaml, l1_regularization: true, lambda_reg: 0.01,   exp_name: mamba_l1_1e-2}
+  - {base_config: configs/archs/mambapy.yaml, l1_regularization: true, lambda_reg: 0.1,    exp_name: mamba_l1_1e-1}
+  # --- L2 smoothness ---
+  # LSTM
+  - {base_config: configs/archs/lstm.yaml,    l2_regularization: true, lambda_reg: 0.0001, exp_name: lstm_l2_1e-4}
+  - {base_config: configs/archs/lstm.yaml,    l2_regularization: true, lambda_reg: 0.001,  exp_name: lstm_l2_1e-3}
+  - {base_config: configs/archs/lstm.yaml,    l2_regularization: true, lambda_reg: 0.01,   exp_name: lstm_l2_1e-2}
+  - {base_config: configs/archs/lstm.yaml,    l2_regularization: true, lambda_reg: 0.1,    exp_name: lstm_l2_1e-1}
+  # GRU
+  - {base_config: configs/archs/gru.yaml,     l2_regularization: true, lambda_reg: 0.0001, exp_name: gru_l2_1e-4}
+  - {base_config: configs/archs/gru.yaml,     l2_regularization: true, lambda_reg: 0.001,  exp_name: gru_l2_1e-3}
+  - {base_config: configs/archs/gru.yaml,     l2_regularization: true, lambda_reg: 0.01,   exp_name: gru_l2_1e-2}
+  - {base_config: configs/archs/gru.yaml,     l2_regularization: true, lambda_reg: 0.1,    exp_name: gru_l2_1e-1}
+  # MambaP
+  - {base_config: configs/archs/mambapy.yaml, l2_regularization: true, lambda_reg: 0.0001, exp_name: mamba_l2_1e-4}
+  - {base_config: configs/archs/mambapy.yaml, l2_regularization: true, lambda_reg: 0.001,  exp_name: mamba_l2_1e-3}
+  - {base_config: configs/archs/mambapy.yaml, l2_regularization: true, lambda_reg: 0.01,   exp_name: mamba_l2_1e-2}
+  - {base_config: configs/archs/mambapy.yaml, l2_regularization: true, lambda_reg: 0.1,    exp_name: mamba_l2_1e-1}

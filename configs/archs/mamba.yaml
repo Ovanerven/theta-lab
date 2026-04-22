@@ -1,8 +1,8 @@
 # Base config for Mamba (ode_mamba).
 # Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
 
-study: maba_test
-exp_name: maba_test1
+study: mamba_test
+exp_name: mamba_test1
 out_root: experiments
 
 epochs: 100
