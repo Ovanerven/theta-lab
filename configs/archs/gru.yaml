@@ -1,8 +1,8 @@
 # Base config for GRU (ode_rnn).
 # Override study/exp_name/out_root/scaffold/dataset_path per run via --set.
 
-study: adhoc
-exp_name: run
+study: LSTM_bias_check
+exp_name: GRU
 out_root: experiments
 
 epochs: 100

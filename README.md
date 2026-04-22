@@ -24,7 +24,7 @@ All runnable scripts in the last-layer-ode directory. Run everything from the **
 **Typical evaluation workflow:**
 ```bash
 # Compare runs — first call computes NRMSE and saves nrmse_cache.csv
-python last-layer-ode/metrics/compare_runs.py experiments/scaffold_size_effect
+python last-layer-ode/metrics/compare_runs.py experiments/scaffold_size_effect --csv results/result.csv
 
 # Plot NRMSE vs P — reuses the cache
 python last-layer-ode/metrics/plot_nrmse.py experiments/scaffold_size_effect --out results/scaffold_size_effect.pdf
@@ -45,6 +45,13 @@ python last-layer-ode/metrics/compare_runs.py experiments/scaffold_size_effect -
 | `analysis/per_step_theta_fit.py` | Fit theta parameters per time step via gradient descent on a single trajectory. |
 | `analysis/plot_per_step_theta_fit.py` | Plot results from `per_step_theta_fit.py` (NRMSE vs P, truth vs rollout grid). |
 | `analysis/observability_experiment.py` | Observability experiment (which species are needed for identifiability). |
+
+``
+python last-layer-ode/analysis/per_step_theta_fit.py --dataset datasets/real_ivtt_full.npz --scaffold txtl_maturation_dna --sample-idx 0 --gd-steps 400 --show-species mm,pm --out results/txtl_maturation_theta_fit
+
+python last-layer-ode/analysis/plot_per_step_theta_fit.py --export-dir results/txtl_maturation_theta_fit/exports --scaffolds txtl_maturation_dna --show-species mm,pm --sample-idx 0 --out results/txtl_maturation_theta_fit/figures/summary
+
+``
 
 ---
 
