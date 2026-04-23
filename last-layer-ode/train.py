@@ -106,14 +106,16 @@ def loss_fn(
     pred: torch.Tensor,
     y_seq: torch.Tensor,
     lengths: Optional[torch.Tensor] = None,
+    use_log_loss: bool = True,
 ) -> torch.Tensor:
-    """Compute MSE loss in log1p space, optionally masking padded timesteps."""
-    log_y = torch.log1p(y_seq)
-    log_pred = torch.log1p(pred)
-    se = (log_pred - log_y).pow(2)  # (B,K,P)
+    """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised."""
+    if use_log_loss:
+        pred  = torch.log1p(pred)
+        y_seq = torch.log1p(y_seq)
+    se = (pred - y_seq).pow(2)  # (B,K,P)
     if lengths is not None:
         mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
-        se = se * mask.unsqueeze(-1)  # zero out padded positions
+        se = se * mask.unsqueeze(-1)
         return se.sum() / (mask.sum() * se.shape[-1])
     return se.mean()
 
@@ -122,15 +124,51 @@ def loss_fn_per_species(
     pred: torch.Tensor,
     y_seq: torch.Tensor,
     lengths: Optional[torch.Tensor] = None,
+    use_log_loss: bool = True,
 ) -> torch.Tensor:
-    log_y = torch.log1p(y_seq)
-    log_pred = torch.log1p(pred)
-    se = (log_pred - log_y).pow(2)
+    if use_log_loss:
+        pred  = torch.log1p(pred)
+        y_seq = torch.log1p(y_seq)
+    se = (pred - y_seq).pow(2)
     if lengths is not None:
         mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
         se = se * mask.unsqueeze(-1)
         return se.sum(dim=(0, 1)) / mask.sum()
     return se.mean(dim=(0, 1))
+
+
+# --- Normalization utilities ---
+_NORM_STD_EPS = 1e-8
+
+
+def _compute_zscore_stats(
+    y0: np.ndarray, y_seq: np.ndarray,
+    train_idx: np.ndarray, lengths: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel mean and std from training samples only (valid timesteps only)."""
+    train_y0 = y0[train_idx]
+    if lengths is not None:
+        parts = [train_y0] + [y_seq[i, :lengths[i]] for i in train_idx]
+    else:
+        parts = [train_y0, y_seq[train_idx].reshape(-1, y0.shape[-1])]
+    all_vals = np.concatenate(parts, axis=0)
+    mean = all_vals.mean(axis=0).astype(np.float32)
+    std  = np.maximum(all_vals.std(axis=0), _NORM_STD_EPS).astype(np.float32)
+    return mean, std
+
+
+def _apply_norm(
+    arr: np.ndarray, method: str,
+    mean: np.ndarray | None = None,
+    std:  np.ndarray | None = None,
+) -> np.ndarray:
+    if method == "log":
+        return np.log1p(np.clip(arr, 0.0, None)).astype(np.float32)
+    if method == "sqrt":
+        return np.sqrt(np.clip(arr, 0.0, None)).astype(np.float32)
+    if method == "zscore":
+        return ((arr - mean) / std).astype(np.float32)
+    raise ValueError(f"Unknown obs_normalization: {method!r}. Choose from: log, sqrt, zscore")
 
 
 @dataclass

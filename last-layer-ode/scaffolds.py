@@ -1081,7 +1081,58 @@ class TXTLMaturationDNAScaffold(MechanisticScaffold):
 
         return torch.stack((dR, dm, dmm, dp, dpm, dDNA), dim=-1)
 
+class TXTLResourceandMaturationDNAScaffold(MechanisticScaffold):
+    """
+    6-state TXTL scaffold with DNA as an explicit, bolus-driven state.
 
+    The mechanism is the supervisor's `TXTL_mRNAMaturation`, with DNA promoted
+    from an exogenous scalar to a latent state so no scaffold-API change is
+    needed: the dataset's `u_to_y_jump` routes the "DNA c" (dilution-corrected
+    concentration delta) column of u_seq onto state idx 5, and dDNA/dt = 0
+    between jumps — so y[..., 5] at step k is exactly cumsum("DNA c") up to k.
+
+    States (6): R (resource pool), m (immature mRNA), mm (mature mRNA,
+                observed as Broccoli), p (immature protein),
+                pm (mature protein, observed as mCherry / 2), DNA
+
+    Parameters θ (6):
+      0  lam    : resource decay rate
+      1  VTXmax : transcription rate (per DNA per R)
+      2  kdm    : mRNA degradation rate (applies to both m and mm)
+      3  VTLmax : translation rate (per total mRNA per R)
+      4  kmt    : protein maturation rate (p → pm)
+      5  kmatm  : mRNA maturation rate (m → mm)
+
+    Observed indices within P: [2, 4]  (mm=Broccoli, pm=mCherry/2)
+    Use with: datasets/real_ivtt_full.npz (layout='full')
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=7)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        # Supervisor's log-uniform bounds for TXTL_mRNAMaturation
+        self.theta_lo_vec = [1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3]
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam,lam_O, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O_p   = torch.clamp_min(O,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dR   = -lam * R_p
+        dO   = -lam_O * O_p
+        dm   = R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  = O_p * kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
+    
 class TXTLSimpleDNAScaffold(MechanisticScaffold):
     """
     3-state minimal TXTL scaffold with DNA as an explicit, bolus-driven state.
@@ -1153,4 +1204,5 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "single_enzyme_lumped": SingleEnzymeLumpedScaffold(),
     "txtl_maturation_dna": TXTLMaturationDNAScaffold(),
     "txtl_simple_dna":     TXTLSimpleDNAScaffold(),
+    "txtl_resource_and_maturation_dna": TXTLResourceandMaturationDNAScaffold(),
 }
