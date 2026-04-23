@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 
-from train import ODEDataset, collate
+from train import ODEDataset, collate, collate_varlen
 from models import MODELS
 from scaffolds import SCAFFOLDS
 from jumps import make_u_to_y_jump
@@ -184,35 +184,44 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     n_samples = min(int(n_samples), len(plot_ds))
-    loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate)
+    collate_fn = collate_varlen if getattr(raw_ds, "variable_length", False) else collate
+    loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate_fn)
     split_label = "test" if (exp_dir is not None and (exp_dir / "split.npz").exists()) else "train"
 
-    y0, u_seq, y_seq = next(iter(loader))
-    dt_seq = torch.from_numpy(raw_ds.dt)[None, :].expand(y0.shape[0], -1)
+    y0, u_seq, y_seq, batch_lengths = next(iter(loader))
+    K_batch = u_seq.shape[1]
+    dt_seq = torch.from_numpy(raw_ds.dt[:K_batch])[None, :].expand(y0.shape[0], -1)
 
     y0 = y0.to(device)
     u_seq = u_seq.to(device)
     y_seq = y_seq.to(device)
     dt_seq = dt_seq.to(device)
+    if batch_lengths is not None:
+        batch_lengths = batch_lengths.to(device)
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        if model.__class__.__name__ == "OdeTransformerGrouped" and batch_lengths is not None:
+            model_kwargs["lengths"] = batch_lengths
+        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
     dt_np = dt_seq.cpu().numpy()
+    lengths_np = batch_lengths.cpu().numpy() if batch_lengths is not None else None
 
     P = y_pred.shape[-1]
     for i in range(n_samples):
-        t = np.concatenate([[0.0], np.cumsum(dt_np[i])])
+        Li = int(lengths_np[i]) if lengths_np is not None else y_pred.shape[1]
+        t = np.concatenate([[0.0], np.cumsum(dt_np[i, :Li])])
         fig, axes = plt.subplots(P, 1, figsize=(11, max(6, 2.0 * P)), sharex=True)
         if P == 1:
             axes = [axes]
 
         for p, ax in enumerate(axes):
-            ax.plot(t[1:], y_true[i, :, p], linewidth=2, label="true")
-            ax.plot(t[1:], y_pred[i, :, p], linewidth=2, linestyle="--", label="pred")
+            ax.plot(t[1:], y_true[i, :Li, p], linewidth=2, label="true")
+            ax.plot(t[1:], y_pred[i, :Li, p], linewidth=2, linestyle="--", label="pred")
             ax.set_ylabel(state_names[p] if p < len(state_names) else f"s{p}")
             ax.grid(True, alpha=0.25)
             if p == 0:
@@ -230,7 +239,8 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     y0, u_seq, _ = plot_ds[sample_idx]
-    dt_seq = torch.from_numpy(raw_ds.dt)
+    K = int(u_seq.shape[0])
+    dt_seq = torch.from_numpy(raw_ds.dt[:K])
 
     y0 = y0.unsqueeze(0).to(device)
     u_seq = u_seq.unsqueeze(0).to(device)
@@ -238,7 +248,10 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        _, theta, _beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        if model.__class__.__name__ == "OdeTransformerGrouped":
+            model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
+        _, theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
 
     theta_np = theta[0].cpu().numpy()  # (K, theta_dim)
     dt = dt_seq[0].cpu().numpy()
@@ -274,7 +287,8 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     y0, u_seq, _ = plot_ds[sample_idx]
-    dt_seq = torch.from_numpy(raw_ds.dt)
+    K = int(u_seq.shape[0])
+    dt_seq = torch.from_numpy(raw_ds.dt[:K])
 
     y0 = y0.unsqueeze(0).to(device)
     u_seq = u_seq.unsqueeze(0).to(device)
@@ -282,7 +296,10 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, y_seq=None, teacher_forcing=False)
+        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        if model.__class__.__name__ == "OdeTransformerGrouped":
+            model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
+        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
 
     beta_np = beta[0].cpu().numpy()  # (K, P)
     dt = dt_seq[0].cpu().numpy()
@@ -387,12 +404,13 @@ def plot_epoch_prediction_overlays(
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     y0, u_seq, y_seq = ds[sample_idx]  # y_seq is (K,P) at t1..tK
-    dt = raw_ds.dt.astype(np.float32)  # (K,)
+    K = int(u_seq.shape[0])
+    dt = raw_ds.dt[:K].astype(np.float32)  # (K,)
     t = np.cumsum(dt)                  # (K,) -> times for y_seq points (t1..tK)
 
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
-    dt_b = torch.from_numpy(raw_ds.dt).unsqueeze(0).to(device)  # (1,K)
+    dt_b = torch.from_numpy(raw_ds.dt[:K]).unsqueeze(0).to(device)  # (1,K)
 
     y_true = y_seq.cpu().numpy()  # (K,P)
     P = int(y_true.shape[1])
@@ -408,7 +426,10 @@ def plot_epoch_prediction_overlays(
         model.eval()
         with torch.no_grad():
             obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
-            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, y_seq=None, teacher_forcing=False)
+            model_kwargs = {"y_seq": None, "teacher_forcing": False}
+            if model.__class__.__name__ == "OdeTransformerGrouped":
+                model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)
+            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **model_kwargs)
         preds[ep] = pred[0].detach().cpu().numpy()  # (K,P)
 
     fig_h = max(6.0, 2.0 * P)

@@ -9,7 +9,6 @@ from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
 from models.ode_lstm import OdeLSTM
-from models.ode_mambapy import OdeMambapySSM
 from models.ode_transformer_grouped import OdeTransformerGrouped
 
 
@@ -18,6 +17,12 @@ try:
     _mamba_ssm_available = True
 except ImportError:
     _mamba_ssm_available = False
+
+try:
+    from models.ode_mambapy import OdeMambapySSM
+    _mambapy_available = True
+except ImportError:
+    _mambapy_available = False
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
@@ -31,9 +36,9 @@ MODELS: dict = {
     "ode_fixed_theta":    OdeFixedTheta,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
-    "ode_mambapy":       OdeMambapySSM,
     "ode_transformer_grouped": OdeTransformerGrouped,
     # "ode_mamba":          OdeMamba,
     # "ode_transformer_kvcache": OdeTransformer_transformer,
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),
+    **({"ode_mambapy": OdeMambapySSM} if _mambapy_available else {}),
 }

@@ -24,8 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from metrics.nrmse import load_or_compute
 
 
+OBS_SPECIES = {"mm", "pm"}  # only observed species in the TXTL dataset
+
+
 def _aggregate(rows: list[dict]) -> list[dict]:
-    """One row per run: mean of per-species medians as the sort key."""
+    """One row per run: mean of mm/pm medians as the sort key."""
     by_run: dict[str, dict] = {}
     for r in rows:
         run = r["run"]
@@ -36,7 +39,8 @@ def _aggregate(rows: list[dict]) -> list[dict]:
 
     result = []
     for run, d in by_run.items():
-        d["primary"] = float(np.mean(list(d["species"].values())))
+        obs_vals = [v for s, v in d["species"].items() if s in OBS_SPECIES]
+        d["primary"] = float(np.mean(obs_vals)) if obs_vals else float("nan")
         result.append(d)
     return sorted(result, key=lambda r: r["primary"])
 
