@@ -1,32 +1,20 @@
 """
-per_step_theta_fit.py
+per_step_theta_fit_analytical.py
 
-Oracle per-step theta fitting via gradient descent.
+Identical to per_step_theta_fit.py but replaces RK4 with the exact
+matrix-exponential solution (torch.linalg.matrix_exp).
 
-Instead of learning to predict theta with an NN, we directly optimise theta
-at each timestep using GD to minimise the one-step prediction error.
-
-Two modes:
-
-  ONE-STEP (oracle):
-    At step k, start from y_true[k], optimise theta, predict y_hat[k+1].
-    Errors never compound — best-case local fit.
-
-  HONEST ROLLOUT:
-    At step k, start from own previous prediction, optimise theta to hit
-    y_true[k+1], advance from the prediction.  Errors compound naturally.
-
-If the scaffold is structurally sufficient, both modes should track truth.
-If not, one-step still fits but honest rollout diverges — proving the scaffold
-cannot represent the true dynamics regardless of theta(t).
+This isolates whether RK4 discretisation error is the bottleneck in the
+oracle theta fit.  If the analytical version gives the same NRMSE as the
+RK4 version, the integrator is not the limiting factor.
 
 Usage:
-    python analysis/per_step_theta_fit.py \
+    python analysis/per_step_theta_fit_analytical.py \
         --dataset-dir datasets/ \
         --scaffolds reduced2,reduced3,reduced5,reduced7,reduced9,full13 \
         --sample-idx 0 \
         --gd-steps 400 \
-        --out results/per_step_theta_fit
+        --out results/per_step_theta_fit_analytical
 """
 
 import argparse
@@ -94,27 +82,45 @@ def build_scaffold_dataset_map(scaffold_names, dataset_dir: Path):
     return mapping
 
 
-def gamma(x, lo, hi):
-    return lo + (hi - lo) * torch.sigmoid(x)
-
-
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-    """Log-space sigmoid: geometric midpoint sqrt(lo*hi) at init (x=0).
-    Use instead of linear gamma when bounds span orders of magnitude."""
+    """Log-space sigmoid: geometric midpoint sqrt(lo*hi) at init (x=0)."""
     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 
-def rk4(rhs, y, dt, theta, n_sub=4):
-    if dt.ndim == 1:
-        dt = dt.unsqueeze(1)
-    h = dt / float(n_sub)
-    for _ in range(n_sub):
-        k1 = rhs(y,                 theta)
-        k2 = rhs(y + 0.5 * h * k1, theta)
-        k3 = rhs(y + 0.5 * h * k2, theta)
-        k4 = rhs(y +       h * k3, theta)
-        y  = y + (h / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-    return torch.clamp_min(y, 0.0)
+# ── Analytical solver (matrix exponential) ────────────────────────────────────
+
+def build_K_from_rhs(rhs, P: int, theta: torch.Tensor) -> torch.Tensor:
+    """
+    For a LINEAR rhs of the form rhs(y, theta) = K(theta) @ y,
+    recover K by probing with basis vectors.
+    theta : (B, theta_dim) — returns: (B, P, P)
+    """
+    B = theta.shape[0]
+    cols = []
+    for j in range(P):
+        e_j = torch.zeros(B, P, device=theta.device, dtype=theta.dtype)
+        e_j[:, j] = 1.0
+        cols.append(rhs(e_j, theta))
+    return torch.stack(cols, dim=-1)
+
+
+def analytical_step(rhs, P: int, y: torch.Tensor, dt: torch.Tensor,
+                    theta: torch.Tensor) -> torch.Tensor:
+    """
+    Exact solution to dy/dt = K(theta) y over interval dt via matrix exponential.
+    y: (B,P), dt: (B,), theta: (B,theta_dim) — returns: (B,P)
+    """
+    B = y.shape[0]
+    K = build_K_from_rhs(rhs, P, theta)
+    dt_ = dt.view(B, 1, 1)
+    Kdt = K * dt_
+    # matrix_exp not implemented on MPS — fall back to CPU for that op
+    if Kdt.device.type == "mps":
+        expKdt = torch.linalg.matrix_exp(Kdt.cpu()).to(Kdt.device)
+    else:
+        expKdt = torch.linalg.matrix_exp(Kdt)
+    y_new = torch.bmm(expKdt, y.unsqueeze(-1)).squeeze(-1)
+    return torch.clamp_min(y_new, 0.0)
 
 
 def nrmse(pred, true):
@@ -129,8 +135,7 @@ def nrmse(pred, true):
 
 def run(scaffold_name, dataset_path, sample_idx,
         gd_steps=400, lr=0.05,
-        theta_lo=1e-3, theta_hi=2.0, n_substeps=4,
-        loss_species=None,
+        theta_lo=1e-3, theta_hi=2.0,
         device=torch.device("cpu")):
     sc        = SCAFFOLDS[scaffold_name]
     rhs       = sc
@@ -146,22 +151,6 @@ def run(scaffold_name, dataset_path, sample_idx,
 
     y_full = np.concatenate([y0[None], y_seq], axis=0)   # (K+1, P)
     K      = len(dt)
-
-    # Resolve which species contribute to the loss. The dataset may expose
-    # latent (zero-padded) channels alongside real measurements; averaging
-    # over them forces the ODE to crush latent states to zero, which
-    # breaks rollout. Default to all species (legacy behavior); pass
-    # loss_species to mask to the truly-observed channels.
-    state_names = list(sc.state_names)
-    if loss_species:
-        missing = [s for s in loss_species if s not in state_names]
-        if missing:
-            raise ValueError(f"loss_species {missing} not in scaffold states {state_names}")
-        loss_idx = [state_names.index(s) for s in loss_species]
-    else:
-        loss_idx = list(range(P))
-    loss_idx_t = torch.tensor(loss_idx, dtype=torch.long, device=device)
-    print(f"  loss species: {[state_names[i] for i in loss_idx]}  (indices {loss_idx})")
 
     y_true   = torch.from_numpy(y_full).float().to(device)
     u_tensor = torch.from_numpy(u_seq).float().to(device)
@@ -192,17 +181,15 @@ def run(scaffold_name, dataset_path, sample_idx,
     for _ in range(gd_steps):
         opt_os.zero_grad()
         theta_b = log_gamma(raw_os, lo_t, hi_t)
-        y_hat_b = rk4(rhs, y_after_jump_all, dt_t, theta_b, n_substeps)
-        diff = torch.log1p(y_hat_b) - torch.log1p(y_next)
-        loss = diff.index_select(-1, loss_idx_t).pow(2).mean()
+        y_hat_b = analytical_step(rhs, P, y_after_jump_all, dt_t, theta_b)
+        loss = (torch.log1p(y_hat_b) - torch.log1p(y_next)).pow(2).mean()
         loss.backward()
         opt_os.step()
 
     with torch.no_grad():
         theta_os = log_gamma(raw_os, lo_t, hi_t)
-        y_hat_os = rk4(rhs, y_after_jump_all, dt_t, theta_os, n_substeps)
-        diff_os  = torch.log1p(y_hat_os) - torch.log1p(y_next)
-        losses_os = diff_os.index_select(-1, loss_idx_t).pow(2).mean(dim=-1).cpu().numpy()
+        y_hat_os = analytical_step(rhs, P, y_after_jump_all, dt_t, theta_os)
+        losses_os = (torch.log1p(y_hat_os) - torch.log1p(y_next)).pow(2).mean(dim=-1).cpu().numpy()
 
     pred_onestep   = y_hat_os.detach().cpu().numpy()
     thetas_onestep = theta_os.detach().cpu().numpy()
@@ -228,17 +215,15 @@ def run(scaffold_name, dataset_path, sample_idx,
         for _ in range(gd_steps):
             opt.zero_grad()
             theta_k = log_gamma(raw, lo_t, hi_t)
-            y_hat   = rk4(rhs, y_after_jump_k.detach(), dt_k, theta_k, n_substeps)
-            diff    = torch.log1p(y_hat) - torch.log1p(y_target)
-            loss    = diff.index_select(-1, loss_idx_t).pow(2).mean()
+            y_hat   = analytical_step(rhs, P, y_after_jump_k.detach(), dt_k, theta_k)
+            loss    = (torch.log1p(y_hat) - torch.log1p(y_target)).pow(2).mean()
             loss.backward()
             opt.step()
 
         with torch.no_grad():
             theta_k = log_gamma(raw, lo_t, hi_t)
-            y_hat   = rk4(rhs, y_after_jump_k, dt_k, theta_k, n_substeps)
-            diff    = torch.log1p(y_hat) - torch.log1p(y_target)
-            final_loss = diff.index_select(-1, loss_idx_t).pow(2).mean()
+            y_hat   = analytical_step(rhs, P, y_after_jump_k, dt_k, theta_k)
+            final_loss = (torch.log1p(y_hat) - torch.log1p(y_target)).pow(2).mean()
 
         pred_rollout[k]   = y_hat.squeeze(0).detach().cpu().numpy()
         thetas_rollout[k] = theta_k.squeeze(0).detach().cpu().numpy()
@@ -311,7 +296,7 @@ def export_csv(all_results, scaffold_order, sample_idx, export_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Oracle per-step theta fitting via GD (one-step + honest rollout).",
+        description="Oracle per-step theta fitting via GD — analytical (matrix-exp) solver.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dataset",      default=None,
@@ -326,19 +311,15 @@ def main():
     parser.add_argument("--show-species", type=str,   default="A,M")
     parser.add_argument("--gd-steps",     type=int,   default=400)
     parser.add_argument("--lr",           type=float, default=0.05)
-    parser.add_argument("--n-substeps",   type=int,   default=4)
     parser.add_argument("--theta-lo",     type=float, default=1e-3)
     parser.add_argument("--theta-hi",     type=float, default=2.0)
-    parser.add_argument("--out",          default="results/per_step_theta_fit",
+    parser.add_argument("--out",          default="results/per_step_theta_fit_analytical",
                         help="Output directory for CSV exports.")
-    parser.add_argument("--loss-species", type=str, default=None,
-                        help="Comma-separated species names to include in the "
-                             "per-step loss (e.g. 'mm,pm'). Default: all species. "
-                             "Use this to mask latent / zero-padded channels.")
     args = parser.parse_args()
 
     device = device_auto()
     print(f"Device: {device}")
+    print(f"Solver: analytical (matrix exponential)")
 
     out_dir = Path(args.out)
     export_dir = out_dir / "exports"
@@ -375,28 +356,22 @@ def main():
         run_items = [(sn, sd_map[sn]) for sn in valid]
 
     show_species = [s.strip() for s in args.show_species.split(",") if s.strip()]
-    loss_species = (
-        [s.strip() for s in args.loss_species.split(",") if s.strip()]
-        if args.loss_species else None
-    )
 
     all_results    = {}
     scaffold_order = []
 
     for scaffold_name, dataset_path in run_items:
         sc = SCAFFOLDS[scaffold_name]
-        print(f"\n>> {scaffold_name}  (P={sc.P}, θ_dim={sc.theta_dim})")
+        print(f"\n>> {scaffold_name}  (P={sc.P}, θ_dim={sc.theta_dim})  [analytical]")
         print(f"   dataset: {dataset_path}")
 
         res = run(
             scaffold_name, str(dataset_path), args.sample_idx,
-            gd_steps     = args.gd_steps,
-            lr           = args.lr,
-            theta_lo     = args.theta_lo,
-            theta_hi     = args.theta_hi,
-            n_substeps   = args.n_substeps,
-            loss_species = loss_species,
-            device       = device,
+            gd_steps   = args.gd_steps,
+            lr         = args.lr,
+            theta_lo   = args.theta_lo,
+            theta_hi   = args.theta_hi,
+            device     = device,
         )
         all_results[scaffold_name] = res
         scaffold_order.append(scaffold_name)
@@ -422,7 +397,7 @@ def main():
                 row += "    N/A     N/A"
         print(row)
     print("=" * 80)
-    print("OS = one-step  |  RO = honest rollout\n")
+    print("OS = one-step  |  RO = honest rollout  |  solver = matrix_exp\n")
 
     export_csv(all_results, scaffold_order, args.sample_idx, export_dir)
     print("\nDone.")

@@ -3,12 +3,14 @@
 # column of u_seq (dilution-corrected concentration delta).
 
 study: real_ivtt_test
-exp_name: txtl_gru_default
+exp_name: txtl_gru_default_lr1e-4_bs150_rmse_normed_lastR_1
 out_root: experiments
 
 epochs: 100
-batch_size: 32
-lr: 0.001
+batch_size: 150
+lr: 0.0001
+loss_type: rmse
+normalize_by_species_mean: true
 weight_decay: 0.0085
 val_n: 64
 test_n: 64
@@ -21,7 +23,7 @@ dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true
-tf_every: 50
+tf_every: 100
 tf_drop_epoch: 500
 
 scaffold: txtl_maturation_dna
@@ -30,6 +32,12 @@ dataset_path: datasets/real_ivtt_full.npz
 # Supervise only the two observed states: mm (Broccoli) and pm (mCherry/2).
 # R, m, p, DNA evolve silently; DNA is clamped by the jump from u_seq.
 obs_idx: [2, 4]
+
+# Push R -> 0 over the final r_terminal_frac of each trajectory
+# (resource depletion prior). R is NOT in obs_idx — this is the only
+# supervision it gets.
+lambda_r_terminal: 1
+r_terminal_frac: 0.05
 
 # Per-parameter theta bounds come from the scaffold itself
 # (theta_lo_vec / theta_hi_vec); these scalars are fallbacks, unused here.

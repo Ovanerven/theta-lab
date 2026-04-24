@@ -122,16 +122,24 @@ def make_summary_grid(loaded, scaffold_order, show_species, sample_idx, out_path
             else:
                 si = state_names.index(sp)
                 gt = res["true"][:, si]
+                os = res["onestep"][:, si]
                 ro = res["rollout"][:, si]
 
                 ax.plot(tt, gt, lw=1.8, color="tab:blue", label="truth")
+                ax.plot(tt, os, lw=1.3, color="tab:green", ls="--", label="one-step", alpha=0.8)
                 ax.plot(tt, ro, lw=1.5, color="tab:red", ls=":", label="rollout")
 
+                n_os = nrmse(os, gt)
                 n_ro = nrmse(ro, gt)
-                ax.text(0.97, 0.95, f"{n_ro:.3f}",
-                        transform=ax.transAxes, fontsize=8, fontweight="bold",
+                ax.text(0.97, 0.95, f"RO {n_ro:.3f}",
+                        transform=ax.transAxes, fontsize=7, fontweight="bold",
                         va="top", ha="right",
                         color="tab:red" if n_ro > 0.05 else "tab:green",
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white", alpha=0.7))
+                ax.text(0.97, 0.78, f"OS {n_os:.3f}",
+                        transform=ax.transAxes, fontsize=7,
+                        va="top", ha="right",
+                        color="tab:green",
                         bbox=dict(boxstyle="round,pad=0.15", fc="white", alpha=0.7))
                 ax.grid(True, alpha=0.15)
                 ax.tick_params(labelsize=7)
@@ -147,8 +155,8 @@ def make_summary_grid(loaded, scaffold_order, show_species, sample_idx, out_path
                 ax.legend(fontsize=6, loc="upper left")
 
     fig.suptitle(
-        f"Per-step GD theta fit — honest rollout  (sample {sample_idx})\n"
-        f"NRMSE annotated per panel  |  one-step oracle fits perfectly for all scaffolds",
+        f"Per-step GD theta fit  (sample {sample_idx})\n"
+        f"NRMSE annotated per panel  |  OS = one-step oracle, RO = honest rollout",
         fontsize=10,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.93])
