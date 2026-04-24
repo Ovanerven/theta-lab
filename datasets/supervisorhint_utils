@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jul 30 11:45:30 2025
+
+@author: bob-van-sluijs
+"""
+
+from __future__ import annotations
+from pathlib import Path
+from typing import List, Tuple
+import numpy as np
+import torch
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+import torch
+
+
+
+# -----------------------------------------------------------------------------
+# 1) Compute log-uniform distributions of my data
+# -----------------------------------------------------------------------------
+def _log_uniform(theta_raw, min_val, max_val):
+    log_min = torch.log(torch.tensor(min_val))
+    log_max = torch.log(torch.tensor(max_val))
+    log_theta = log_min + theta_raw * (log_max - log_min)
+    return torch.exp(log_theta)
+
+def log_uniform(z, lo, hi, eps=1e-8):
+    """Map z∈ℝ⁺ through Softplus then log‑uniform to (lo,hi)."""
+    return lo * torch.exp(torch.log(torch.tensor(hi/lo + eps, device=z.device)) * z)
+
+# -----------------------------------------------------------------------------
+# 2) Collate/pad the data structs if vectors differ in size
+# -----------------------------------------------------------------------------
+def _collate(batch):
+    x0, u_seq, dna_seq, dt_seq, y_seq = zip(*batch)
+    lengths   = torch.tensor([seq.size(0) for seq in y_seq])  # ← real K per item
+    x0_batch   = torch.stack(x0)                               # (B,2)
+    u_padded   = pad_sequence(u_seq,  batch_first=True)        # (B,K,U)
+    dna_padded = pad_sequence(dna_seq, batch_first=True)       # (B,K,1)
+    dt_padded  = pad_sequence(dt_seq, batch_first=True)        # (B,K)
+    y_padded   = pad_sequence(y_seq,  batch_first=True)        # (B,K,2)
+    return x0_batch, u_padded, dna_padded, dt_padded, y_padded, lengths
+
+
+
+# -----------------------------------------------------------------------------
+# 3) JIT‐scripted analytic ODE: This is the simplest model
+# -----------------------------------------------------------------------------
+@torch.jit.script
+def _step_integration(
+    m0: torch.Tensor, p0: torch.Tensor,
+    dt: torch.Tensor,
+    VTX: torch.Tensor, KTX: torch.Tensor,
+    dna: torch.Tensor, kdm: torch.Tensor,
+    VTL: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    eps = 1e-8
+    A     = VTX * dna / (KTX + dna + eps)
+    m_inf = A / (kdm + eps)
+    expT  = torch.exp(-kdm * dt)
+    m1    = m_inf + (m0 - m_inf) * expT
+    int_m = m_inf * dt + (m0 - m_inf) * (1.0 - expT) / (kdm + eps)
+    p1    = p0 + VTL * int_m
+    return m1.clamp(min=0.0), p1.clamp(min=0.0), int_m
+
+
+

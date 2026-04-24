@@ -5,12 +5,8 @@ expected by last-layer-ode/train.py (ODEDataset).
 This parser is aligned with the supervisor's `Oliver data parser.py`:
   - Reagent columns (everything except TIME and DNA) are MinMax-scaled
     jointly across all experiments.
-  - `DNA c` is kept unscaled (raw concentration deltas) and collapsed
-    into a single bolus at t=0 equal to the cumulative total. This
-    reproduces supervisor's `dna_cum_total = cumsum(dna_raw)[:, -1, :]`
-    assumption (DNA held constant at final concentration) while still
-    using the existing `u_to_y_jump` mechanism to drive the DNA
-    scaffold state.
+  - `DNA c` is sqrt + MinMax-scaled to [0, 1] (matching other reagents)
+    and collapsed into a single bolus at t=0 equal to the cumulative total.
   - y_seq observations: Broccoli (mm), mCherry/2 (pm).
   - y0 = obs at t0; y_seq[k] = obs at t_{k+1}; u_seq[k] = u during [t_k, t_{k+1}).
 
@@ -168,13 +164,16 @@ def main():
         u_raw_list.append(u_full)
         t_list.append(times)
 
-    # --- Fit MinMaxScaler jointly on non-DNA-c reagent columns (supervisor behavior) ---
+    # --- Fit scaler jointly on non-DNA-c reagent columns ---
+    # SQRT + MINMAX: sqrt compresses large values, then MinMax spreads to [0,1].
+    # This prevents log-distributed biological concentrations from bunching at 0.
     if not args.no_minmax:
         all_reagents = np.concatenate([u[:, reagent_mask] for u in u_raw_list], axis=0)
-        scaler = MinMaxScaler().fit(all_reagents)
+        all_reagents_sqrt = np.sqrt(np.clip(all_reagents, 0, None))
+        scaler = MinMaxScaler().fit(all_reagents_sqrt)
         u_scale_min = scaler.data_min_.astype(np.float32)
         u_scale_max = scaler.data_max_.astype(np.float32)
-        print(f"  MinMax fit over {all_reagents.shape[0]} steps, {all_reagents.shape[1]} reagents")
+        print(f"  SQRT + MinMax fit over {all_reagents.shape[0]} steps, {all_reagents.shape[1]} reagents")
     else:
         scaler = None
         u_scale_min = np.zeros(int(reagent_mask.sum()), dtype=np.float32)
@@ -186,18 +185,47 @@ def main():
     for u_raw in u_raw_list:
         u = u_raw.copy()
         if scaler is not None:
-            u[:, reagent_mask] = scaler.transform(u[:, reagent_mask]).astype(np.float32)
+            u[:, reagent_mask] = scaler.transform(np.sqrt(np.clip(u[:, reagent_mask], 0, None))).astype(np.float32)
         dna_col = u[:, dna_c_col_idx].copy()
         dna_total = float(dna_col.sum())
         dna_totals.append(dna_total)
         if collapse_dna:
             u[:, dna_c_col_idx] = 0.0
-            u[0, dna_c_col_idx] = dna_total  # single bolus at t=0
+            u[0, dna_c_col_idx] = dna_total  # single bolus at t=0 (raw, scaled below)
         u_list.append(u)
 
     dna_totals_arr = np.asarray(dna_totals, dtype=np.float32)
-    print(f"  DNA totals (post-collapse): mean={dna_totals_arr.mean():.4g} "
-          f"min={dna_totals_arr.min():.4g} max={dna_totals_arr.max():.4g}")
+
+    # ==========================================
+    # SQRT + MINMAX SCALING ON DNA
+    # ==========================================
+    # DNA raw concentrations can span orders of magnitude and dominate the
+    # scale vs other reagents (which are MinMax-scaled to [0,1]). Apply the
+    # same sqrt + minmax trick so DNA sits in [0,1] alongside other reagents.
+    if not args.no_minmax:
+        print("  Applying SQRT + MinMax scaling to DNA bolus...")
+        dna_sqrt = np.sqrt(dna_totals_arr)
+        dna_min = dna_sqrt.min()
+        dna_max = dna_sqrt.max()
+        dna_range = dna_max - dna_min
+        if dna_range < 1e-12:
+            dna_scaled_arr = np.zeros_like(dna_sqrt)
+        else:
+            dna_scaled_arr = ((dna_sqrt - dna_min) / dna_range).astype(np.float32)
+    else:
+        dna_scaled_arr = dna_totals_arr
+
+    # Inject scaled DNA back into u_list
+    for i in range(len(u_list)):
+        u = u_list[i]
+        if collapse_dna:
+            u[0, dna_c_col_idx] = dna_scaled_arr[i]
+        else:
+            scale_factor = dna_scaled_arr[i] / (dna_totals_arr[i] + 1e-8)
+            u[:, dna_c_col_idx] = u[:, dna_c_col_idx] * scale_factor
+
+    print(f"  DNA totals (post-collapse & scaled): mean={dna_scaled_arr.mean():.4g} "
+          f"min={dna_scaled_arr.min():.4g} max={dna_scaled_arr.max():.4g}")
 
     # --- Determine padded dims ---
     lengths = np.array([o.shape[0] for o in obs_list], dtype=np.int64)
