@@ -11,13 +11,22 @@ def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
+# def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+#     # Linear alternative (DO NOT USE for wide bounds):
+#     #   return lo + (hi - lo) * torch.sigmoid(x)
+#     # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
+#     # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
+#     # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
+#     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+
+# --- NEW log_gamma (Softplus-based, from supervisor's log_uniform hint) ---
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-    # Linear alternative (DO NOT USE for wide bounds):
-    #   return lo + (hi - lo) * torch.sigmoid(x)
-    # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
-    # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
-    # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
-    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+    eps = 1e-8
+    # Softplus provides a gradient of 1 for large values, eliminating the bottleneck.
+    # Note: 'hi' now acts as a scaling reference rather than a strict hard clamp, 
+    # preventing the parameter from getting irreversibly stuck at the exact boundary.
+    z = F.softplus(x)
+    return lo * torch.exp(torch.log(hi / lo + eps) * z)
 
 
 class OdeRNN(nn.Module):

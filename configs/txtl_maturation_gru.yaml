@@ -9,7 +9,7 @@ out_root: experiments
 epochs: 20
 batch_size: 150
 lr: 0.0001
-loss_type: mse
+loss_type: rmse
 normalize_by_species_mean: true
 weight_decay: 0.0085
 # train_R uses count-based split fields; for N=696, 15% -> 104 per split.
@@ -28,17 +28,17 @@ teacher_forcing: true
 tf_every: 100
 tf_drop_epoch: 500
 
-scaffold: txtl_maturation_dna
-dataset_path: datasets/real_ivtt_full_stepwise.npz
+scaffold: txtl_resource_and_maturation_dna
+dataset_path: datasets/real_ivtt_full_fix.npz
 
 # Balance endpoint outcome distributions across train/val/test.
 stratified_split: true
 stratify_bins: 5
-stratify_targets: [2, 4]
+stratify_targets: [3, 5]
 
 # Supervise only the two observed states: mm (Broccoli) and pm (mCherry/2).
 # R, m, p, DNA evolve silently; DNA is clamped by the jump from u_seq.
-obs_idx: [2, 4]
+obs_idx: [3, 5]
 
 # Push R -> 0 over the final r_terminal_frac of each trajectory
 # (resource depletion prior). R is NOT in obs_idx — this is the only

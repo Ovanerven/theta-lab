@@ -49,12 +49,12 @@ EXCLUDE_FROM_U = {TIME_COL, "DNA"}
 
 LAYOUTS = {
     "full": {
-        "P": 6,
-        "state_names": ["R", "m", "mm", "p", "pm", "DNA"],
-        "dna_idx": 5,
-        "mm_idx": 2,
-        "pm_idx": 4,
-        "x0_init": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "P": 7,
+        "state_names": ["R", "O", "m", "mm", "p", "pm", "DNA"],
+        "dna_idx": 6,
+        "mm_idx": 3,
+        "pm_idx": 5,
+        "x0_init": [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
     "simple": {
         "P": 3,
