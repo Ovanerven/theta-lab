@@ -45,3 +45,5 @@ n_substeps: 1
 ckpt_every: 10
 jit_scripting: false
 model_class: ode_mambapy
+
+endpoint_r2: true

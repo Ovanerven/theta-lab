@@ -1,0 +1,63 @@
+# GRU ablation sweep — one-factor-at-a-time on TXTL maturation.
+# Tests individual impact of: lambda_r_terminal, loss_type, normalize_by_species_mean,
+# teacher_forcing frequency, hidden size, learning rate, and seed.
+# 50 epochs, 3 seeds for each configuration.
+
+study: txtl_gru_training_sweep
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  base_config: configs/txtl_maturation_gru.yaml
+  dataset_path: datasets/real_ivtt_full.npz
+  scaffold: txtl_maturation_dna
+  obs_idx: "[2,4]"
+  theta_lo: 1.0e-6
+  theta_hi: 1.0
+  val_n: 64
+  test_n: 64
+  lift_dim: 32
+  epochs: 50
+  endpoint_r2: true
+
+runs:
+  # === BASELINE (seed=1, default settings) ===
+  - {exp_name: baseline_seed1, seed: 1}
+  - {exp_name: baseline_seed2, seed: 2}
+  - {exp_name: baseline_seed42, seed: 42}
+
+  # === LAMBDA_R_TERMINAL: 5 (default), 3, 1 ===
+  - {exp_name: lambda_r3_seed1, lambda_r_terminal: 3, seed: 1}
+  - {exp_name: lambda_r1_seed1, lambda_r_terminal: 1, seed: 1}
+
+  # === LOSS_TYPE: log_mse (default), mse, huber ===
+  - {exp_name: loss_mse_seed1, loss_type: mse, seed: 1}
+  - {exp_name: loss_huber_seed1, loss_type: huber, seed: 1}
+
+  # === NORMALIZE_BY_SPECIES_MEAN: true (default), false ===
+  - {exp_name: no_norm_seed1, normalize_by_species_mean: false, seed: 1}
+
+  # === TEACHER FORCING FREQUENCY: 100 (default), 50, 25, 10 ===
+  - {exp_name: tf_every50_seed1, tf_every: 50, seed: 1}
+  - {exp_name: tf_every25_seed1, tf_every: 25, seed: 1}
+  - {exp_name: tf_every10_seed1, tf_every: 10, seed: 1}
+
+  # === WIDER NETWORK: hidden=512 vs 256 (default) ===
+  - {exp_name: wide_hid512_seed1, hidden: 512, seed: 1}
+
+  # === LEARNING RATE: 5e-4 (default), 3e-4, 1e-4 ===
+  - {exp_name: lr_3e-4_seed1, lr: 0.0003, seed: 1}
+  - {exp_name: lr_1e-4_seed1, lr: 0.0001, seed: 1}
+
+  # === MULTI-SEED TESTS for promising variants ===
+  # Wider network with all 3 seeds
+  - {exp_name: wide_hid512_seed2, hidden: 512, seed: 2}
+  - {exp_name: wide_hid512_seed42, hidden: 512, seed: 42}
+  # More frequent TF (every 10) with all 3 seeds
+  - {exp_name: tf_every10_seed2, tf_every: 10, seed: 2}
+  - {exp_name: tf_every10_seed42, tf_every: 10, seed: 42}
+  # Lower LR (1e-4) with all 3 seeds
+  - {exp_name: lr_1e-4_seed2, lr: 0.0001, seed: 2}
+  - {exp_name: lr_1e-4_seed42, lr: 0.0001, seed: 42}

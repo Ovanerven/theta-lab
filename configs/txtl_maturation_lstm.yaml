@@ -40,3 +40,5 @@ n_substeps: 1
 ckpt_every: 10
 jit_scripting: false
 model_class: lstm_rnn
+
+endpoint_r2: true

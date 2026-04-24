@@ -47,3 +47,5 @@ jit_scripting: false
 torch_compile: false
 autocast_bf16: false
 model_class: ode_transformer_grouped
+
+endpoint_r2: true

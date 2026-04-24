@@ -259,6 +259,8 @@ class TrainConfig:
     torch_compile: bool = False
     autocast_bf16: bool = False
 
+    endpoint_r2: bool = False  # if True, runs endpoint R² analysis & saves plot in exp_dir
+
     # 'ode_rnn' (default), 'ode_rnn_2020' (latent ODE-RNN style),
     # or 'neural_ode' (pure MLP baseline)
     model_class: str = "ode_rnn"
@@ -876,6 +878,32 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         if best_state is not None:
             wandb_run.summary["best_val_loss"] = float(best_val)
         wandb_run.finish()
+
+    # Endpoint R^2 analysis (optional)
+    if cfg.endpoint_r2:
+        try:
+            from metrics import endpoint_r2
+            from plot_diagnostics import device_auto as _dev_auto
+
+            r2_device = _dev_auto()
+            print("\nRunning endpoint R^2 analysis...")
+            result = endpoint_r2.collect_endpoints(
+                exp_dir, r2_device, split="test", protein_sp="pm", mrna_sp="mm"
+            )
+            r2_protein = endpoint_r2.r2(result["true_protein_final"], result["pred_protein_final"])
+            r2_mrna = endpoint_r2.r2(result["true_mrna_max"], result["pred_mrna_max"])
+            print(f"  R²(protein final) = {r2_protein:.4f}")
+            print(f"  R²(mRNA max)      = {r2_mrna:.4f}")
+
+            out_path = exp_dir / "endpoint_r2.png"
+            endpoint_r2.plot_endpoints([result], protein_sp="pm", mrna_sp="mm",
+                                       split="test", out_path=out_path)
+
+            if wandb_run is not None:
+                wandb_run.summary["endpoint_r2/protein_final"] = float(r2_protein)
+                wandb_run.summary["endpoint_r2/mrna_max"] = float(r2_mrna)
+        except Exception as e:
+            print(f"[endpoint_r2] failed: {e}")
 
 
 if __name__ == "__main__":

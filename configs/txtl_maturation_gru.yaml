@@ -48,3 +48,5 @@ n_substeps: 1
 ckpt_every: 10
 jit_scripting: true
 model_class: ode_rnn
+
+endpoint_r2: true
