@@ -69,7 +69,7 @@ import yaml
 
 RESERVED_RUN_KEYS = {"base_config", "env", "exp_name", "time"}
 DEFAULT_ENV = "thesis_env"
-TRAIN_CMD = "python -u last-layer-ode/train.py"
+TRAIN_CMD = "python -u last-layer-ode/train_R.py"
 SACCT_CMD = "sacct -j $SLURM_JOB_ID --format=JobID,Elapsed,MaxRSS,State -n"
 
 
