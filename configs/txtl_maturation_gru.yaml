@@ -3,20 +3,20 @@
 # column of u_seq (dilution-corrected concentration delta).
 
 study: real_ivtt_test
-exp_name: txtl_gru_default_lr1e-4_bs150_rmse_normed_lastR_1
+exp_name: txtl_gru_default_lr5e-4_bs150_rmse_normed_lastR_3_hid250
 out_root: experiments
 
 epochs: 100
 batch_size: 150
 lr: 0.0001
-loss_type: rmse
+loss_type: log_mse
 normalize_by_species_mean: true
 weight_decay: 0.0085
 val_n: 64
 test_n: 64
-seed: 42
+seed: 1
 
-hidden: 128
+hidden: 256
 lift_dim: 32
 num_layers: 2
 dropout: 0.1
@@ -36,7 +36,7 @@ obs_idx: [2, 4]
 # Push R -> 0 over the final r_terminal_frac of each trajectory
 # (resource depletion prior). R is NOT in obs_idx — this is the only
 # supervision it gets.
-lambda_r_terminal: 1
+lambda_r_terminal: 5
 r_terminal_frac: 0.05
 
 # Per-parameter theta bounds come from the scaffold itself

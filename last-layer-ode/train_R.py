@@ -172,8 +172,7 @@ def r_terminal_loss(
     B, K = pred_full.shape[0], pred_full.shape[1]
     r = pred_full[:, :, r_idx]  # (B,K)
     mask = _build_tail_mask(lengths, K, pred_full.device, frac, B).to(r.dtype)
-    log_r = torch.log1p(torch.clamp(r, min=0.0))
-    se = (log_r ** 2) * mask
+    se = (r ** 2) * mask
     denom = mask.sum().clamp(min=1.0)
     return se.sum() / denom
 
@@ -777,6 +776,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             va_total = 0.0
             va_batches = 0
             sp_total = None
+            r_start_sum = 0.0
+            r_mid_sum = 0.0
+            r_end_sum = 0.0
+            r_min_sum = 0.0
+            r_tail_sum = 0.0
+            r_count = 0
 
             with torch.no_grad():
                 for y0, u_seq, y_seq, batch_lengths in val_loader:
@@ -796,6 +801,30 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         model_kwargs["lengths"] = batch_lengths
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
                         pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
+
+                    if r_terminal_enabled and r_idx_full is not None:
+                        Bv, Kv = pred.shape[0], pred.shape[1]
+                        r_traj = pred[:, :, r_idx_full].float()  # (B, K)
+                        if batch_lengths is None:
+                            lens_v = torch.full((Bv,), Kv, device=pred.device, dtype=torch.long)
+                        else:
+                            lens_v = batch_lengths.long()
+                        idx_end = (lens_v - 1).clamp(min=0)
+                        idx_mid = (lens_v // 2).clamp(min=0)
+                        arange_b = torch.arange(Bv, device=pred.device)
+                        r_start_sum += float(r_traj[:, 0].sum().item())
+                        r_mid_sum   += float(r_traj[arange_b, idx_mid].sum().item())
+                        r_end_sum   += float(r_traj[arange_b, idx_end].sum().item())
+                        valid_mask = (torch.arange(Kv, device=pred.device)[None, :] < lens_v[:, None])
+                        r_masked = torch.where(valid_mask, r_traj, torch.full_like(r_traj, float("inf")))
+                        r_min_sum += float(r_masked.min(dim=1).values.sum().item())
+                        tail_mask = _build_tail_mask(
+                            lens_v, Kv, pred.device, float(cfg.r_terminal_frac), Bv
+                        ).to(r_traj.dtype)
+                        tail_denom = tail_mask.sum(dim=1).clamp(min=1.0)
+                        r_tail_sum += float(((r_traj * tail_mask).sum(dim=1) / tail_denom).sum().item())
+                        r_count += Bv
+
                     pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
 
@@ -817,6 +846,16 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             va_loss = va_total / max(1, va_batches)
             val_losses.append(va_loss)
 
+            r_stats = None
+            if r_count > 0:
+                r_stats = {
+                    "start": r_start_sum / r_count,
+                    "mid":   r_mid_sum   / r_count,
+                    "end":   r_end_sum   / r_count,
+                    "min":   r_min_sum   / r_count,
+                    "tail":  r_tail_sum  / r_count,
+                }
+
             if sp_total is not None:
                 sp_last = (sp_total / max(1, va_batches)).numpy()
                 val_species_losses.append(sp_last)
@@ -836,8 +875,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     sp_str = "  [" + "  ".join(f"{v:.4f}" for v in sp_last) + "]"
                 else:
                     sp_str = "  [" + "  ".join(f"{n}:{v:.4f}" for n, v in zip(mech_names, sp_last)) + "]"
+            r_str = ""
+            if r_stats is not None:
+                r_str = (f"  R[t0={r_stats['start']:.3f} mid={r_stats['mid']:.3f} "
+                         f"end={r_stats['end']:.3f} min={r_stats['min']:.3f} "
+                         f"tail={r_stats['tail']:.3f}]")
             print(
-                f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str} | {ep_time:.2f}s"
+                f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str}{r_str} | {ep_time:.2f}s"
             )
 
         if math.isnan(tr_loss) or math.isnan(va_loss):
@@ -859,6 +903,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 names = mech_names if mech_names is not None else [f"species_{i}" for i in range(len(sp_last))]
                 for name, value in zip(names, sp_last):
                     payload[f"val_species/{name}"] = float(value)
+            if r_stats is not None:
+                for k, v in r_stats.items():
+                    payload[f"val_R/{k}"] = float(v)
             wandb_run.log(payload, step=int(ep))
 
         # always keep "last" checkpoint
