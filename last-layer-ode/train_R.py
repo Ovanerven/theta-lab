@@ -230,6 +230,156 @@ def compute_species_mean_weights(
     return (1.0 / np.maximum(means, eps)).astype(np.float32)
 
 
+def _endpoint_values(
+    y_seq: np.ndarray,
+    lengths: Optional[np.ndarray],
+    target_idx: list[int],
+) -> np.ndarray:
+    """Per-sample final values for selected species indices: (N, T)."""
+    N = y_seq.shape[0]
+    if lengths is None:
+        return y_seq[:, -1, target_idx].astype(np.float64)
+    end_t = np.clip(lengths.astype(np.int64) - 1, 0, y_seq.shape[1] - 1)
+    out = np.empty((N, len(target_idx)), dtype=np.float64)
+    for j, t_idx in enumerate(target_idx):
+        out[:, j] = y_seq[np.arange(N), end_t, t_idx]
+    return out
+
+
+def _quantile_bin_1d(values: np.ndarray, n_bins: int) -> np.ndarray:
+    """Quantile binning robust to ties; returns integer labels."""
+    if n_bins <= 1:
+        return np.zeros(values.shape[0], dtype=np.int64)
+    q = np.linspace(0.0, 1.0, n_bins + 1)
+    edges = np.quantile(values, q)
+    edges = np.unique(edges)
+    if edges.size <= 2:
+        return np.zeros(values.shape[0], dtype=np.int64)
+    return np.digitize(values, edges[1:-1], right=True).astype(np.int64)
+
+
+def _allocate_counts(stratum_sizes: np.ndarray, total: int) -> np.ndarray:
+    """Allocate `total` across strata proportionally (largest remainder)."""
+    out = np.zeros_like(stratum_sizes, dtype=np.int64)
+    if total <= 0 or stratum_sizes.sum() <= 0:
+        return out
+    raw = total * (stratum_sizes / max(1, int(stratum_sizes.sum())))
+    base = np.floor(raw).astype(np.int64)
+    base = np.minimum(base, stratum_sizes)
+    out[:] = base
+
+    need = int(total - out.sum())
+    if need <= 0:
+        return out
+
+    frac = raw - np.floor(raw)
+    order = np.argsort(-frac)
+    for i in order:
+        if need <= 0:
+            break
+        if out[i] < stratum_sizes[i]:
+            out[i] += 1
+            need -= 1
+
+    if need > 0:
+        for i in np.argsort(-stratum_sizes):
+            if need <= 0:
+                break
+            take = min(need, int(stratum_sizes[i] - out[i]))
+            if take > 0:
+                out[i] += take
+                need -= take
+    return out
+
+
+def _make_split_indices(
+    *,
+    N: int,
+    y_seq: np.ndarray,
+    lengths: Optional[np.ndarray],
+    n_val: int,
+    n_test: int,
+    split_seed: int,
+    stratified_split: bool,
+    stratify_bins: int,
+    stratify_targets: Optional[list[int]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create train/val/test indices; optionally stratified by endpoint bins."""
+    if n_test + n_val >= N:
+        raise ValueError(f"val_n={n_val} + test_n={n_test} >= N={N}")
+
+    rng = np.random.default_rng(split_seed)
+    all_idx = np.arange(N, dtype=np.int64)
+
+    if not stratified_split:
+        rng.shuffle(all_idx)
+        test_idx = all_idx[:n_test]
+        val_idx = all_idx[n_test:n_test + n_val]
+        train_idx = all_idx[n_test + n_val:]
+        return train_idx, val_idx, test_idx
+
+    P = int(y_seq.shape[-1])
+    targets = list(stratify_targets) if stratify_targets is not None else list(range(P))
+    targets = [int(t) for t in targets if 0 <= int(t) < P]
+    if len(targets) == 0:
+        raise ValueError("stratified_split=True but stratify_targets is empty/invalid")
+
+    vals = _endpoint_values(y_seq, lengths, targets)  # (N,T)
+    std = vals.std(axis=0)
+    keep = std > 1e-12
+    if not np.any(keep):
+        rng.shuffle(all_idx)
+        test_idx = all_idx[:n_test]
+        val_idx = all_idx[n_test:n_test + n_val]
+        train_idx = all_idx[n_test + n_val:]
+        return train_idx, val_idx, test_idx
+    vals = vals[:, keep]
+
+    ranks = np.empty_like(vals, dtype=np.float64)
+    for j in range(vals.shape[1]):
+        order = np.argsort(vals[:, j], kind="mergesort")
+        inv = np.empty_like(order)
+        inv[order] = np.arange(vals.shape[0])
+        denom = max(1, vals.shape[0] - 1)
+        ranks[:, j] = inv / denom
+    score = ranks.mean(axis=1)
+    labels = _quantile_bin_1d(score, int(stratify_bins)).astype(np.int64)
+
+    uniq = np.unique(labels)
+    strata = []
+    for u in uniq:
+        idx_u = np.where(labels == u)[0]
+        rng.shuffle(idx_u)
+        strata.append(idx_u)
+
+    sizes = np.array([len(s) for s in strata], dtype=np.int64)
+    take_test = _allocate_counts(sizes, int(n_test))
+
+    test_parts: list[np.ndarray] = []
+    rem_parts: list[np.ndarray] = []
+    for s, k in zip(strata, take_test):
+        test_parts.append(s[:k])
+        rem_parts.append(s[k:])
+
+    rem_sizes = np.array([len(s) for s in rem_parts], dtype=np.int64)
+    take_val = _allocate_counts(rem_sizes, int(n_val))
+
+    val_parts: list[np.ndarray] = []
+    train_parts: list[np.ndarray] = []
+    for s, k in zip(rem_parts, take_val):
+        val_parts.append(s[:k])
+        train_parts.append(s[k:])
+
+    test_idx = np.concatenate(test_parts) if len(test_parts) else np.empty(0, dtype=np.int64)
+    val_idx = np.concatenate(val_parts) if len(val_parts) else np.empty(0, dtype=np.int64)
+    train_idx = np.concatenate(train_parts) if len(train_parts) else np.empty(0, dtype=np.int64)
+
+    rng.shuffle(test_idx)
+    rng.shuffle(val_idx)
+    rng.shuffle(train_idx)
+    return train_idx, val_idx, test_idx
+
+
 @dataclass
 class TrainConfig:
     dataset_path: str
@@ -255,6 +405,13 @@ class TrainConfig:
     val_frac: float = 0.0
     seed: int = 42        # controls model init + training stochasticity only
     split_seed: int = 42   # controls train/val/test split — keep fixed across seeds
+
+    # Split balancing by endpoint outcomes (final y_seq values).
+    # When enabled, bins selected target species by endpoint quantiles and
+    # samples train/val/test proportionally from each bin combination.
+    stratified_split: bool = False
+    stratify_bins: int = 5
+    stratify_targets: list[int] | None = None
 
     num_workers: int = 0
     pin_memory: bool = True
@@ -494,18 +651,26 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     ds = ODEDataset(cfg.dataset_path)
     N = len(ds)
 
-    idx = np.arange(N)
-    rng = np.random.default_rng(cfg.split_seed)
-    rng.shuffle(idx)
-
-    # fixed-count split: test / val / train
     n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
     n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
-    if n_test + n_val >= N:
-        raise ValueError(f"val_n={n_val} + test_n={n_test} >= N={N}")
-    test_idx  = idx[:n_test]
-    val_idx   = idx[n_test:n_test + n_val]
-    train_idx = idx[n_test + n_val:]
+    train_idx, val_idx, test_idx = _make_split_indices(
+        N=N,
+        y_seq=ds.y_seq,
+        lengths=ds.lengths if ds.variable_length else None,
+        n_val=n_val,
+        n_test=n_test,
+        split_seed=int(cfg.split_seed),
+        stratified_split=bool(cfg.stratified_split),
+        stratify_bins=int(cfg.stratify_bins),
+        stratify_targets=cfg.stratify_targets,
+    )
+
+    if cfg.stratified_split:
+        print(
+            "Split: stratified"
+            f" | bins={int(cfg.stratify_bins)}"
+            f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
+        )
 
     # persist split so plotting always uses the correct test indices
     np.savez(exp_dir / "split.npz",

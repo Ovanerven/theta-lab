@@ -142,6 +142,8 @@ def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
 
     # Fixed params from spec (not already in run)
     for key, val in spec.get("fixed", {}).items():
+        if key in RESERVED_RUN_KEYS:
+            continue
         if key not in run:
             parts.append(f"--set {key}={val}")
 

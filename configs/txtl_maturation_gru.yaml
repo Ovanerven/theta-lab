@@ -3,17 +3,19 @@
 # column of u_seq (dilution-corrected concentration delta).
 
 study: real_ivtt_test
-exp_name: txtl_gru_default_lr5e-4_bs150_rmse_normed_lastR_3_hid250
+exp_name: txtl_gru_stepwise_stratified_mse_seed1
 out_root: experiments
 
-epochs: 100
+epochs: 20
 batch_size: 150
 lr: 0.0001
-loss_type: log_mse
+loss_type: mse
 normalize_by_species_mean: true
 weight_decay: 0.0085
-val_n: 64
-test_n: 64
+# train_R uses count-based split fields; for N=696, 15% -> 104 per split.
+val_n: 104
+test_n: 104
+split_seed: 42
 seed: 1
 
 hidden: 256
@@ -27,7 +29,12 @@ tf_every: 100
 tf_drop_epoch: 500
 
 scaffold: txtl_maturation_dna
-dataset_path: datasets/real_ivtt_full.npz
+dataset_path: datasets/real_ivtt_full_stepwise.npz
+
+# Balance endpoint outcome distributions across train/val/test.
+stratified_split: true
+stratify_bins: 5
+stratify_targets: [2, 4]
 
 # Supervise only the two observed states: mm (Broccoli) and pm (mCherry/2).
 # R, m, p, DNA evolve silently; DNA is clamped by the jump from u_seq.
@@ -36,7 +43,7 @@ obs_idx: [2, 4]
 # Push R -> 0 over the final r_terminal_frac of each trajectory
 # (resource depletion prior). R is NOT in obs_idx — this is the only
 # supervision it gets.
-lambda_r_terminal: 5
+lambda_r_terminal: 1
 r_terminal_frac: 0.05
 
 # Per-parameter theta bounds come from the scaffold itself

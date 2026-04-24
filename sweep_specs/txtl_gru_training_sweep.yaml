@@ -6,11 +6,11 @@
 study: txtl_gru_training_sweep
 runs_per_job: 1
 time: "01:00:00"
-partition: gpu_a100
+partition: gpu_h100
 no_plot: false
+base_config: configs/txtl_maturation_gru.yaml
 
 fixed:
-  base_config: configs/txtl_maturation_gru.yaml
   dataset_path: datasets/real_ivtt_full.npz
   scaffold: txtl_maturation_dna
   obs_idx: "[2,4]"

@@ -87,8 +87,18 @@ def main():
     parser.add_argument("--mcherry-divisor", type=float, default=2.0)
     parser.add_argument("--no-minmax", action="store_true",
                         help="Disable MinMax scaling of reagent columns (supervisor uses MinMax).")
+    parser.add_argument(
+        "--dna-mode",
+        type=str,
+        default="collapse",
+        choices=["collapse", "stepwise"],
+        help=(
+            "DNA handling mode: 'collapse' routes total DNA c as a single t=0 bolus "
+            "(supervisor-compatible), 'stepwise' keeps original per-step DNA c schedule."
+        ),
+    )
     parser.add_argument("--no-dna-collapse", action="store_true",
-                        help="Keep step-wise DNA c bolus schedule instead of collapsing to t=0.")
+                        help="Deprecated alias for --dna-mode stepwise.")
     args = parser.parse_args()
 
     layout = LAYOUTS[args.layout]
@@ -119,8 +129,14 @@ def main():
     reagent_mask[dna_c_col_idx] = False  # DNA c is not scaled
 
     print(f"Control columns ({d_in}): {control_cols}")
+    dna_mode = args.dna_mode
+    if args.no_dna_collapse:
+        dna_mode = "stepwise"
+        print("  NOTE: --no-dna-collapse is deprecated; use --dna-mode stepwise")
+    collapse_dna = dna_mode == "collapse"
+
     print(f"  DNA c at u_seq idx {dna_c_col_idx} → routed to state '{state_names[dna_idx]}' (idx {dna_idx})")
-    print(f"  minmax reagents: {not args.no_minmax} | collapse DNA c to t=0 bolus: {not args.no_dna_collapse}")
+    print(f"  minmax reagents: {not args.no_minmax} | DNA mode: {dna_mode}")
 
     expected_inp_cols = set(control_cols) | EXCLUDE_FROM_U
 
@@ -174,7 +190,7 @@ def main():
         dna_col = u[:, dna_c_col_idx].copy()
         dna_total = float(dna_col.sum())
         dna_totals.append(dna_total)
-        if not args.no_dna_collapse:
+        if collapse_dna:
             u[:, dna_c_col_idx] = 0.0
             u[0, dna_c_col_idx] = dna_total  # single bolus at t=0
         u_list.append(u)

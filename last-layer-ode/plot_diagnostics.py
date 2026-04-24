@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 
-from train import ODEDataset, collate, collate_varlen
+from train import ODEDataset, collate, collate_varlen, _apply_norm
 from models import MODELS
 from scaffolds import SCAFFOLDS
 from jumps import make_u_to_y_jump
@@ -76,6 +76,15 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
             )
 
     ds = ODEDataset(dataset_path)
+
+    norm_path = exp_dir / "norm_stats.npz"
+    if norm_path.exists():
+        norm = np.load(norm_path, allow_pickle=True)
+        method = str(norm["method"])
+        mean = norm["mean"] if "mean" in norm else None
+        std  = norm["std"]  if "std"  in norm else None
+        ds.y0   = _apply_norm(ds.y0,   method, mean, std)
+        ds.y_seq = _apply_norm(ds.y_seq, method, mean, std)
 
     scaffold_name = cfg.get("scaffold", "reduced5")
     scaffold = SCAFFOLDS[scaffold_name]
