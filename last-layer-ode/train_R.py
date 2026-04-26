@@ -452,6 +452,14 @@ class TrainConfig:
     tf_drop_epoch: int = 10**9
     tbptt_chunk: int = 0  # truncated BPTT window (0 = full BPTT)
     u_transform: str = "none"  # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
+    y_transform: str = "none"  # y_in transform for GRU: "none" | "sqrt" | "log1p". Use sqrt/log1p
+                               # to prevent large state values (e.g. protein ~10^3) from dominating
+                               # the lift layer over reagent inputs (~1) — root cause of mean-trajectory
+                               # collapse on real_ivtt data.
+    gru_y_obs_only: bool = False  # if True, feed only obs_idx columns of y to GRU (matches the
+                                  # supervisor's reference setup which only feeds mm_prev, pm_prev).
+                                  # Latent-state values are model fabrications during open-loop rollout
+                                  # and provide no useful signal.
     exclude_ode_cols_from_gru: bool = False  # if True, exclude u cols that route to ODE states (e.g. DNA c)
     head_bias_init: float = 0.0   # init all head biases to this (<0 starts theta near lo; e.g. -5.0)
     head_weight_gain: float = 1.0  # Xavier gain for head weights (>1 amplifies per-experiment variation)
@@ -730,6 +738,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         excluded = [j for j in range(U) if int(ds.control_indices[j]) < scaffold.P]
         print(f"GRU u cols: {len(gru_u_cols)}/{U} (excluded ODE-routed cols: {excluded})")
 
+    # When `gru_y_obs_only`, restrict y_in to observed species so the GRU is not
+    # confused by latent-state values which are model fabrications during open-loop rollout.
+    gru_y_cols: list[int] | None = None
+    if bool(cfg.gru_y_obs_only):
+        gru_y_cols = list(cfg.obs_idx) if cfg.obs_idx is not None else list(range(int(scaffold.P)))
+        print(f"GRU y cols: {gru_y_cols}/{scaffold.P} (obs-only feedback to GRU)")
+
     if cfg.model_class not in MODELS:
         raise ValueError(f"Unknown model_class '{cfg.model_class}'. Available: {list(MODELS.keys())}")
     model = MODELS[cfg.model_class](
@@ -755,6 +770,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
         gru_u_cols=gru_u_cols,
+        gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.head_bias_init),
         head_weight_gain=float(cfg.head_weight_gain),
     ).to(device)
@@ -905,6 +921,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 "tf_every": int(cfg.tf_every),
                 "tbptt_chunk": int(cfg.tbptt_chunk),
                 "u_transform": str(cfg.u_transform),
+                "y_transform": str(cfg.y_transform),
             }
             if grouped_model and batch_lengths is not None:
                 model_kwargs["lengths"] = batch_lengths
@@ -986,7 +1003,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
 
-                    model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                    model_kwargs = {
+                        "y_seq": None,
+                        "teacher_forcing": False,
+                        "u_transform": str(cfg.u_transform),
+                        "y_transform": str(cfg.y_transform),
+                    }
                     if grouped_model and batch_lengths is not None:
                         model_kwargs["lengths"] = batch_lengths
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -1144,7 +1166,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 dt_seq = dt_seq.to(device)
                 if batch_lengths is not None:
                     batch_lengths = batch_lengths.to(device)
-                model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                model_kwargs = {
+                    "y_seq": None,
+                    "teacher_forcing": False,
+                    "u_transform": str(cfg.u_transform),
+                    "y_transform": str(cfg.y_transform),
+                }
                 if grouped_model and batch_lengths is not None:
                     model_kwargs["lengths"] = batch_lengths
                 pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)

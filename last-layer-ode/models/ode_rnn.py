@@ -48,6 +48,9 @@ class OdeRNN(nn.Module):
         use_basal: bool = False,
         theta_bounded: bool = True,
         gru_u_cols: Optional[list] = None,  # which u columns enter the GRU (None = all)
+        gru_y_cols: Optional[list] = None,  # which y columns enter the GRU (None = all P).
+                                            # Restricting to obs_idx prevents the GRU from being
+                                            # confused by unobservable latent states.
         head_bias_init: float = 0.0,        # init all head biases to this value (<0 starts theta near lo)
         head_weight_gain: float = 1.0,      # Xavier gain for head weights (>1 amplifies per-experiment variation)
         **kwargs,
@@ -74,9 +77,15 @@ class OdeRNN(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
+        # `gru_y_cols`: indices of y to feed into the GRU. None = all P (legacy).
+        # When restricted (e.g. to obs only), the GRU avoids being dominated by
+        # unobservable latent states whose values are model fabrications.
+        self.gru_y_cols = list(gru_y_cols) if gru_y_cols is not None else None
+        gru_y_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
+
         gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         self.lift = nn.Sequential(
-            nn.Linear(gru_feat_dim + self.P, lift_dim),
+            nn.Linear(gru_feat_dim + gru_y_dim, lift_dim),
             nn.SiLU(),
             nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
         )
@@ -109,6 +118,10 @@ class OdeRNN(nn.Module):
         tf_every: int = 50,
         tbptt_chunk: int = 0,                 # if >0, detach h every tbptt_chunk steps (truncated BPTT)
         u_transform: str = "none",            # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
+        y_transform: str = "none",            # y_in transform: "none" | "sqrt" | "log1p"
+                                              # Without a transform, large protein values (~10^3) dominate
+                                              # the lift layer over reagent values (~1) and the GRU stops
+                                              # responding to inputs. sqrt or log1p compresses the scale.
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -151,7 +164,13 @@ class OdeRNN(nn.Module):
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
             u_gru_k_feat = u_gru_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_gru_k
-            feat = torch.cat([u_gru_k_feat, y_in], dim=-1)
+
+            y_in_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
+            if y_transform == "sqrt":
+                y_in_feat = y_in_feat.clamp_min(0.0).sqrt()
+            elif y_transform == "log1p":
+                y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
+            feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
             raw = self.head(z.squeeze(1))
