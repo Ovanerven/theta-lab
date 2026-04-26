@@ -196,35 +196,19 @@ def main():
 
     dna_totals_arr = np.asarray(dna_totals, dtype=np.float32)
 
-    # ==========================================
-    # SQRT + MINMAX SCALING ON DNA
-    # ==========================================
-    # DNA raw concentrations can span orders of magnitude and dominate the
-    # scale vs other reagents (which are MinMax-scaled to [0,1]). Apply the
-    # same sqrt + minmax trick so DNA sits in [0,1] alongside other reagents.
-    if not args.no_minmax:
-        print("  Applying SQRT + MinMax scaling to DNA bolus...")
-        dna_sqrt = np.sqrt(dna_totals_arr)
-        dna_min = dna_sqrt.min()
-        dna_max = dna_sqrt.max()
-        dna_range = dna_max - dna_min
-        if dna_range < 1e-12:
-            dna_scaled_arr = np.zeros_like(dna_sqrt)
-        else:
-            dna_scaled_arr = ((dna_sqrt - dna_min) / dna_range).astype(np.float32)
-    else:
-        dna_scaled_arr = dna_totals_arr
+    # DNA is kept raw (no scaling) so it retains physical concentration units.
+    # Any nonlinear scaling breaks the linear VTXmax*DNA coupling in the ODE.
+    dna_scaled_arr = dna_totals_arr
 
-    # Inject scaled DNA back into u_list
+    # Inject raw DNA into u_list
     for i in range(len(u_list)):
         u = u_list[i]
         if collapse_dna:
             u[0, dna_c_col_idx] = dna_scaled_arr[i]
         else:
-            scale_factor = dna_scaled_arr[i] / (dna_totals_arr[i] + 1e-8)
-            u[:, dna_c_col_idx] = u[:, dna_c_col_idx] * scale_factor
+            u[:, dna_c_col_idx] = u_raw_list[i][:, dna_c_col_idx]
 
-    print(f"  DNA totals (post-collapse & scaled): mean={dna_scaled_arr.mean():.4g} "
+    print(f"  DNA totals (raw, no scaling): mean={dna_scaled_arr.mean():.4g} "
           f"min={dna_scaled_arr.min():.4g} max={dna_scaled_arr.max():.4g}")
 
     # --- Determine padded dims ---

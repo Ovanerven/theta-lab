@@ -450,6 +450,11 @@ class TrainConfig:
     teacher_forcing: bool = True
     tf_every: int = 50
     tf_drop_epoch: int = 10**9
+    tbptt_chunk: int = 0  # truncated BPTT window (0 = full BPTT)
+    u_transform: str = "none"  # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
+    exclude_ode_cols_from_gru: bool = False  # if True, exclude u cols that route to ODE states (e.g. DNA c)
+    head_bias_init: float = 0.0   # init all head biases to this (<0 starts theta near lo; e.g. -5.0)
+    head_weight_gain: float = 1.0  # Xavier gain for head weights (>1 amplifies per-experiment variation)
 
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
@@ -612,6 +617,11 @@ def log_wandb_artifact(wandb, run, *, exp_dir: Path, run_id: str) -> None:
         print(f"[wandb] artifact logging failed: {exc}")
 
 
+def _clean_state_dict(model: nn.Module) -> dict:
+    """Strip torch.compile's _orig_mod. prefix so state dicts load cleanly."""
+    return {k.removeprefix("_orig_mod."): v.detach().cpu() for k, v in model.state_dict().items()}
+
+
 def device_auto() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -712,6 +722,14 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     u_to_y_jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)  # (U,P_obs)
 
+    # Columns that route to an ODE state (control_indices[j] < P) are ODE-only;
+    # exclude them from GRU input so the GRU only sees reagent boluses.
+    gru_u_cols: list[int] | None = None
+    if cfg.exclude_ode_cols_from_gru:
+        gru_u_cols = [j for j in range(U) if int(ds.control_indices[j]) >= scaffold.P]
+        excluded = [j for j in range(U) if int(ds.control_indices[j]) < scaffold.P]
+        print(f"GRU u cols: {len(gru_u_cols)}/{U} (excluded ODE-routed cols: {excluded})")
+
     if cfg.model_class not in MODELS:
         raise ValueError(f"Unknown model_class '{cfg.model_class}'. Available: {list(MODELS.keys())}")
     model = MODELS[cfg.model_class](
@@ -736,6 +754,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
+        gru_u_cols=gru_u_cols,
+        head_bias_init=float(cfg.head_bias_init),
+        head_weight_gain=float(cfg.head_weight_gain),
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -820,7 +841,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             {
                 "epoch": int(epoch),
                 "tag": str(tag),
-                "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+                "state_dict": _clean_state_dict(model),
                 "opt_state": opt.state_dict(),
                 "best_val": float(best_val),
                 "cfg": cfg.__dict__,
@@ -882,6 +903,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             model_kwargs = {
                 "teacher_forcing": teacher_forcing,
                 "tf_every": int(cfg.tf_every),
+                "tbptt_chunk": int(cfg.tbptt_chunk),
+                "u_transform": str(cfg.u_transform),
             }
             if grouped_model and batch_lengths is not None:
                 model_kwargs["lengths"] = batch_lengths
@@ -1166,7 +1189,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     # save best model (plot expects exp_dir/model.pt)
     save_path = exp_dir / cfg.save_model_name
     torch.save(
-        {"state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        {"state_dict": _clean_state_dict(model),
          "best_val": float(best_val),
          "test_loss": float(test_loss) if test_loss is not None else None},
         save_path,

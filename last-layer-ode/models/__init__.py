@@ -1,5 +1,6 @@
 from models.ode_rnn import OdeRNN
 from models.ode_rnn_analytical import AnalyticalOdeRNN
+from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN
 from models.ode_rnn_2020 import OdeRNN2020
 from models.neural_ode import NeuralODE
 from models.ode_transformer import OdeTransformer
@@ -28,6 +29,7 @@ MODELS: dict = {
     "ode_rnn":            OdeRNN,
     "lstm_rnn":           OdeLSTM,
     "ode_rnn_analytical": AnalyticalOdeRNN,
+    "ode_rnn_txtl":       TXTLAnalyticalOdeRNN,
     "ode_rnn_2020":       OdeRNN2020,
     "neural_ode":         NeuralODE,
     "neural_ode_mlp":     NeuralODE,       # alias — same class, explicit name for ablation table

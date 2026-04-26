@@ -99,6 +99,11 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
 
     jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
 
+    # Recompute gru_u_cols from config (same logic as train_R.py)
+    gru_u_cols = None
+    if cfg.get("exclude_ode_cols_from_gru", False):
+        gru_u_cols = [j for j in range(U) if int(ds.control_indices[j]) >= scaffold.P]
+
     ckpt = torch.load(exp_dir / "model.pt", map_location="cpu")
 
     model_class_name = cfg.get("model_class", "ode_rnn")
@@ -121,6 +126,9 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         d_state=int(cfg.get("d_state", 16)),
         expand=int(cfg.get("expand", 2)),
         d_conv=int(cfg.get("d_conv", 4)),
+        gru_u_cols=gru_u_cols,
+        head_bias_init=float(cfg.get("head_bias_init", 0.0)),
+        head_weight_gain=float(cfg.get("head_weight_gain", 1.0)),
     ).to(device)
 
     # strict=False: tolerates buffers added after a model was saved (e.g. theta_lo_vec/theta_hi_vec).
@@ -155,7 +163,7 @@ def plot_loss_curves(loss_npz: Path, out_dir: Path):
     plt.close(fig)
 
 
-def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str]):
+def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str], obs_idx: list[int] | None = None):
     data = np.load(loss_npz, allow_pickle=True)
     if "val_species_losses" not in data.files or data["val_species_losses"] is None:
         return
@@ -163,13 +171,21 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     if V.size == 0:
         return
 
+    # obs_names: the subset of state_names that V actually covers.
+    # If obs_idx is given, V[:,i] corresponds to state_names[obs_idx[i]].
+    # Fall back to using state_names directly when obs_idx is absent.
+    if obs_idx is not None and len(obs_idx) == V.shape[1]:
+        obs_names = [state_names[i] for i in obs_idx]
+    else:
+        obs_names = state_names[:V.shape[1]]
+
     fig, ax = plt.subplots(figsize=(10, 5))
     im = ax.imshow(V.T, aspect="auto", interpolation="nearest")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Species")
     ax.set_title("Val per-species loss (log1p-MSE)")
-    ax.set_yticks(np.arange(len(state_names)))
-    ax.set_yticklabels(state_names)
+    ax.set_yticks(np.arange(len(obs_names)))
+    ax.set_yticklabels(obs_names)
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
     fig.savefig(out_dir / "val_species_heatmap.png", dpi=150)
@@ -177,9 +193,18 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
 
     last = V[-1]
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.bar(np.arange(len(last)), last)
-    ax.set_xticks(np.arange(len(state_names)))
-    ax.set_xticklabels(state_names, rotation=0)
+    if obs_idx is not None and len(obs_idx) == len(last):
+        # Place bars at the correct positions in the full state space.
+        full = np.zeros(len(state_names))
+        for i, idx in enumerate(obs_idx):
+            full[idx] = last[i]
+        ax.bar(np.arange(len(state_names)), full)
+        ax.set_xticks(np.arange(len(state_names)))
+        ax.set_xticklabels(state_names, rotation=0)
+    else:
+        ax.bar(np.arange(len(obs_names)), last)
+        ax.set_xticks(np.arange(len(obs_names)))
+        ax.set_xticklabels(obs_names, rotation=0)
     ax.set_xlabel("Species")
     ax.set_ylabel("Val loss")
     ax.set_title("Val per-species loss (final epoch)")
@@ -189,7 +214,7 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     plt.close(fig)
 
 
-def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None):
+def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     n_samples = min(int(n_samples), len(plot_ds))
@@ -210,7 +235,7 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped" and batch_lengths is not None:
             model_kwargs["lengths"] = batch_lengths
         pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
@@ -243,7 +268,7 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
         plt.close(fig)
 
 
-def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None):
+def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
@@ -257,7 +282,7 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped":
             model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
         _, theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
@@ -290,7 +315,7 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
     plt.close(fig)
 
 
-def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None):
+def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
     """Plot the learned beta(t) residual terms (only meaningful for basal / beta_regularization runs)."""
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
@@ -305,7 +330,7 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
 
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False}
+        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped":
             model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
         _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
@@ -342,18 +367,21 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
     device = device_auto()
     model, ds, state_names, param_names = rebuild_model_from_experiment(exp_dir, device=device)
 
+    cfg = load_yaml(exp_dir / "config.yaml")
+    obs_idx = list(cfg.get("obs_idx", [])) or None
+    u_transform = str(cfg.get("u_transform", "none"))
+
     loss_npz = exp_dir / "logs" / "loss_curves.npz"
     if loss_npz.exists():
         plot_loss_curves(loss_npz, out_dir)
-        plot_val_species_losses(loss_npz, out_dir, state_names=state_names)
+        plot_val_species_losses(loss_npz, out_dir, state_names=state_names, obs_idx=obs_idx)
 
-    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir)
-    plot_theta(model, ds, param_names=param_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir)
+    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform)
+    plot_theta(model, ds, param_names=param_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
 
     # Plot beta residuals if use_basal was enabled
-    cfg = load_yaml(exp_dir / "config.yaml")
     if cfg.get("use_basal", False):
-        plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir)
+        plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
 
     print(f"Saved plots to {out_dir}")
     return out_dir
@@ -376,6 +404,8 @@ def plot_epoch_prediction_overlays(
 
     # This loads config + dataset + builds model; it also loads model.pt (fine, we overwrite next)
     model, ds, state_names, _param_names = rebuild_model_from_experiment(exp_dir, device=device)
+    cfg_overlay = load_yaml(exp_dir / "config.yaml")
+    u_transform_overlay = str(cfg_overlay.get("u_transform", "none"))
 
     ckpt_dir = exp_dir / "checkpoints"
     if not ckpt_dir.exists():
@@ -435,7 +465,7 @@ def plot_epoch_prediction_overlays(
         model.eval()
         with torch.no_grad():
             obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
-            model_kwargs = {"y_seq": None, "teacher_forcing": False}
+            model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform_overlay}
             if model.__class__.__name__ == "OdeTransformerGrouped":
                 model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)
             pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **model_kwargs)

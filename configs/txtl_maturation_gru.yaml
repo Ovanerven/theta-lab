@@ -3,20 +3,20 @@
 # column of u_seq (dilution-corrected concentration delta).
 
 study: real_ivtt_test
-exp_name: txtl_gru_stepwise_stratified_mse_seed1
+exp_name: stepwise_dna
 out_root: experiments
 
-epochs: 20
-batch_size: 150
+epochs: 200
+batch_size: 128
 lr: 0.0001
-loss_type: rmse
+loss_type: mse
 normalize_by_species_mean: true
-weight_decay: 0.0085
+weight_decay: 0.0001
 # train_R uses count-based split fields; for N=696, 15% -> 104 per split.
 val_n: 104
 test_n: 104
 split_seed: 42
-seed: 1
+seed: 3
 
 hidden: 256
 lift_dim: 32
@@ -25,11 +25,12 @@ dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true
-tf_every: 100
-tf_drop_epoch: 500
+tf_every: 50
+tf_drop_epoch: 70
+tbptt_chunk: 100
 
 scaffold: txtl_resource_and_maturation_dna
-dataset_path: datasets/real_ivtt_full_fix.npz
+dataset_path: datasets/real_ivtt_full.npz
 
 # Balance endpoint outcome distributions across train/val/test.
 stratified_split: true
@@ -43,7 +44,7 @@ obs_idx: [3, 5]
 # Push R -> 0 over the final r_terminal_frac of each trajectory
 # (resource depletion prior). R is NOT in obs_idx — this is the only
 # supervision it gets.
-lambda_r_terminal: 1
+lambda_r_terminal: 0.005
 r_terminal_frac: 0.05
 
 # Per-parameter theta bounds come from the scaffold itself
@@ -51,9 +52,14 @@ r_terminal_frac: 0.05
 theta_lo: 1.0e-6
 theta_hi: 1.0
 n_substeps: 1
+u_transform: cumsum
+exclude_ode_cols_from_gru: true
+head_bias_init: 0.0
+head_weight_gain: 3.0
 
 ckpt_every: 10
-jit_scripting: true
-model_class: ode_rnn
+jit_scripting: false
+torch_compile: true
+model_class: ode_rnn_txtl
 
 endpoint_r2: true

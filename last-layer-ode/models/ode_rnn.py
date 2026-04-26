@@ -19,14 +19,9 @@ def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
 #     # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
 #     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
-# --- NEW log_gamma (Softplus-based, from supervisor's log_uniform hint) ---
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-    eps = 1e-8
-    # Softplus provides a gradient of 1 for large values, eliminating the bottleneck.
-    # Note: 'hi' now acts as a scaling reference rather than a strict hard clamp, 
-    # preventing the parameter from getting irreversibly stuck at the exact boundary.
-    z = F.softplus(x)
-    return lo * torch.exp(torch.log(hi / lo + eps) * z)
+    # Sigmoid: strictly bounded in [lo, hi], initialises at geometric mean sqrt(lo*hi) when x=0.
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 
 class OdeRNN(nn.Module):
@@ -52,6 +47,9 @@ class OdeRNN(nn.Module):
         n_substeps: int = 1,
         use_basal: bool = False,
         theta_bounded: bool = True,
+        gru_u_cols: Optional[list] = None,  # which u columns enter the GRU (None = all)
+        head_bias_init: float = 0.0,        # init all head biases to this value (<0 starts theta near lo)
+        head_weight_gain: float = 1.0,      # Xavier gain for head weights (>1 amplifies per-experiment variation)
         **kwargs,
     ):
         super().__init__()
@@ -64,6 +62,7 @@ class OdeRNN(nn.Module):
         self.theta_lo     = float(theta_lo)
         self.theta_hi     = float(theta_hi)
         self.theta_bounded = bool(theta_bounded)
+        self.gru_u_cols   = list(gru_u_cols) if gru_u_cols is not None else None
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -75,8 +74,9 @@ class OdeRNN(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
+        gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         self.lift = nn.Sequential(
-            nn.Linear(self.U + self.P, lift_dim),
+            nn.Linear(gru_feat_dim + self.P, lift_dim),
             nn.SiLU(),
             nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
         )
@@ -89,6 +89,10 @@ class OdeRNN(nn.Module):
         )
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim
         self.head = nn.Linear(hidden, head_out)
+        if head_bias_init != 0.0:
+            nn.init.constant_(self.head.bias, float(head_bias_init))
+        if head_weight_gain != 1.0:
+            nn.init.xavier_uniform_(self.head.weight, gain=float(head_weight_gain))
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
@@ -103,6 +107,8 @@ class OdeRNN(nn.Module):
         y_seq: Optional[torch.Tensor] = None, # (B,K,P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        tbptt_chunk: int = 0,                 # if >0, detach h every tbptt_chunk steps (truncated BPTT)
+        u_transform: str = "none",            # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -113,10 +119,26 @@ class OdeRNN(nn.Module):
 
         use_partial = obs_idx.numel() > 0
 
+        # Pre-compute the GRU's view of u_seq (separate from the raw delta used for ODE jumps).
+        # cumsum: after a bolus at step t, the GRU sees it at ALL subsequent steps — no long-range
+        # memory required. The ODE jump always uses the raw delta u_seq.
+        if u_transform in ("cumsum", "cumsum_sqrt"):
+            u_gru = u_seq.cumsum(dim=1)
+        else:
+            u_gru = u_seq
+        if u_transform in ("sqrt", "cumsum_sqrt"):
+            u_gru = u_gru.clamp_min(0.0).sqrt()
+
         y_prev = y0
         for k in range(K):
-            u_k  = u_seq[:, k, :]
+            u_k     = u_seq[:, k, :]   # raw delta — used only for ODE jumps
+            u_gru_k = u_gru[:, k, :]   # transformed — used for GRU features
             dt_k = dt_seq[:, k]
+
+            # Truncated BPTT: detach hidden state every tbptt_chunk steps so that
+            # gradients stay local and don't vanish over the full trajectory length.
+            if tbptt_chunk > 0 and k > 0 and (k % tbptt_chunk == 0):
+                h = h.detach()
 
             y_in = y_prev.detach()
 
@@ -128,7 +150,8 @@ class OdeRNN(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            feat = torch.cat([u_k, y_in], dim=-1)
+            u_gru_k_feat = u_gru_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_gru_k
+            feat = torch.cat([u_gru_k_feat, y_in], dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
             raw = self.head(z.squeeze(1))
