@@ -27,7 +27,6 @@ grad_clip: 1.0
 teacher_forcing: true
 tf_every: 50
 tf_drop_epoch: 70
-tbptt_chunk: 100
 
 scaffold: txtl_resource_and_maturation_dna
 dataset_path: datasets/real_ivtt_full.npz

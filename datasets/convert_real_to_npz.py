@@ -84,6 +84,17 @@ def main():
     parser.add_argument("--no-minmax", action="store_true",
                         help="Disable MinMax scaling of reagent columns (supervisor uses MinMax).")
     parser.add_argument(
+        "--reagent-scaling",
+        type=str,
+        default="sqrt_minmax",
+        choices=["sqrt_minmax", "minmax", "sqrt", "log1p", "none"],
+        help=(
+            "How to scale reagent columns at dataset-build time. "
+            "'sqrt_minmax' = current default (matches supervisor). "
+            "'none' = leave reagents in raw units; do all scaling at runtime via train_R config."
+        ),
+    )
+    parser.add_argument(
         "--dna-mode",
         type=str,
         default="collapse",
@@ -165,27 +176,62 @@ def main():
         t_list.append(times)
 
     # --- Fit scaler jointly on non-DNA-c reagent columns ---
-    # SQRT + MINMAX: sqrt compresses large values, then MinMax spreads to [0,1].
-    # This prevents log-distributed biological concentrations from bunching at 0.
-    if not args.no_minmax:
-        all_reagents = np.concatenate([u[:, reagent_mask] for u in u_raw_list], axis=0)
+    # The recommended path is now `--reagent-scaling none` (raw data) plus
+    # runtime scaling via train_R config — keeps preprocessing uniform and
+    # sweepable. The legacy --no-minmax flag remains for backward compatibility.
+    scaling_mode = args.reagent_scaling
+    if args.no_minmax and scaling_mode == "sqrt_minmax":
+        # legacy alias: --no-minmax overrides default to no scaling
+        scaling_mode = "none"
+        print("  NOTE: --no-minmax is legacy; prefer --reagent-scaling none")
+
+    all_reagents = np.concatenate([u[:, reagent_mask] for u in u_raw_list], axis=0)
+    if scaling_mode == "sqrt_minmax":
         all_reagents_sqrt = np.sqrt(np.clip(all_reagents, 0, None))
         scaler = MinMaxScaler().fit(all_reagents_sqrt)
         u_scale_min = scaler.data_min_.astype(np.float32)
         u_scale_max = scaler.data_max_.astype(np.float32)
-        print(f"  SQRT + MinMax fit over {all_reagents.shape[0]} steps, {all_reagents.shape[1]} reagents")
-    else:
-        scaler = None
+
+        def _apply(u):
+            return scaler.transform(np.sqrt(np.clip(u, 0, None))).astype(np.float32)
+        print(f"  SQRT + MinMax over {all_reagents.shape[0]} steps, {all_reagents.shape[1]} reagents")
+    elif scaling_mode == "minmax":
+        scaler = MinMaxScaler().fit(all_reagents)
+        u_scale_min = scaler.data_min_.astype(np.float32)
+        u_scale_max = scaler.data_max_.astype(np.float32)
+
+        def _apply(u):
+            return scaler.transform(u).astype(np.float32)
+        print(f"  MinMax over {all_reagents.shape[0]} steps, {all_reagents.shape[1]} reagents")
+    elif scaling_mode == "sqrt":
         u_scale_min = np.zeros(int(reagent_mask.sum()), dtype=np.float32)
         u_scale_max = np.ones(int(reagent_mask.sum()), dtype=np.float32)
+
+        def _apply(u):
+            return np.sqrt(np.clip(u, 0, None)).astype(np.float32)
+        print(f"  SQRT over reagents (no MinMax)")
+    elif scaling_mode == "log1p":
+        u_scale_min = np.zeros(int(reagent_mask.sum()), dtype=np.float32)
+        u_scale_max = np.ones(int(reagent_mask.sum()), dtype=np.float32)
+
+        def _apply(u):
+            return np.log1p(np.clip(u, 0, None)).astype(np.float32)
+        print(f"  log1p over reagents")
+    else:  # 'none' — leave raw; do all scaling at runtime
+        # Save raw min/max as provenance so runtime can still use them if it wants.
+        u_scale_min = all_reagents.min(axis=0).astype(np.float32)
+        u_scale_max = all_reagents.max(axis=0).astype(np.float32)
+
+        def _apply(u):
+            return u.astype(np.float32)
+        print(f"  Raw reagents (no scaling) — apply scaling at runtime via train_R config")
 
     # --- Apply scaling and DNA c collapse ---
     u_list: list[np.ndarray] = []
     dna_totals: list[float] = []
     for u_raw in u_raw_list:
         u = u_raw.copy()
-        if scaler is not None:
-            u[:, reagent_mask] = scaler.transform(np.sqrt(np.clip(u[:, reagent_mask], 0, None))).astype(np.float32)
+        u[:, reagent_mask] = _apply(u[:, reagent_mask])
         dna_col = u[:, dna_c_col_idx].copy()
         dna_total = float(dna_col.sum())
         dna_totals.append(dna_total)
@@ -260,6 +306,17 @@ def main():
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Output (y_seq) provenance — useful for runtime obs_normalization.
+    # Stored on RAW unscaled mm/pm values so train_R can normalize as it sees fit.
+    obs_raw_min = y_seq.reshape(-1, P).min(axis=0).astype(np.float32)
+    obs_raw_max = y_seq.reshape(-1, P).max(axis=0).astype(np.float32)
+    # mean/std over valid timesteps only
+    valid_mask_2d = (np.arange(K_max)[None, :] < lengths[:, None]).astype(np.float32)  # (N,K)
+    valid = valid_mask_2d.sum()
+    obs_raw_mean = (y_seq * valid_mask_2d[..., None]).sum(axis=(0, 1)) / max(valid, 1)
+    obs_raw_var = ((y_seq - obs_raw_mean) ** 2 * valid_mask_2d[..., None]).sum(axis=(0, 1)) / max(valid, 1)
+    obs_raw_std = np.sqrt(np.maximum(obs_raw_var, 1e-12)).astype(np.float32)
+
     np.savez(
         str(out_path),
         y0=y0.astype(np.float32),
@@ -276,10 +333,16 @@ def main():
         theta_true=np.zeros(0, dtype=np.float32),
         lengths=lengths,
         # Scaler provenance for reproducibility / inverse transforms.
+        reagent_scaling=np.array(scaling_mode, dtype="<U16"),
         u_scale_min=u_scale_min,
         u_scale_max=u_scale_max,
         u_scaled_cols=reagent_col_names,
         dna_totals=dna_totals_arr,
+        # y_seq raw stats (regardless of reagent_scaling) for runtime obs_normalization.
+        obs_raw_min=obs_raw_min.astype(np.float32),
+        obs_raw_max=obs_raw_max.astype(np.float32),
+        obs_raw_mean=obs_raw_mean.astype(np.float32),
+        obs_raw_std=obs_raw_std.astype(np.float32),
     )
 
     print(f"\nSaved to {out_path}")

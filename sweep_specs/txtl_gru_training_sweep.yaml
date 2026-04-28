@@ -1,63 +1,83 @@
-# GRU ablation sweep — one-factor-at-a-time on TXTL maturation.
-# Tests individual impact of: lambda_r_terminal, loss_type, normalize_by_species_mean,
-# teacher_forcing frequency, hidden size, learning rate, and seed.
-# 50 epochs, 3 seeds for each configuration.
+# GRU training sweep — STAGE 2 (combos + push winners further).
+#
+# Stage 1 (50 epochs OFAT, 26 runs) results:
+#   Baseline (3 seeds): test=0.0366 ± 0.0003
+#   Winners:
+#     lr=1e-3        → 0.0319  (-12%)   ← biggest single knob
+#     lr=5e-4        → 0.0336  (-7%)
+#     hidden=256     → 0.0340  (-6%)
+#     hidden=512     → 0.0344  (-5%)
+#     y_transform=log1p → 0.0347 (-4%)  (≈ sqrt; both fine)
+#   Within-noise (skip retesting): dropout, tf_every, tf_drop_epoch,
+#     lambda_r_terminal, batch_size, tbptt, u_transform=cumsum_sqrt.
+#   Confirmed-bad: y_transform=none, loss_type=mse/rmse (without log scaling).
+#
+# Stage 2 plan: combine winners, push lr further, all with 3 seeds.
+# 150 epochs to give bigger models room to converge. tbptt removed from code.
 
 study: txtl_gru_training_sweep
 runs_per_job: 1
-time: "01:00:00"
-partition: gpu_h100
+time: "03:00:00"   # ~52s/epoch * 150ep + overhead ≈ 140min
+partition: gpu_a100
 no_plot: false
-base_config: configs/txtl_maturation_gru.yaml
+base_config: configs/txtl_maturation_gru_fix.yaml
 
 fixed:
   dataset_path: datasets/real_ivtt_full.npz
-  scaffold: txtl_maturation_dna
-  obs_idx: "[2,4]"
-  theta_lo: 1.0e-6
-  theta_hi: 1.0
+  scaffold: txtl_resource_and_maturation_dna
   val_n: 64
   test_n: 64
-  lift_dim: 32
-  epochs: 50
+  epochs: 150
   endpoint_r2: true
 
 runs:
-  # === BASELINE (seed=1, default settings) ===
-  - {exp_name: baseline_seed1, seed: 1}
-  - {exp_name: baseline_seed2, seed: 2}
-  - {exp_name: baseline_seed42, seed: 42}
+  # 2 seeds per arm: seed=1 (shared anchor for direct apples-to-apples
+  # comparison across arms) + a varied second seed (rotated 7/13/23/42/99)
+  # to sample seed variance without paying for a full 3-seed sweep.
 
-  # === LAMBDA_R_TERMINAL: 5 (default), 3, 1 ===
-  - {exp_name: lambda_r3_seed1, lambda_r_terminal: 3, seed: 1}
-  - {exp_name: lambda_r1_seed1, lambda_r_terminal: 1, seed: 1}
+  # === BASELINE-AT-150ep — re-anchor for the longer schedule ===
+  - {exp_name: baseline150_seed1, seed: 1}
+  - {exp_name: baseline150_seed7, seed: 7}
 
-  # === LOSS_TYPE: log_mse (default), mse, huber ===
-  - {exp_name: loss_mse_seed1, loss_type: mse, seed: 1}
-  - {exp_name: loss_huber_seed1, loss_type: huber, seed: 1}
+  # === PUSH LR FURTHER (was best knob; try beyond 1e-3) ===
+  - {exp_name: lr_1e-3_seed1,  lr: 0.001, seed: 1}
+  - {exp_name: lr_1e-3_seed13, lr: 0.001, seed: 13}
+  - {exp_name: lr_3e-3_seed1,  lr: 0.003, seed: 1}
+  - {exp_name: lr_3e-3_seed23, lr: 0.003, seed: 23}
+  - {exp_name: lr_5e-3_seed1,  lr: 0.005, seed: 1}
+  - {exp_name: lr_5e-3_seed42, lr: 0.005, seed: 42}
 
-  # === NORMALIZE_BY_SPECIES_MEAN: true (default), false ===
-  - {exp_name: no_norm_seed1, normalize_by_species_mean: false, seed: 1}
+  # === BIGGER MODEL with stronger LR (combos) ===
+  - {exp_name: lr1e-3_h256_seed1,  lr: 0.001, hidden: 256, seed: 1}
+  - {exp_name: lr1e-3_h256_seed99, lr: 0.001, hidden: 256, seed: 99}
+  - {exp_name: lr1e-3_h512_seed1,  lr: 0.001, hidden: 512, seed: 1}
+  - {exp_name: lr1e-3_h512_seed7,  lr: 0.001, hidden: 512, seed: 7}
 
-  # === TEACHER FORCING FREQUENCY: 100 (default), 50, 25, 10 ===
-  - {exp_name: tf_every50_seed1, tf_every: 50, seed: 1}
-  - {exp_name: tf_every25_seed1, tf_every: 25, seed: 1}
-  - {exp_name: tf_every10_seed1, tf_every: 10, seed: 1}
+  # === TOP COMBO: lr=1e-3 + hidden=256 + log1p ===
+  - {exp_name: combo_top_seed1,  lr: 0.001, hidden: 256, y_transform: log1p, seed: 1}
+  - {exp_name: combo_top_seed13, lr: 0.001, hidden: 256, y_transform: log1p, seed: 13}
 
-  # === WIDER NETWORK: hidden=512 vs 256 (default) ===
-  - {exp_name: wide_hid512_seed1, hidden: 512, seed: 1}
+  # === Aggressive combo: lr=5e-3 + hidden=256 ===
+  - {exp_name: lr5e-3_h256_seed1,  lr: 0.005, hidden: 256, seed: 1}
+  - {exp_name: lr5e-3_h256_seed23, lr: 0.005, hidden: 256, seed: 23}
 
-  # === LEARNING RATE: 5e-4 (default), 3e-4, 1e-4 ===
-  - {exp_name: lr_3e-4_seed1, lr: 0.0003, seed: 1}
-  - {exp_name: lr_1e-4_seed1, lr: 0.0001, seed: 1}
+  # === log1p alone at 150ep — see if it pulls ahead with more training ===
+  - {exp_name: log1p150_seed1,  y_transform: log1p, seed: 1}
+  - {exp_name: log1p150_seed42, y_transform: log1p, seed: 42}
 
-  # === MULTI-SEED TESTS for promising variants ===
-  # Wider network with all 3 seeds
-  - {exp_name: wide_hid512_seed2, hidden: 512, seed: 2}
-  - {exp_name: wide_hid512_seed42, hidden: 512, seed: 42}
-  # More frequent TF (every 10) with all 3 seeds
-  - {exp_name: tf_every10_seed2, tf_every: 10, seed: 2}
-  - {exp_name: tf_every10_seed42, tf_every: 10, seed: 42}
-  # Lower LR (1e-4) with all 3 seeds
-  - {exp_name: lr_1e-4_seed2, lr: 0.0001, seed: 2}
-  - {exp_name: lr_1e-4_seed42, lr: 0.0001, seed: 42}
+  # ─────────────────────────────────────────────────────────────
+  # Already-tested in Stage 1 — not re-running. For reference:
+  # ─────────────────────────────────────────────────────────────
+  # - {exp_name: lr_5e-4_seed1, lr: 0.0005, seed: 1}                 # 0.0336 (worse than 1e-3)
+  # - {exp_name: hidden256_seed1, hidden: 256, seed: 1}              # 0.0340 (combined above)
+  # - {exp_name: hidden512_seed1, hidden: 512, seed: 1}              # 0.0344 (combined above)
+  # - {exp_name: ytransform_log1p_seed*, y_transform: log1p}         # 0.0347 (rerun at 150ep above)
+  # - {exp_name: ytransform_none_seed1, y_transform: none}           # 0.0382 — confirmed bad
+  # - {exp_name: utransform_cumsum_sqrt_seed*, u_transform: cumsum_sqrt}  # worse
+  # - {exp_name: dropout{0.1,0.5}_seed1}                             # within noise of 0.0366
+  # - {exp_name: bs{16,64}_seed1}                                    # within noise
+  # - {exp_name: tf_every{10,25,100}_seed1}                          # within noise
+  # - {exp_name: tf_drop{10,50}_seed1}                               # within noise
+  # - {exp_name: lambda_r_{0.001,0.02}_seed1}                        # within noise
+  # - {exp_name: tbptt_full_seed1, tbptt_chunk: 0}                   # matched baseline → tbptt removed from code
+  # - {exp_name: loss_{mse,rmse}_seed1}                              # exploded — keep log_mse

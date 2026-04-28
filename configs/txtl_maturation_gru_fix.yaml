@@ -47,7 +47,6 @@ grad_clip: 1.0
 teacher_forcing: true
 tf_every: 50
 tf_drop_epoch: 25
-tbptt_chunk: 100
 
 scaffold: txtl_resource_and_maturation_dna
 dataset_path: datasets/real_ivtt_full.npz
@@ -78,7 +77,7 @@ ckpt_every: 10
 jit_scripting: false
 # torch_compile=true breaks on MPS (Metal buffer-resource limit). Leave off for
 # local Mac testing; flip to true (or `--set torch_compile=true`) on the cluster.
-torch_compile: false
+torch_compile: true
 model_class: ode_rnn_txtl
 
 endpoint_r2: true

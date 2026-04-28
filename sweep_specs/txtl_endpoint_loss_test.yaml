@@ -1,0 +1,43 @@
+# Test the new lambda_endpoint loss term against mean-trajectory collapse.
+# Built on the best Stage-2 config (lr=1e-3, hidden=256), 50 epochs for speed.
+# Stage-1/2 plateau: test loss ~0.025-0.030 but R²(pm)=-0.4, R²(mm)=-0.2 —
+# diagnose_collapse showed pred-mm cross-traj std / true ≈ 0.02 (collapsed).
+# If endpoint loss works, expect cross-traj-std ratio to climb and R² to flip
+# positive (or at least less-negative).
+
+study: txtl_endpoint_loss_test
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_full.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+
+runs:
+  # Round 1 results (BEFORE species_weights fix in endpoint_loss):
+  #   λ=0.3 → val 0.05, R²(pm)=-0.5     λ=1.0 → val 0.054, R²(pm)=-0.46
+  #   λ=3.0 → val 0.054, R²(pm)=-0.39   ctrl  → val 0.030, R²(pm)=-0.53
+  # Endpoint term was ~25× larger than per-step loss; train loss diverged to
+  # 10-25 each epoch. Now species-weighted to match per-step scale; with the
+  # fix, λ=1 means endpoint-term ≈ trajectory-term magnitude.
+
+  # Control
+  - {exp_name: ctrl_no_endpoint_seed1, lambda_endpoint: 0.0, seed: 1}
+  - {exp_name: ctrl_no_endpoint_seed7, lambda_endpoint: 0.0, seed: 7}
+
+  # Sweep lambda_endpoint with species-weighted scale
+  - {exp_name: ep_lam0.5_seed1, lambda_endpoint: 0.5, seed: 1}
+  - {exp_name: ep_lam0.5_seed7, lambda_endpoint: 0.5, seed: 7}
+  - {exp_name: ep_lam1.0_seed1, lambda_endpoint: 1.0, seed: 1}
+  - {exp_name: ep_lam1.0_seed7, lambda_endpoint: 1.0, seed: 7}
+  - {exp_name: ep_lam2.0_seed1, lambda_endpoint: 2.0, seed: 1}
+  - {exp_name: ep_lam5.0_seed1, lambda_endpoint: 5.0, seed: 1}

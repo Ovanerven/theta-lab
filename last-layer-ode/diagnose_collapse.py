@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scaffolds import SCAFFOLDS
@@ -51,10 +52,17 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location=dev, weights_only=False)
     state = ckpt["state_dict"]
-    cfg = ckpt.get("cfg", {})
+    # Checkpoints don't store cfg; load it from the sibling config.yaml in the run dir.
+    cfg_path = Path(args.ckpt).parent / "config.yaml"
+    if cfg_path.exists():
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+    else:
+        cfg = ckpt.get("cfg", {})
     print(f"loaded ckpt: hidden={cfg.get('hidden', '?')} num_layers={cfg.get('num_layers', '?')} "
           f"u_transform={cfg.get('u_transform', '?')} "
-          f"exclude_ode={cfg.get('exclude_ode_cols_from_gru', '?')}")
+          f"exclude_ode={cfg.get('exclude_ode_cols_from_gru', '?')} "
+          f"gru_y_obs_only={cfg.get('gru_y_obs_only', '?')}")
 
     d = np.load(args.dataset, allow_pickle=True)
     y0 = torch.from_numpy(d["y0"].astype(np.float32))
@@ -74,13 +82,18 @@ def main():
     if cfg.get("exclude_ode_cols_from_gru", False):
         gru_u_cols = [j for j in range(U) if int(ci[j]) >= P]
 
+    gru_y_cols = None
+    if cfg.get("gru_y_obs_only", False):
+        obs_idx_cfg = cfg.get("obs_idx")
+        gru_y_cols = list(obs_idx_cfg) if obs_idx_cfg is not None else list(range(P))
+
     jump = make_u_to_y_jump(ci, oi, device=dev)
 
     model = MODELS[args.model_class](
         U=U, rhs=sc, u_to_y_jump=jump,
-        hidden=cfg.get("hidden", 256),
+        hidden=cfg.get("hidden", 128),
         lift_dim=cfg.get("lift_dim", 32),
-        num_layers=cfg.get("num_layers", 2),
+        num_layers=cfg.get("num_layers", 1),
         dropout=0.0,
         ff_mult=cfg.get("ff_mult", 2),
         theta_lo=cfg.get("theta_lo", 1e-6),
@@ -92,6 +105,7 @@ def main():
         d_state=16, expand=2, d_conv=4,
         forget_bias_init=None, legacy_forget_bias_bug=False,
         gru_u_cols=gru_u_cols,
+        gru_y_cols=gru_y_cols,
         head_bias_init=cfg.get("head_bias_init", 0.0),
         head_weight_gain=cfg.get("head_weight_gain", 1.0),
     ).to(dev)
@@ -112,8 +126,9 @@ def main():
         pred, theta, _ = model(
             y0_b, u_b, dt_b, obs_idx,
             y_seq=None, teacher_forcing=False,
-            tf_every=50, tbptt_chunk=0,
+            tf_every=50,
             u_transform=cfg.get("u_transform", "cumsum"),
+            y_transform=cfg.get("y_transform", "none"),
         )
 
     pred_np = pred.cpu().numpy()       # (N, K, P)

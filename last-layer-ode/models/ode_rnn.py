@@ -116,7 +116,6 @@ class OdeRNN(nn.Module):
         y_seq: Optional[torch.Tensor] = None, # (B,K,P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
-        tbptt_chunk: int = 0,                 # if >0, detach h every tbptt_chunk steps (truncated BPTT)
         u_transform: str = "none",            # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
         y_transform: str = "none",            # y_in transform: "none" | "sqrt" | "log1p"
                                               # Without a transform, large protein values (~10^3) dominate
@@ -147,11 +146,6 @@ class OdeRNN(nn.Module):
             u_k     = u_seq[:, k, :]   # raw delta — used only for ODE jumps
             u_gru_k = u_gru[:, k, :]   # transformed — used for GRU features
             dt_k = dt_seq[:, k]
-
-            # Truncated BPTT: detach hidden state every tbptt_chunk steps so that
-            # gradients stay local and don't vanish over the full trajectory length.
-            if tbptt_chunk > 0 and k > 0 and (k % tbptt_chunk == 0):
-                h = h.detach()
 
             y_in = y_prev.detach()
 

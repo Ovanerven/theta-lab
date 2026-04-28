@@ -99,10 +99,15 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
 
     jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
 
-    # Recompute gru_u_cols from config (same logic as train_R.py)
+    # Recompute gru_u_cols / gru_y_cols from config (same logic as train_R.py)
     gru_u_cols = None
     if cfg.get("exclude_ode_cols_from_gru", False):
         gru_u_cols = [j for j in range(U) if int(ds.control_indices[j]) >= scaffold.P]
+
+    gru_y_cols = None
+    if cfg.get("gru_y_obs_only", False):
+        obs_idx_cfg = cfg.get("obs_idx")
+        gru_y_cols = list(obs_idx_cfg) if obs_idx_cfg is not None else list(range(scaffold.P))
 
     ckpt = torch.load(exp_dir / "model.pt", map_location="cpu")
 
@@ -127,6 +132,7 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         expand=int(cfg.get("expand", 2)),
         d_conv=int(cfg.get("d_conv", 4)),
         gru_u_cols=gru_u_cols,
+        gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.get("head_bias_init", 0.0)),
         head_weight_gain=float(cfg.get("head_weight_gain", 1.0)),
     ).to(device)

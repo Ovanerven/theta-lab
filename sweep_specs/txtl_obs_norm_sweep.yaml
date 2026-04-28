@@ -1,0 +1,55 @@
+# Test obs_normalization × loss_type to break out of mean-trajectory collapse.
+#
+# Diagnostic finding (slurm_outputs/diag_deep_22296697.out):
+#   pm-final Spearman r = 0.48 vs Pearson r = 0.33  →  model has the right
+#   experiment ranking but compresses predictions into a narrow scale band.
+#   Strong signal that log_mse is the wrong loss target for this dataset.
+#
+# This sweep:
+#   - uses datasets/real_ivtt_raw.npz (raw mm/pm RFU, raw reagents)
+#   - applies u_transform=cumsum_sqrt at runtime (replaces dataset-baked
+#     sqrt+MinMax for reagents)
+#   - varies obs_normalization for the LOSS target only
+#   - pairs each with a sensible base loss_type
+#
+# 50 epochs, lr=1e-3, hidden=256 (best from prior sweeps). Each combo gets
+# 1 anchor seed (=1) to keep the sweep small; rerun the winner with 3 seeds.
+
+study: txtl_obs_norm_sweep
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  u_transform: cumsum_sqrt   # replaces dataset-baked sqrt+MinMax
+  seed: 1
+
+runs:
+  # Baseline anchors (raw dataset, current default loss config)
+  - {exp_name: ctrl_logmse_none,       loss_type: log_mse, obs_normalization: none}
+  - {exp_name: ctrl_mse_none,          loss_type: mse,     obs_normalization: none}
+
+  # === log_mse with various obs_normalization (some combos are weird:
+  #     log1p(zscore) etc — included as sanity checks) ===
+  - {exp_name: logmse_log1p,           loss_type: log_mse, obs_normalization: log1p}
+  - {exp_name: logmse_sqrt,            loss_type: log_mse, obs_normalization: sqrt}
+
+  # === mse on transformed targets — the main hypothesis ===
+  - {exp_name: mse_log1p,              loss_type: mse,     obs_normalization: log1p}
+  - {exp_name: mse_sqrt,               loss_type: mse,     obs_normalization: sqrt}
+  - {exp_name: mse_zscore,             loss_type: mse,     obs_normalization: zscore}
+  - {exp_name: mse_minmax,             loss_type: mse,     obs_normalization: minmax}
+
+  # === rmse equivalents ===
+  - {exp_name: rmse_zscore,            loss_type: rmse,    obs_normalization: zscore}
+  - {exp_name: rmse_minmax,            loss_type: rmse,    obs_normalization: minmax}
