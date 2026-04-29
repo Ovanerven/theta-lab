@@ -1,0 +1,136 @@
+# Follow-up to txtl_r_depletion_sweep — combines the two best mechanisms found:
+#   1. Lowfloor: lowering theta_lo_vec gives the encoder room to assign
+#      sample-specific near-zero rates, beating the default-floor anchors
+#      (b6 lowfloor_only at val=0.495 with λ_r=0.001 beat b3 at 0.533 with
+#      λ_r=0.003 + λ_O=0.005). θ std_b is ~50% higher with lowfloor.
+#   2. Bleach scaffold (NEW): adds kbleach as θ7 to the TXTL scaffold so
+#      dpm/dt = O*kmt*p − kbleach*pm. The base scaffold has dpm ≥ 0 always,
+#      which means pm CANNOT decrease — but real failure-case pm trajectories
+#      drop ~10× (mCherry photobleaching). Bleach lets the model represent
+#      this without forcing R→0 as a proxy.
+#
+# Sweep covers one-axis-at-a-time variations across 4 factors:
+#   - scaffold:  old (7 θ) vs bleach (8 θ)
+#   - floors:    default vs lowfloor
+#   - λ_r:       0 / 0.001 / 0.003 / 0.01 / 0.03
+#   - λ_O:       0 vs 0.005
+#
+# Anchors A1-A3 reproduce the top 3 from txtl_r_depletion_sweep.
+# B-G then ablate one factor at a time on top.
+
+study: txtl_bleach_lowfloor_sweep
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.3
+  u_transform: cumsum_sqrt
+  seed: 1
+
+  # Inherited best-arm settings from log1p_clip1 sweep:
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  auto_scale_aux_losses: true
+
+  tf_drop_epoch: 25
+
+  # Default scaffold/model — bleach arms override below.
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+
+# Convenience aliases used in runs (anchors so we can change once).
+# theta_lo_vec orders:
+#   old (7):    [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+#   bleach (8): [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm, kbleach]
+
+runs:
+  # ── A. Anchors: best 3 arms from txtl_r_depletion_sweep (old scaffold) ──
+
+  - {exp_name: A1_old_default_combo,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005}
+
+  - {exp_name: A2_old_lowfloor_solo,
+     lambda_r_terminal: 0.001, lambda_o_terminal: 0.0,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  - {exp_name: A3_old_lowfloor_combo,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  # ── B. Bleach scaffold: same recipes as A (single-axis change: scaffold) ──
+
+  - {exp_name: B1_bleach_default_combo,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-6, 1.0e-6, 1.0e-7, 1.0e-5, 1.0e-7, 1.0e-5, 5.0e-5, 1.0e-7],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  - {exp_name: B2_bleach_lowfloor_solo,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.001, lambda_o_terminal: 0.0,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7, 1.0e-8],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  - {exp_name: B3_bleach_lowfloor_combo,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7, 1.0e-8],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  # ── C. Bleach scaffold, NO R/O reg — does bleach alone help? ──
+
+  - {exp_name: C1_bleach_default_noreg,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.0, lambda_o_terminal: 0.0,
+     theta_lo_vec: [1.0e-6, 1.0e-6, 1.0e-7, 1.0e-5, 1.0e-7, 1.0e-5, 5.0e-5, 1.0e-7],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  - {exp_name: C2_bleach_lowfloor_noreg,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.0, lambda_o_terminal: 0.0,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7, 1.0e-8],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  # ── D. λ_r ladder, lowfloor + λ_O=5e-3, BOTH scaffolds (intermediate λ_r) ──
+
+  - {exp_name: D1_old_lowfloor_lamr3e-3,
+     lambda_r_terminal: 0.003, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  - {exp_name: D2_bleach_lowfloor_lamr3e-3,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.003, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7, 1.0e-8],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}
+
+  # ── E. λ_r ladder, lowfloor + λ_O=5e-3, BOTH scaffolds (strong λ_r) ──
+
+  - {exp_name: E1_old_lowfloor_lamr3e-2,
+     lambda_r_terminal: 0.03, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  - {exp_name: E2_bleach_lowfloor_lamr3e-2,
+     scaffold: txtl_resource_and_maturation_dna_bleach,
+     model_class: ode_rnn_txtl_bleach,
+     lambda_r_terminal: 0.03, lambda_o_terminal: 0.005,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7, 1.0e-8],
+     theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3, 1.0e-4]}

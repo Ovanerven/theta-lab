@@ -1,0 +1,89 @@
+# R/O depletion + early TF-drop sweep on top of the current best arm
+# (b5 from txtl_log1p_clip1_sweep: mse + log1p_clip1 + pm_tail λ=0.5 frac=0.5).
+#
+# Diagnosis from b5 plots:
+#   - R[end] sits at 0.15-0.40 across epochs — substrate not depleting,
+#     so pm keeps climbing in failure cases (sample 0).
+#   - O[end] stays at 1.0 (no oxygen depletion) — same crutch.
+#   - Encoder still mean-collapsing on mm peak height (sample 4 mm 3 vs true 17).
+#
+# We ladder lambda_r_terminal up (auto-scaled, dimensionless) to force R→0,
+# add lambda_o_terminal=0.005 in tandem, and try an early teacher-forcing drop
+# so the encoder has to do the work earlier.
+# All arms keep mse + log1p_clip1 + lambda_pm_tail=0.5/frac=0.5.
+#
+# Anchor (b5 repro) is intentionally NOT included — we already have it.
+
+study: txtl_r_depletion_sweep
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.3
+  u_transform: cumsum_sqrt
+  seed: 1
+
+  # Best-arm settings from log1p_clip1 sweep (b5):
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+
+  # Auto-scale so λ has a "fraction of main loss at step 0" meaning,
+  # comparable across arms.
+  auto_scale_aux_losses: true
+
+runs:
+  # ---- λ_r ladder (no O term yet) — does forcing R→0 alone fix the pm runaway? ----
+  - {exp_name: lamr_3e-3,
+     lambda_r_terminal: 0.003, lambda_o_terminal: 0.0,
+     tf_drop_epoch: 25}
+
+  - {exp_name: lamr_1e-2,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.0,
+     tf_drop_epoch: 25}
+
+  - {exp_name: lamr_3e-2,
+     lambda_r_terminal: 0.03, lambda_o_terminal: 0.0,
+     tf_drop_epoch: 25}
+
+  # ---- + O depletion on top of a moderate λ_r ----
+  - {exp_name: lamr_3e-3_lamo_5e-3,
+     lambda_r_terminal: 0.003, lambda_o_terminal: 0.005,
+     tf_drop_epoch: 25}
+
+  - {exp_name: lamr_1e-2_lamo_5e-3,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     tf_drop_epoch: 25}
+
+  # ---- early TF drop (encoder must learn from its own predictions sooner) ----
+  - {exp_name: lamr_1e-2_lamo_5e-3_tfdrop5,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     tf_drop_epoch: 5}
+
+  # ---- theta-floor lowering (orthogonal to R-depletion) ----
+  # In sample 0's plot: θ4 (VTLmax) sits at the 1e-7 floor and θ5 (kmt) at 1e-5.
+  # In failure experiments the model wants these closer to 0; the current floors
+  # may be the reason pm keeps creeping up even with strong R-depletion.
+  # theta_lo_vec order: [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+  - {exp_name: lowfloor_only,
+     lambda_r_terminal: 0.001, lambda_o_terminal: 0.0,
+     tf_drop_epoch: 25,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  - {exp_name: lamr_1e-2_lamo_5e-3_lowfloor,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     tf_drop_epoch: 25,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}

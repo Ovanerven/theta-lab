@@ -220,13 +220,18 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     plt.close(fig)
 
 
-def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
+def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", param_names: list[str] | None = None):
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     n_samples = min(int(n_samples), len(plot_ds))
     collate_fn = collate_varlen if getattr(raw_ds, "variable_length", False) else collate
     loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate_fn)
     split_label = "test" if (exp_dir is not None and (exp_dir / "split.npz").exists()) else "train"
+
+    if isinstance(plot_ds, torch.utils.data.Subset):
+        plotted_indices = list(plot_ds.indices[:n_samples])
+    else:
+        plotted_indices = list(range(n_samples))
 
     y0, u_seq, y_seq, batch_lengths = next(iter(loader))
     K_batch = u_seq.shape[1]
@@ -250,6 +255,7 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     y_pred = pred.cpu().numpy()
     dt_np = dt_seq.cpu().numpy()
     lengths_np = batch_lengths.cpu().numpy() if batch_lengths is not None else None
+    theta_np = _theta.cpu().numpy() if _theta is not None else None
 
     P = y_pred.shape[-1]
     for i in range(n_samples):
@@ -268,36 +274,34 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
                 ax.legend()
 
         axes[-1].set_xlabel("Time")
-        fig.suptitle(f"Prediction vs truth [{split_label}] (sample {i})")
+        fig.suptitle(f"Prediction vs truth [{split_label}] (sample {i}, idx {plotted_indices[i]})")
         fig.tight_layout()
         fig.savefig(out_dir / f"pred_vs_true_{i:03d}.png", dpi=150)
         plt.close(fig)
 
+        if theta_np is not None:
+            _save_theta_panel(
+                theta_np[i, :Li, :],
+                dt_np[i, :Li],
+                out_dir / f"theta_from_pred_{i:03d}_idx{plotted_indices[i]}.png",
+                title=f"Learned θ(t) [{split_label}] (sample {i}, idx {plotted_indices[i]})",
+                param_names=param_names,
+            )
 
-def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
-    sample_idx = int(sample_idx)
-    raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
-    plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
-    y0, u_seq, _ = plot_ds[sample_idx]
-    K = int(u_seq.shape[0])
-    dt_seq = torch.from_numpy(raw_ds.dt[:K])
+    if theta_np is None:
+        print("[warn] model returned no theta; skipping theta plots for plotted samples")
 
-    y0 = y0.unsqueeze(0).to(device)
-    u_seq = u_seq.unsqueeze(0).to(device)
-    dt_seq = dt_seq.unsqueeze(0).to(device)
 
-    with torch.no_grad():
-        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
-        if model.__class__.__name__ == "OdeTransformerGrouped":
-            model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
-        _, theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
-
-    theta_np = theta[0].cpu().numpy()  # (K, theta_dim)
-    dt = dt_seq[0].cpu().numpy()
+def _save_theta_panel(
+    theta_np: np.ndarray,
+    dt: np.ndarray,
+    out_path: Path,
+    title: str,
+    param_names: list[str] | None = None,
+):
+    """Render a 2-column grid of θ_j(t) for a single sample and save to PNG."""
     t = np.concatenate([[0.0], np.cumsum(dt)])
     tt = t[1:]
-
     _, D = theta_np.shape
     n_cols = 2
     n_rows = (D + n_cols - 1) // n_cols
@@ -308,16 +312,16 @@ def plot_theta(model, ds: ODEDataset, param_names: list[str], out_dir: Path, sam
     for j, ax in enumerate(axes):
         if j < D:
             ax.plot(tt, theta_np[:, j], linewidth=1.8)
-            name = param_names[j] if j < len(param_names) else f"θ{j}"
+            name = param_names[j] if (param_names is not None and j < len(param_names)) else f"θ{j}"
             ax.set_ylabel(name)
             ax.grid(True, alpha=0.25)
         else:
             ax.axis("off")
 
     axes[min(D - 1, len(axes) - 1)].set_xlabel("Time")
-    fig.suptitle(f"Learned θ(t) (sample {sample_idx})")
+    fig.suptitle(title)
     fig.tight_layout()
-    fig.savefig(out_dir / f"theta_sample{sample_idx}.png", dpi=150)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
@@ -382,8 +386,7 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
         plot_loss_curves(loss_npz, out_dir)
         plot_val_species_losses(loss_npz, out_dir, state_names=state_names, obs_idx=obs_idx)
 
-    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform)
-    plot_theta(model, ds, param_names=param_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
+    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names)
 
     # Plot beta residuals if use_basal was enabled
     if cfg.get("use_basal", False):

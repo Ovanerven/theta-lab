@@ -167,6 +167,13 @@ def main():
         mcherry = df_out["mCherry [RFU]"].to_numpy(dtype=np.float32) / args.mcherry_divisor
 
         obs_full = np.stack([broccoli, mcherry], axis=1)
+
+        # Remove pipetting-error experiments: pm (mCherry/2) exceeding 7000 RFU
+        # is a known artifact from small pipetting errors (per Leonardo).
+        if obs_full[:, 1].max() > 7000:
+            print(f"  SKIP (pm outlier {obs_full[:, 1].max():.0f} > 7000): {os.path.basename(inp_path)}")
+            continue
+
         # Match supervisor: drop last frame; u_seq[k] drives [t_k, t_{k+1}).
         u_full = df_inp[control_cols].to_numpy(dtype=np.float32)[:-1]
 

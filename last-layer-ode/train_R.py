@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Optional
+import copy
 import math
 from pathlib import Path
 import re
@@ -106,11 +107,17 @@ def _apply_obs_norm(
     y: torch.Tensor,
     method: str,
     stats: Optional[dict] = None,
+    is_target: bool = False,
 ) -> torch.Tensor:
     """Transform y by `method` so loss is computed on the normalized scale.
 
     Stats dict (when needed) holds float32 (P_obs,) tensors:
       mean, std, min, max — fit on the train split only.
+
+    is_target: True for the ground-truth tensor, False for predictions. Only
+    matters for log1p_clip1, which clamps targets at 1 (so failure cases
+    y≈0 land at log1p(1)=ln(2), not 0) but leaves predictions clamped at 0
+    so gradients still flow when pred<1.
     """
     if method == "none":
         return y
@@ -118,6 +125,9 @@ def _apply_obs_norm(
         return torch.sqrt(torch.clamp(y, min=0.0))
     if method == "log1p":
         return torch.log1p(torch.clamp(y, min=0.0))
+    if method == "log1p_clip1":
+        floor = 1.0 if is_target else 0.0
+        return torch.log1p(torch.clamp(y, min=floor))
     if method == "zscore":
         m = stats["mean"].to(device=y.device, dtype=y.dtype)
         s = stats["std"].to(device=y.device, dtype=y.dtype)
@@ -146,7 +156,7 @@ def loss_fn(
       - 'rmse'   : sqrt(MSE) in raw / transformed space.
 
     obs_normalization (independent of loss_type, applied first):
-      - 'none', 'sqrt', 'log1p', 'zscore', 'minmax'
+      - 'none', 'sqrt', 'log1p', 'log1p_clip1', 'zscore', 'minmax'
       - For zscore/minmax, obs_norm_stats must contain (P_obs,) tensors
         mean/std and min/max fit on the train split.
       - Combining with log_mse is unusual (zscore-y can be negative); pair
@@ -157,8 +167,8 @@ def loss_fn(
     species with different dynamic ranges contribute comparably.
     """
     if obs_normalization != "none":
-        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats)
-        y_seq = _apply_obs_norm(y_seq, obs_normalization, obs_norm_stats)
+        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats, is_target=False)
+        y_seq = _apply_obs_norm(y_seq, obs_normalization, obs_norm_stats, is_target=True)
 
     if loss_type == "log_mse":
         se = (torch.log1p(pred) - torch.log1p(y_seq)).pow(2)
@@ -215,6 +225,32 @@ def r_terminal_loss(
     se = (r ** 2) * mask
     denom = mask.sum().clamp(min=1.0)
     return se.sum() / denom
+
+
+def pm_tail_loss(
+    pred: torch.Tensor,
+    y_true: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    pm_obs_idx: int,
+    frac: float = 0.25,
+    obs_normalization: str = "none",
+    obs_norm_stats: Optional[dict] = None,
+) -> torch.Tensor:
+    """MSE on protein over the last `frac` of each trajectory.
+
+    Per supervisor: 'progressively weight the tail of the simulation for protein
+    heavier ... focuses on the final yield more'. Forces the model to land its
+    final pm prediction precisely, including for failure cases (pm≈0 throughout).
+    """
+    if obs_normalization != "none":
+        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats, is_target=False)
+        y_true = _apply_obs_norm(y_true, obs_normalization, obs_norm_stats, is_target=True)
+    B, K, _ = pred.shape
+    mask = _build_tail_mask(lengths, K, pred.device, frac, B).to(pred.dtype)  # (B, K)
+    pm_pred = pred[:, :, pm_obs_idx]
+    pm_true = y_true[:, :, pm_obs_idx]
+    se = (pm_pred - pm_true).pow(2) * mask
+    return se.sum() / mask.sum().clamp(min=1.0)
 
 
 def endpoint_loss(
@@ -278,8 +314,8 @@ def loss_fn_per_species(
     obs_norm_stats: Optional[dict] = None,
 ) -> torch.Tensor:
     if obs_normalization != "none":
-        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats)
-        y_seq = _apply_obs_norm(y_seq, obs_normalization, obs_norm_stats)
+        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats, is_target=False)
+        y_seq = _apply_obs_norm(y_seq, obs_normalization, obs_norm_stats, is_target=True)
 
     if loss_type == "log_mse":
         se = (torch.log1p(pred) - torch.log1p(y_seq)).pow(2)
@@ -520,6 +556,8 @@ class TrainConfig:
     dropout: float = 0.0
     theta_lo: float = 1e-3
     theta_hi: float = 2.0
+    theta_lo_vec: list[float] | None = None
+    theta_hi_vec: list[float] | None = None
     n_substeps: int = 1
 
     ff_mult: int = 2  # feedforward multiplier inside each transformer layer (2=current, 4=standard)
@@ -592,6 +630,20 @@ class TrainConfig:
     lambda_r_terminal: float = 0.0
     r_terminal_frac: float = 0.05
 
+    # Auto-rescale every aux loss (r_terminal, o_terminal, endpoint) by
+    # main_loss.detach() / aux_loss.detach() before applying its lambda.
+    # With this on, lambda has a STABLE cross-config meaning: "aux loss
+    # contributes lambda × main_loss to gradient magnitude". Without it,
+    # changing obs_normalization or loss_type silently rescales every aux
+    # term by orders of magnitude, contaminating the comparison.
+    auto_scale_aux_losses: bool = False
+
+    # Terminal O -> 0 regularization (TXTLResourceandMaturationDNAScaffold).
+    # Softly encourages oxygen to decay over the final `o_terminal_frac`.
+    # Disabled when lambda_o_terminal == 0.
+    lambda_o_terminal: float = 0.0
+    o_terminal_frac: float = 0.05
+
     # Endpoint loss: log_mse on per-trajectory protein-final + mRNA-peak.
     # Counters mean-trajectory collapse where per-step MSE alone is happy
     # predicting the dataset mean (real_ivtt diagnose: pred-mm cross-traj std
@@ -601,6 +653,13 @@ class TrainConfig:
     lambda_endpoint: float = 0.0
     endpoint_mrna_obs_idx: int = 0
     endpoint_protein_obs_idx: int = 1
+
+    # Tail-weighted protein loss (supervisor's "weight the tail of the
+    # simulation for protein heavier"). Adds MSE on pm over the last
+    # `pm_tail_frac` of each trajectory, with auto-scaling.
+    lambda_pm_tail: float = 0.0
+    pm_tail_obs_idx: int = 1     # pm position in the supervised obs space
+    pm_tail_frac: float = 0.25
 
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
@@ -704,7 +763,6 @@ def log_wandb_images(wandb, run, plots_dir: Path) -> None:
         ("plots/val_species_heatmap", plots_dir / "val_species_heatmap.png"),
         ("plots/val_species_final", plots_dir / "val_species_final.png"),
         ("plots/pred_overlays", plots_dir / "pred_overlays_sample000.png"),
-        ("plots/theta_sample0", plots_dir / "theta_sample0.png"),
     ]
 
     payload = {}
@@ -716,6 +774,12 @@ def log_wandb_images(wandb, run, plots_dir: Path) -> None:
     if pred_paths:
         payload["plots/pred_vs_true_examples"] = [
             wandb.Image(str(path), caption=path.stem) for path in pred_paths
+        ]
+
+    theta_paths = sorted(plots_dir.glob("theta_from_pred_*.png"))[:3]
+    if theta_paths:
+        payload["plots/theta_examples"] = [
+            wandb.Image(str(path), caption=path.stem) for path in theta_paths
         ]
 
     if payload:
@@ -841,7 +905,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     if cfg.scaffold not in SCAFFOLDS:
         raise ValueError(f"Unknown scaffold '{cfg.scaffold}'. Available: {list(SCAFFOLDS.keys())}")
-    scaffold = SCAFFOLDS[cfg.scaffold]
+    scaffold = copy.deepcopy(SCAFFOLDS[cfg.scaffold])
+
+    if cfg.theta_lo_vec is not None or cfg.theta_hi_vec is not None:
+        if cfg.theta_lo_vec is None or cfg.theta_hi_vec is None:
+            raise ValueError("theta_lo_vec and theta_hi_vec must be set together.")
+        if len(cfg.theta_lo_vec) != scaffold.theta_dim or len(cfg.theta_hi_vec) != scaffold.theta_dim:
+            raise ValueError(
+                f"theta_lo_vec/hi_vec must be length {scaffold.theta_dim} for scaffold {cfg.scaffold}."
+            )
+        for i, (lo, hi) in enumerate(zip(cfg.theta_lo_vec, cfg.theta_hi_vec)):
+            if float(lo) >= float(hi):
+                raise ValueError(
+                    f"theta bounds invalid at index {i}: lo={lo} must be < hi={hi}."
+                )
+        scaffold.theta_lo_vec = [float(v) for v in cfg.theta_lo_vec]
+        scaffold.theta_hi_vec = [float(v) for v in cfg.theta_hi_vec]
+        print(f"Overriding theta bounds from config: lo={scaffold.theta_lo_vec} hi={scaffold.theta_hi_vec}")
 
     if scaffold.P != P_obs:
         raise ValueError(f"Scaffold {cfg.scaffold} expects P={scaffold.P}, but dataset has P_obs={P_obs}.")
@@ -992,16 +1072,6 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     dt_tensor = torch.from_numpy(ds.dt).to(device)
     grouped_model = cfg.model_class == "ode_transformer_grouped"
 
-    species_weights: Optional[torch.Tensor] = None
-    if bool(cfg.normalize_by_species_mean):
-        w_np = compute_species_mean_weights(
-            ds.y_seq, lengths=ds.lengths if ds.variable_length else None
-        )
-        # Index by obs_idx so shape aligns with pred/y_seq after subsetting.
-        w_full = torch.from_numpy(w_np).to(device)
-        species_weights = w_full[obs_idx]
-        print(f"Species mean weights (obs): {species_weights.detach().cpu().tolist()}")
-
     # ---- obs_normalization stats: fit on train split, applied in loss only ----
     obs_norm_method = str(cfg.obs_normalization)
     obs_norm_stats: Optional[dict] = None
@@ -1040,6 +1110,60 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             mean=m, std=s, min=lo, max=hi,
         )
 
+    # ---- species weights: computed in the SAME space the loss residuals live
+    # in (obs_normalization, then log1p if loss_type=log_mse). Computing weights
+    # on raw y while the loss is in normalized/log space silently mis-balances
+    # species — e.g. with minmax both species are O(1) but raw-mean weights
+    # leave pm ~16x weaker than mm.
+    species_weights: Optional[torch.Tensor] = None
+    if bool(cfg.normalize_by_species_mean):
+        train_idx_np = np.asarray(train_idx, dtype=np.int64)
+        lens_np = ds.lengths if ds.variable_length else None
+        parts = []
+        for i in train_idx_np.tolist():
+            L = int(lens_np[i]) if lens_np is not None else ds.y_seq.shape[1]
+            parts.append(ds.y_seq[i, :L])
+        y_train = np.concatenate(parts, axis=0)  # (N_steps, P_obs_full)
+        obs_idx_np = obs_idx.detach().cpu().numpy()
+        y_obs = y_train[:, obs_idx_np].astype(np.float64)  # (N_steps, P_supervised)
+
+        # Mirror _apply_obs_norm in numpy.
+        if obs_norm_method == "none":
+            y_loss = y_obs
+        elif obs_norm_method == "sqrt":
+            y_loss = np.sqrt(np.clip(y_obs, 0.0, None))
+        elif obs_norm_method == "log1p":
+            y_loss = np.log1p(np.clip(y_obs, 0.0, None))
+        elif obs_norm_method == "log1p_clip1":
+            y_loss = np.log1p(np.clip(y_obs, 1.0, None))
+        elif obs_norm_method == "zscore":
+            m = obs_norm_stats["mean"].detach().cpu().numpy().astype(np.float64)
+            s = obs_norm_stats["std"].detach().cpu().numpy().astype(np.float64)
+            y_loss = (y_obs - m) / s
+        elif obs_norm_method == "minmax":
+            lo = obs_norm_stats["min"].detach().cpu().numpy().astype(np.float64)
+            hi = obs_norm_stats["max"].detach().cpu().numpy().astype(np.float64)
+            y_loss = (y_obs - lo) / np.maximum(hi - lo, 1e-8)
+        else:
+            raise ValueError(f"Unknown obs_normalization: {obs_norm_method!r}")
+
+        # If loss is log_mse, residuals further pass through log1p; mean must
+        # too. (For zscore/minmax y_loss can be negative, but log_mse pairs
+        # poorly with those anyway — flagged as a sanity-check combo.)
+        if str(cfg.loss_type) == "log_mse":
+            y_loss = np.log1p(np.clip(y_loss, 0.0, None))
+
+        # Use mean(|y_loss|) so weights are well-defined even for zscore where
+        # y_loss is centered. For non-negative spaces this matches mean(y).
+        abs_mean = np.maximum(np.mean(np.abs(y_loss), axis=0), 1e-6).astype(np.float32)
+        w_obs = (1.0 / abs_mean).astype(np.float32)
+        species_weights = torch.from_numpy(w_obs).to(device)
+        print(
+            f"Species mean weights (obs, in loss space "
+            f"[obs_norm={obs_norm_method}, loss={cfg.loss_type}]): "
+            f"{species_weights.detach().cpu().tolist()}"
+        )
+
     r_terminal_enabled = float(cfg.lambda_r_terminal) > 0.0
     r_idx_full: int | None = None
     if r_terminal_enabled:
@@ -1051,9 +1175,24 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         r_idx_full = list(state_names).index("R")
         print(f"R terminal reg: lambda={cfg.lambda_r_terminal}, frac={cfg.r_terminal_frac}, r_idx_full={r_idx_full}")
 
+    o_terminal_enabled = float(cfg.lambda_o_terminal) > 0.0
+    o_idx_full: int | None = None
+    if o_terminal_enabled:
+        state_names = getattr(scaffold, "state_names", None)
+        if state_names is None or "O" not in list(state_names):
+            raise ValueError(
+                f"lambda_o_terminal>0 but scaffold {cfg.scaffold} has no 'O' state."
+            )
+        o_idx_full = list(state_names).index("O")
+        print(f"O terminal reg: lambda={cfg.lambda_o_terminal}, frac={cfg.o_terminal_frac}, o_idx_full={o_idx_full}")
+
     endpoint_enabled = float(cfg.lambda_endpoint) > 0.0
     if endpoint_enabled:
         print(f"Endpoint loss: lambda={cfg.lambda_endpoint}, mrna_obs_idx={cfg.endpoint_mrna_obs_idx}, protein_obs_idx={cfg.endpoint_protein_obs_idx}")
+
+    # Frozen calibration scales for each aux term, populated on the first
+    # training batch when `auto_scale_aux_losses` is True.
+    aux_scale: dict[str, float] = {}
 
     for ep in range(1, cfg.epochs + 1):
         ep_t0 = time.time()
@@ -1063,6 +1202,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         model.train()
         tr_total = 0.0
         tr_batches = 0
+        theta_std_first_batch: float | None = None
+        theta_mean_first_batch: float | None = None
 
         for y0, u_seq, y_seq, batch_lengths in train_loader:
             K_batch = u_seq.shape[1]
@@ -1097,6 +1238,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             pred = pred[:, :, obs_idx]
             y_seq = y_seq[:, :, obs_idx]
 
+            if theta_std_first_batch is None and theta is not None:
+                with torch.no_grad():
+                    th = theta.detach().float()
+                    theta_std_first_batch = float(th.std(dim=0).mean().item())
+                    theta_mean_first_batch = float(th.mean().item())
+
             loss = loss_fn(
                 pred, y_seq, batch_lengths,
                 loss_type=cfg.loss_type,
@@ -1104,12 +1251,39 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 obs_normalization=obs_norm_method,
                 obs_norm_stats=obs_norm_stats,
             )
+            # When `auto_scale_aux_losses` is True, each aux term is multiplied
+            # by a FROZEN scaling factor `aux_scale[name]`, calibrated on the
+            # first batch of training as `main_loss / aux_loss`. After that the
+            # scale is constant, so λ has a stable cross-config meaning ("aux
+            # contributes λ × main_loss" at the START of training) without the
+            # positive-feedback loop where shrinking aux blows up the rescale.
+            _AUX_EPS = 1e-12
+            main_for_scale = loss.detach()
+            relative = bool(getattr(cfg, "auto_scale_aux_losses", False))
+
+            def _scaled_aux(aux, name):
+                if not relative:
+                    return aux
+                if name not in aux_scale:
+                    aux_scale[name] = float(
+                        (main_for_scale / aux.detach().clamp(min=_AUX_EPS)).item()
+                    )
+                    print(f"[auto_scale] {name}: fixed scale = {aux_scale[name]:.4g} "
+                          f"(main={float(main_for_scale.item()):.4g}, "
+                          f"aux={float(aux.detach().item()):.4g})")
+                return aux * aux_scale[name]
 
             if r_terminal_enabled:
                 r_loss = r_terminal_loss(
                     pred_full, r_idx_full, batch_lengths, float(cfg.r_terminal_frac)
                 )
-                loss = loss + float(cfg.lambda_r_terminal) * r_loss
+                loss = loss + float(cfg.lambda_r_terminal) * _scaled_aux(r_loss, "r_terminal")
+
+            if o_terminal_enabled:
+                o_loss = r_terminal_loss(
+                    pred_full, o_idx_full, batch_lengths, float(cfg.o_terminal_frac)
+                )
+                loss = loss + float(cfg.lambda_o_terminal) * _scaled_aux(o_loss, "o_terminal")
 
             if endpoint_enabled:
                 ep_loss = endpoint_loss(
@@ -1118,7 +1292,17 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     int(cfg.endpoint_protein_obs_idx),
                     species_weights=species_weights,
                 )
-                loss = loss + float(cfg.lambda_endpoint) * ep_loss
+                loss = loss + float(cfg.lambda_endpoint) * _scaled_aux(ep_loss, "endpoint")
+
+            if float(cfg.lambda_pm_tail) > 0.0:
+                t_loss = pm_tail_loss(
+                    pred, y_seq, batch_lengths,
+                    int(cfg.pm_tail_obs_idx),
+                    float(cfg.pm_tail_frac),
+                    obs_normalization=obs_norm_method,
+                    obs_norm_stats=obs_norm_stats,
+                )
+                loss = loss + float(cfg.lambda_pm_tail) * _scaled_aux(t_loss, "pm_tail")
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -1253,7 +1437,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         ep_time = time.time() - ep_t0
 
         if va_loss is None:
-            print(f"ep {ep:4d} | train {tr_loss:.6f} | tf={int(teacher_forcing)} | {ep_time:.2f}s")
+            th_str = ""
+            if theta_std_first_batch is not None:
+                th_str = f"  theta[std_b={theta_std_first_batch:.3e} mean={theta_mean_first_batch:.3e}]"
+            print(f"ep {ep:4d} | train {tr_loss:.6f} | tf={int(teacher_forcing)}{th_str} | {ep_time:.2f}s")
         else:
             sp_str = ""
             if sp_last is not None:
@@ -1266,8 +1453,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 r_str = (f"  R[t0={r_stats['start']:.3f} mid={r_stats['mid']:.3f} "
                          f"end={r_stats['end']:.3f} min={r_stats['min']:.3f} "
                          f"tail={r_stats['tail']:.3f}]")
+            th_str = ""
+            if theta_std_first_batch is not None:
+                th_str = f"  theta[std_b={theta_std_first_batch:.3e} mean={theta_mean_first_batch:.3e}]"
             print(
-                f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str}{r_str} | {ep_time:.2f}s"
+                f"ep {ep:4d} | train {tr_loss:.6f} | val {va_loss:.6f} | best {best_val:.6f} | tf={int(teacher_forcing)}{sp_str}{r_str}{th_str} | {ep_time:.2f}s"
             )
 
         if math.isnan(tr_loss) or math.isnan(va_loss):

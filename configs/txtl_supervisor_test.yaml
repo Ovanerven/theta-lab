@@ -1,0 +1,89 @@
+# One-off test combining supervisor's pm=0-failure suggestions:
+#   1. Tightened VTLmax / VTXmax ceilings (was supervisor's "most dramatic effect")
+#   2. Tail-weighted protein loss (supervisor: "focus on final yield")
+#   3. Bumped stratify_bins 5 → 8 to push rare-cases toward train
+#   4. Soft O penalty on (already in base) — kept
+#   5. auto_scale_aux_losses: true so lambdas have a stable meaning
+#
+# Built on top of best obs_norm finding: lr=1e-3, hidden=256, mse + minmax.
+# 100 epochs (longer than sweep) to see convergence behavior with new terms.
+
+study: real_ivtt_test
+exp_name: supervisor_test
+out_root: experiments
+
+epochs: 100
+batch_size: 32
+lr: 1.0e-3
+loss_type: mse
+obs_normalization: minmax
+normalize_by_species_mean: true
+weight_decay: 1.0e-3
+val_n: 64
+test_n: 64
+split_seed: 42
+seed: 1
+
+hidden: 256
+lift_dim: 32
+num_layers: 1
+dropout: 0.3
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 50
+tf_drop_epoch: 25
+
+scaffold: txtl_resource_and_maturation_dna
+dataset_path: datasets/real_ivtt_raw.npz
+
+stratified_split: true
+stratify_bins: 8        # was 5, supervisor suggested ~6, picking 8 to push
+                        # rare cases (pm≈0 failures) toward train more strongly
+stratify_targets: [3, 5]
+
+obs_idx: [3, 5]
+
+# --- aux losses (auto-scaled relative to main loss) ---
+auto_scale_aux_losses: true
+
+# Soft R-terminal: tiny weight, just a prior. λ=0.03 over-depleted; 0.0005
+# was the user's empirical sweet spot.
+lambda_r_terminal: 0.005
+r_terminal_frac: 0.05
+
+# Soft O-terminal (per supervisor: O should always go down)
+lambda_o_terminal: 0.001
+o_terminal_frac: 0.05
+
+# NEW: tail-weighted pm loss — focuses on final yield, helps with pm=0 fails
+lambda_pm_tail: 0.5      # 50% relative to main loss; tail-only term
+pm_tail_obs_idx: 1       # pm in supervised obs space (obs_idx=[3,5] → pm at idx 1)
+pm_tail_frac: 0.25       # last 25% of trajectory
+
+# --- theta bounds (per-parameter) ---
+# theta = [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+# CHANGED vs base: VTXmax ceiling 1.2e-1 → 3e-2  (4x tighter)
+#                  VTLmax ceiling 8e-2  → 2e-2  (4x tighter)
+# Per supervisor: "most dramatic effect will be to change bounds on theta
+# translation [VTLmax] and transcription [VTXmax] terms".
+theta_lo: 1.0e-6
+theta_hi: 1.0
+theta_lo_vec: [1.0e-6, 1.0e-6, 1.0e-7, 1.0e-5, 1.0e-7, 1.0e-5, 5.0e-5]
+theta_hi_vec: [5.0e-4, 5.0e-4, 3.0e-2, 1.0e-2, 2.0e-2, 3.5e-4, 3.5e-3]
+n_substeps: 1
+
+# --- input transforms ---
+u_transform: cumsum_sqrt
+y_transform: sqrt
+gru_y_obs_only: true
+exclude_ode_cols_from_gru: true
+
+head_bias_init: 0.0
+head_weight_gain: 1.0
+
+ckpt_every: 10
+torch_compile: true
+model_class: ode_rnn_txtl
+
+endpoint_r2: true

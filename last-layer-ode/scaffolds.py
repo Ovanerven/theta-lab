@@ -1132,7 +1132,60 @@ class TXTLResourceandMaturationDNAScaffold(MechanisticScaffold):
         dDNA = torch.zeros_like(DNA)
 
         return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
-    
+
+
+class TXTLResourceandMaturationDNABleachScaffold(MechanisticScaffold):
+    """
+    Extension of TXTLResourceandMaturationDNAScaffold with a pm bleaching term:
+        dpm/dt = O * kmt * p - kbleach * pm
+
+    Motivation: real IVTT pm trajectories on failure runs *decrease* over time
+    (mCherry photobleaching during long readouts). The base scaffold's dpm is
+    non-negative, so it cannot represent this — best it can do is plateau pm.
+    Adding kbleach as an 8th learned parameter lets the encoder pull pm down on
+    samples where the truth declines, without affecting samples where it rises.
+
+    States (7): R, O, m, mm, p, pm, DNA  (same as base)
+
+    Parameters θ (8):
+      0  lam     : resource decay rate
+      1  lam_O   : oxygen decay rate
+      2  VTXmax  : transcription rate
+      3  kdm     : mRNA degradation rate
+      4  VTLmax  : translation rate
+      5  kmt     : protein maturation rate (p → pm)
+      6  kmatm   : mRNA maturation rate (m → mm)
+      7  kbleach : pm decay rate (photobleaching / measurement decay)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        self.theta_lo_vec = [1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5, 1e-7]
+        self.theta_hi_vec = [5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3, 1e-4]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm, kbleach = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O_p   = torch.clamp_min(O,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        pm_p  = torch.clamp_min(pm,  0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dR   = -lam * R_p
+        dO   = -lam_O * O_p
+        dm   = R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  = O_p * kmt * p_p - kbleach * pm_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
+
+
 class TXTLSimpleDNAScaffold(MechanisticScaffold):
     """
     3-state minimal TXTL scaffold with DNA as an explicit, bolus-driven state.
@@ -1205,4 +1258,5 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_maturation_dna": TXTLMaturationDNAScaffold(),
     "txtl_simple_dna":     TXTLSimpleDNAScaffold(),
     "txtl_resource_and_maturation_dna": TXTLResourceandMaturationDNAScaffold(),
+    "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
 }

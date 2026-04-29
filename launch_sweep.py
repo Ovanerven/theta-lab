@@ -140,17 +140,27 @@ def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
         if key in spec and key not in run:
             parts.append(f"--set {key}={spec[key]}")
 
+    def _fmt(val):
+        # Lists: render via yaml flow style (so floats keep "1.0e-08" form
+        # which YAML parses as float, unlike JSON's "1e-08" which YAML reads as
+        # string), strip internal whitespace, and single-quote so the shell
+        # passes them through as one --set arg.
+        if isinstance(val, (list, tuple)):
+            s = yaml.safe_dump(list(val), default_flow_style=True).strip()
+            return "'" + s.replace(" ", "") + "'"
+        return str(val)
+
     # Fixed params from spec (not already in run)
     for key, val in spec.get("fixed", {}).items():
         if key in RESERVED_RUN_KEYS:
             continue
         if key not in run:
-            parts.append(f"--set {key}={val}")
+            parts.append(f"--set {key}={_fmt(val)}")
 
     # Run-specific params
     for key, val in run.items():
         if key not in RESERVED_RUN_KEYS:
-            parts.append(f"--set {key}={val}")
+            parts.append(f"--set {key}={_fmt(val)}")
 
     return " ".join(parts)
 
@@ -221,7 +231,7 @@ def submit_batch(
     return result.stdout.strip().split()[-1]
 
 
-def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool) -> str:
+def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env: str = DEFAULT_ENV) -> str:
     dep = ":".join(job_ids)
     args = [
         "sbatch",
@@ -229,7 +239,7 @@ def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool) -> 
         f"--dependency=afterany:{dep}",
         f"--time={time}",
         f"--output=slurm_outputs/{study}/%A_%x.out",
-        f"--export=ALL,STUDY={study}",
+        f"--export=ALL,STUDY={study},ENV={env}",
         "slurm_jobs/compare.job",
     ]
 
@@ -267,8 +277,10 @@ def main() -> None:
     Path(f"slurm_outputs/{study}").mkdir(parents=True, exist_ok=True)
 
     job_ids: list[str] = []
+    sweep_env = DEFAULT_ENV
     for batch_num, batch in enumerate(batches):
         env = batch[0].get("env", DEFAULT_ENV)
+        sweep_env = env
         cmds = [build_train_cmd(spec, run, args.out_root) for run in batch]
         labels = [exp_label(c) for c in cmds]
         jid = submit_batch(cmds, env, spec, batch_num, study, args.dry_run)
@@ -277,7 +289,7 @@ def main() -> None:
 
     if not args.no_compare:
         print()
-        cjid = submit_compare(job_ids, study, spec.get("compare_time", "01:00:00"), args.dry_run)
+        cjid = submit_compare(job_ids, study, spec.get("compare_time", "01:00:00"), args.dry_run, env=sweep_env)
         print(f"Compare    : job {cjid}")
 
     print()

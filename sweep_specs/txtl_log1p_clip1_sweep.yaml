@@ -1,0 +1,79 @@
+# Test the supervisor's recommendation: log1p with clamp-at-1 on y for the
+# loss target, optionally combined with weighted-tail loss on pm.
+#
+# Anchor: mse_minmax — the best arm from txtl_obs_norm_sweep (nrmse 0.365,
+# pm-final R² 0.46). Inputs already sqrt-compressed via u_transform=cumsum_sqrt;
+# encoder y already sqrt-compressed via y_transform=sqrt (from base_config).
+# The change tested here is purely the LOSS-side y normalization.
+#
+# Hypothesis chain:
+#   - log1p_clip1 (clamp y below at 1 before log1p) avoids compressing the
+#     y≈0 failure cases all the way to 0, so they sit at log(2)≈0.69 instead
+#     of co-locating with low-but-nonzero values. This should help endpoint
+#     ranking specifically.
+#   - pm_tail_loss with frac=0.5 directly weighs the second half of each
+#     trajectory — the part that determines pm-final.
+#
+# 7 runs, 1 seed each. Once a winner is identified, rerun with 3 seeds.
+
+study: txtl_log1p_clip1_sweep_lr1e-4
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.0001
+  hidden: 256
+  u_transform: cumsum_sqrt   # supervisor rec 1: sqrt on inputs (cumsum-then-sqrt)
+  seed: 1
+  # NOTE: λ_r_terminal pending the 1e-5/1e-4 compare. 5e-5 matches the most
+  # recent obs_norm sweep; bump once the compare picks a winner.
+#   lambda_r_terminal: 0.00005
+  lambda_r_terminal: 0.001
+  # Pin values that drifted in base since the obs sweep:
+  num_layers: 2
+  dropout: 0.3
+  lambda_o_terminal: 0.0
+  auto_scale_aux_losses: true   # λ has dimensionless meaning across arms
+
+runs:
+  # ---- Anchor: best of the previous obs sweep ----
+  - {exp_name: anchor_mse_minmax,
+     loss_type: mse, obs_normalization: minmax}
+
+  # ---- Supervisor recommendation 2: log1p with clamp-at-1 on the loss target ----
+  - {exp_name: mse_log1p_clip1,
+     loss_type: mse, obs_normalization: log1p_clip1}
+
+  # ---- Ablation: does the clamp-at-1 specifically matter, or is plain log1p enough? ----
+  - {exp_name: mse_log1p_plain,
+     loss_type: mse, obs_normalization: log1p}
+
+  # ---- Recommendation 3: weight the last half of pm tail (with auto_scale, λ=1 means
+  # "pm_tail contributes 1× main_loss at training start"). frac=0.5 = "last half".
+  # Test on top of the anchor first, to isolate the tail-loss effect alone.
+  - {exp_name: anchor_mse_minmax_tail05,
+     loss_type: mse, obs_normalization: minmax,
+     lambda_pm_tail: 0.5, pm_tail_frac: 0.5}
+
+  # ---- Combined recs 2 + 3: log1p_clip1 target + pm_tail half-weight ----
+  - {exp_name: mse_log1p_clip1_tail05,
+     loss_type: mse, obs_normalization: log1p_clip1,
+     lambda_pm_tail: 0.5, pm_tail_frac: 0.5}
+
+  # ---- Combined recs 2 + 3, stronger tail weight ----
+  - {exp_name: mse_log1p_clip1_tail10,
+     loss_type: mse, obs_normalization: log1p_clip1,
+     lambda_pm_tail: 1.0, pm_tail_frac: 0.5}
+
+  # ---- rmse variant of the supervisor rec, in case the sqrt softens overshoot ----
+  - {exp_name: rmse_log1p_clip1,
+     loss_type: rmse, obs_normalization: log1p_clip1}
