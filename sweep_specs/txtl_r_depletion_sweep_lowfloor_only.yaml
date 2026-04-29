@@ -1,0 +1,41 @@
+# Re-run of b6+b7 from txtl_r_depletion_sweep, after fixing the
+# launch_sweep.py list-arg shell-quoting bug.
+# Same study name → results land in experiments/txtl_r_depletion_sweep/
+# alongside b0..b5.
+
+study: txtl_r_depletion_sweep
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.3
+  u_transform: cumsum_sqrt
+  seed: 1
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  auto_scale_aux_losses: true
+
+runs:
+  - {exp_name: lowfloor_only,
+     lambda_r_terminal: 0.001, lambda_o_terminal: 0.0,
+     tf_drop_epoch: 25,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}
+
+  - {exp_name: lamr_1e-2_lamo_5e-3_lowfloor,
+     lambda_r_terminal: 0.01, lambda_o_terminal: 0.005,
+     tf_drop_epoch: 25,
+     theta_lo_vec: [1.0e-8, 1.0e-8, 1.0e-9, 1.0e-7, 1.0e-9, 1.0e-7, 1.0e-7]}

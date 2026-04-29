@@ -23,25 +23,35 @@
 #        Earlier TF drop. The previous run kept TF on for 70 epochs, by which
 #        point the model has memorised the TF distribution and can't roll out.
 
+# Diagnosis of the overshoot:
+#   For pm to stay 0, the model needs to drive one of {VTXmax, VTLmax, kmt}
+#   very low. But VTLmax floor is 3e-5 and the model already sits at 3e-2
+#   (sigmoid 0.7) by default. Even at minimum VTLmax, with typical reagents,
+#   pm still grows. The model has no parameter setting available that produces
+#   "no protein." Lowering the VTLmax/VTXmax floor to 1e-7 (4 orders below
+#   current) allows the model to shut off translation/transcription when it
+#   sees a failure-pattern reagent mix.
+
 study: real_ivtt_test
 exp_name: stepwise_dna_fix
 out_root: experiments
 
 epochs: 150
 batch_size: 32
-lr: 1.0e-4
-loss_type: log_mse
+lr: 5.0e-5
+loss_type: mse
 normalize_by_species_mean: true
+obs_normalization: minmax
 weight_decay: 1.0e-3
 val_n: 104
 test_n: 104
 split_seed: 42
 seed: 3
 
-hidden: 128
+hidden: 256
 lift_dim: 32
-num_layers: 1
-dropout: 0.3
+num_layers: 2
+dropout: 0.1
 grad_clip: 1.0
 
 teacher_forcing: true
@@ -57,11 +67,17 @@ stratify_targets: [3, 5]
 
 obs_idx: [3, 5]
 
-lambda_r_terminal: 0.005
+lambda_r_terminal: 0.00001
 r_terminal_frac: 0.05
+lambda_o_terminal: 00
+o_terminal_frac: 0.05
 
 theta_lo: 1.0e-6
 theta_hi: 1.0
+# Override per-parameter bounds for the TXTL scaffold:
+# theta = [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+theta_lo_vec: [1.0e-6, 1.0e-6, 1.0e-7, 1.0e-5, 1.0e-7, 1.0e-5, 5.0e-5]
+theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3]
 n_substeps: 1
 
 # --- The fix ---
