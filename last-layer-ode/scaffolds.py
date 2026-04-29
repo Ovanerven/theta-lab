@@ -15,467 +15,6 @@ class MechanisticScaffold(nn.Module):
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-
-class Reduced2Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=2, theta_dim=2)
-        self.state_names = ["A", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, M = y.unbind(dim=-1)
-        kf, kr = theta.unbind(dim=-1)
-        dA = -kf * A + kr * M
-        dM =  kf * A - kr * M
-        return torch.stack((dA, dM), dim=-1)
-
-
-class Reduced3Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=3, theta_dim=4)
-        self.state_names = ["A", "J", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, J, M = y.unbind(dim=-1)
-        kf1, kf2, kr1, kr2 = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * J
-        dJ =  kf1 * A - kr1 * J - kf2 * J + kr2 * M
-        dM =  kf2 * J - kr2 * M
-        return torch.stack((dA, dJ, dM), dim=-1)
-
-
-class Reduced4Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=4, theta_dim=6)
-        self.state_names = ["A", "G", "J", "L"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, G, J, L = y.unbind(dim=-1)
-        kf1, kf2, kf3, kr1, kr2, kr3 = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * G
-        dG =  kf1 * A - kr1 * G - kf2 * G + kr2 * J
-        dJ =  kf2 * G - kr2 * J - kf3 * J + kr3 * L
-        dL =  kf3 * J - kr3 * L
-        return torch.stack((dA, dG, dJ, dL), dim=-1)
-
-
-class Reduced4AEIMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=4, theta_dim=6)
-        self.state_names = ["A", "E", "I", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, E, I, M = y.unbind(dim=-1)
-        kf1, kf2, kf3, kr1, kr2, kr3 = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * E
-        dE =  kf1 * A - kr1 * E - kf2 * E + kr2 * I
-        dI =  kf2 * E - kr2 * I - kf3 * I + kr3 * M
-        dM =  kf3 * I - kr3 * M
-        return torch.stack((dA, dE, dI, dM), dim=-1)
-
-
-class Reduced5Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=5, theta_dim=8)
-        self.state_names = ["A", "D", "G", "J", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, J, M = y.unbind(dim=-1)
-        kf1, kf2, kf3, kf4, kr1, kr2, kr3, kr4 = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * D
-        dD =  kf1 * A - kr1 * D - kf2 * D + kr2 * G
-        dG =  kf2 * D - kr2 * G - kf3 * G + kr3 * J
-        dJ =  kf3 * G - kr3 * J - kf4 * J + kr4 * M
-        dM =  kf4 * J - kr4 * M
-        return torch.stack((dA, dD, dG, dJ, dM), dim=-1)
-
-
-class Reduced6Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=10)
-        self.state_names = ["A", "B", "D", "G", "J", "L"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, D, G, J, L = y.unbind(dim=-1)
-        kfAB, kfBD, kfDG, kfGJ, kfJL, krAB, krBD, krDG, krGJ, krJL = theta.unbind(dim=-1)
-        dA = -kfAB * A + krAB * B
-        dB =  kfAB * A - krAB * B - kfBD * B + krBD * D
-        dD =  kfBD * B - krBD * D - kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kfGJ * G + krGJ * J
-        dJ =  kfGJ * G - krGJ * J - kfJL * J + krJL * L
-        dL =  kfJL * J - krJL * L
-        return torch.stack((dA, dB, dD, dG, dJ, dL), dim=-1)
-
-
-class Reduced6ADGJLMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=10)
-        self.state_names = ["A", "D", "G", "J", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, J, L, M = y.unbind(dim=-1)
-        kfAD, kfDG, kfGJ, kfJL, kfLM, krAD, krDG, krGJ, krJL, krLM = theta.unbind(dim=-1)
-        dA = -kfAD * A + krAD * D
-        dD =  kfAD * A - krAD * D - kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kfGJ * G + krGJ * J
-        dJ =  kfGJ * G - krGJ * J - kfJL * J + krJL * L
-        dL =  kfJL * J - krJL * L - kfLM * L + krLM * M
-        dM =  kfLM * L - krLM * M
-        return torch.stack((dA, dD, dG, dJ, dL, dM), dim=-1)
-
-
-class Reduced6AGHILMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=9)
-        self.state_names = ["A", "G", "H", "I", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, G, H, I, L, M = y.unbind(dim=-1)
-        kfAG, kfGH, kfHI, kfIL, kfLM, krAG, krGH, krIL, krLM = theta.unbind(dim=-1)
-        dA = -kfAG * A + krAG * G
-        dG =  kfAG * A - krAG * G - kfGH * G + krGH * H
-        dH =  kfGH * G - krGH * H - kfHI * H
-        dI =  kfHI * H - kfIL * I + krIL * L
-        dL =  kfIL * I - krIL * L - kfLM * L + krLM * M
-        dM =  kfLM * L - krLM * M
-        return torch.stack((dA, dG, dH, dI, dL, dM), dim=-1)
-
-
-class Reduced6DGHILMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=9)
-        self.state_names = ["D", "G", "H", "I", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        D, G, H, I, L, M = y.unbind(dim=-1)
-        kfDG, kfGH, kfHI, kfIL, kfLM, krDG, krGH, krIL, krLM = theta.unbind(dim=-1)
-        dD = -kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kfGH * G + krGH * H
-        dH =  kfGH * G - krGH * H - kfHI * H
-        dI =  kfHI * H - kfIL * I + krIL * L
-        dL =  kfIL * I - krIL * L - kfLM * L + krLM * M
-        dM =  kfLM * L - krLM * M
-        return torch.stack((dD, dG, dH, dI, dL, dM), dim=-1)
-
-
-class Reduced6ABCDLMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=9)
-        self.state_names = ["A", "B", "C", "D", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, C, D, L, M = y.unbind(dim=-1)
-        kfAB, kfBC, kfCD, kfDL, kfLM, krAB, krCD, krDL, krLM = theta.unbind(dim=-1)
-        dA = -kfAB * A + krAB * B
-        dB =  kfAB * A - krAB * B - kfBC * B
-        dC =  kfBC * B - kfCD * C + krCD * D
-        dD =  kfCD * C - krCD * D - kfDL * D + krDL * L
-        dL =  kfDL * D - krDL * L - kfLM * L + krLM * M
-        dM =  kfLM * L - krLM * M
-        return torch.stack((dA, dB, dC, dD, dL, dM), dim=-1)
-
-
-class Reduced6ACFHKMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=6, theta_dim=10)
-        self.state_names = ["A", "C", "F", "H", "K", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, C, F, H, K, M = y.unbind(dim=-1)
-        kf1, kf2, kf3, kf4, kf5, kr1, kr2, kr3, kr4, kr5 = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * C
-        dC =  kf1 * A - kr1 * C - kf2 * C + kr2 * F
-        dF =  kf2 * C - kr2 * F - kf3 * F + kr3 * H
-        dH =  kf3 * F - kr3 * H - kf4 * H + kr4 * K
-        dK =  kf4 * H - kr4 * K - kf5 * K + kr5 * M
-        dM =  kf5 * K - kr5 * M
-        return torch.stack((dA, dC, dF, dH, dK, dM), dim=-1)
-
-
-class Reduced7Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=7, theta_dim=11)
-        self.state_names = ["A", "D", "G", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, J, K, L, M = y.unbind(dim=-1)
-        kfAD, kfDG, kfGJ, kf10, kf11, kf12, krAD, krDG, krGJ, kr11, kr12 = theta.unbind(dim=-1)
-        dA = -kfAD * A + krAD * D
-        dD =  kfAD * A - krAD * D - kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kfGJ * G + krGJ * J
-        dJ =  kfGJ * G - krGJ * J - kf10 * J
-        dK =  kf10 * J - kf11 * K + kr11 * L
-        dL =  kf11 * K - kr11 * L - kf12 * L + kr12 * M
-        dM =  kf12 * L - kr12 * M
-        return torch.stack((dA, dD, dG, dJ, dK, dL, dM), dim=-1)
-
-
-class Reduced8Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=8, theta_dim=12)
-        self.state_names = ["A", "D", "G", "H", "I", "J", "K", "L"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, H, I, J, K, L = y.unbind(dim=-1)
-        (
-            kfAD, kfDG, kf7, kf8, kf9, kf10, kf11,
-            krAD, krDG, kr7, kr9, kr11
-        ) = theta.unbind(dim=-1)
-        dA = -kfAD * A + krAD * D
-        dD =  kfAD * A - krAD * D - kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * J
-        dJ =  kf9 * I - kr9 * J - kf10 * J
-        dK =  kf10 * J - kf11 * K + kr11 * L
-        dL =  kf11 * K - kr11 * L
-        return torch.stack((dA, dD, dG, dH, dI, dJ, dK, dL), dim=-1)
-
-
-class Reduced8ACEGIJLMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=8, theta_dim=14)
-        self.state_names = ["A", "C", "E", "G", "I", "J", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, C, E, G, I, J, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7,
-            kr1, kr2, kr3, kr4, kr5, kr6, kr7
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * C
-        dC =  kf1 * A - kr1 * C - kf2 * C + kr2 * E
-        dE =  kf2 * C - kr2 * E - kf3 * E + kr3 * G
-        dG =  kf3 * E - kr3 * G - kf4 * G + kr4 * I
-        dI =  kf4 * G - kr4 * I - kf5 * I + kr5 * J
-        dJ =  kf5 * I - kr5 * J - kf6 * J + kr6 * L
-        dL =  kf6 * J - kr6 * L - kf7 * L + kr7 * M
-        dM =  kf7 * L - kr7 * M
-        return torch.stack((dA, dC, dE, dG, dI, dJ, dL, dM), dim=-1)
-
-
-class Reduced8ADGHJKLMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=8, theta_dim=14)
-        self.state_names = ["A", "D", "G", "H", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, H, J, K, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7,
-            kr1, kr2, kr3, kr4, kr5, kr6, kr7
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * D
-        dD =  kf1 * A - kr1 * D - kf2 * D + kr2 * G
-        dG =  kf2 * D - kr2 * G - kf3 * G + kr3 * H
-        dH =  kf3 * G - kr3 * H - kf4 * H + kr4 * J
-        dJ =  kf4 * H - kr4 * J - kf5 * J + kr5 * K
-        dK =  kf5 * J - kr5 * K - kf6 * K + kr6 * L
-        dL =  kf6 * K - kr6 * L - kf7 * L + kr7 * M
-        dM =  kf7 * L - kr7 * M
-        return torch.stack((dA, dD, dG, dH, dJ, dK, dL, dM), dim=-1)
-
-
-class Reduced9Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=9, theta_dim=14)
-        self.state_names = ["A", "D", "G", "H", "I", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, G, H, I, J, K, L, M = y.unbind(dim=-1)
-        (
-            kfAD, kfDG, kf7, kf8, kf9, kf10, kf11, kf12,
-            krAD, krDG, kr7, kr9, kr11, kr12
-        ) = theta.unbind(dim=-1)
-        dA = -kfAD * A + krAD * D
-        dD =  kfAD * A - krAD * D - kfDG * D + krDG * G
-        dG =  kfDG * D - krDG * G - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * J
-        dJ =  kf9 * I - kr9 * J - kf10 * J
-        dK =  kf10 * J - kf11 * K + kr11 * L
-        dL =  kf11 * K - kr11 * L - kf12 * L + kr12 * M
-        dM =  kf12 * L - kr12 * M
-        return torch.stack((dA, dD, dG, dH, dI, dJ, dK, dL, dM), dim=-1)
-
-
-class Reduced10Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=10, theta_dim=14)
-        self.state_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, C, D, E, F, G, H, I, L = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9,
-            kr1, kr3, kr5, kr7, kr9
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * B
-        dB =  kf1 * A - kr1 * B - kf2 * B
-        dC =  kf2 * B - kf3 * C + kr3 * D
-        dD =  kf3 * C - kr3 * D - kf4 * D
-        dE =  kf4 * D - kf5 * E + kr5 * F
-        dF =  kf5 * E - kr5 * F - kf6 * F
-        dG =  kf6 * F - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * L
-        dL =  kf9 * I - kr9 * L
-        return torch.stack((dA, dB, dC, dD, dE, dF, dG, dH, dI, dL), dim=-1)
-
-
-class Reduced10WithMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=10, theta_dim=14)
-        self.state_names = ["A", "D", "F", "G", "H", "I", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9,
-            kr1, kr4, kr6, kr8, kr9
-        ) = theta.unbind(dim=-1)
-        dA =  -kf1 * A + kr1 * D
-        dD =   kf1 * A - kr1 * D - kf2 * D
-        dF =   kf2 * D - kf3 * F
-        dG =   kf3 * F - kf4 * G + kr4 * H
-        dH =   kf4 * G - kr4 * H - kf5 * H
-        dI =   kf5 * H - kf6 * I + kr6 * J
-        dJ =   kf6 * I - kr6 * J - kf7 * J
-        dK =   kf7 * J - kf8 * K + kr8 * L
-        dL =   kf8 * K - kr8 * L - kf9 * L + kr9 * M
-        dM =   kf9 * L - kr9 * M
-        return torch.stack((dA, dD, dF, dG, dH, dI, dJ, dK, dL, dM), dim=-1)
-
-
-class Reduced11Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=11, theta_dim=16)
-        self.state_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, C, D, E, F, G, H, I, J, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kfJM,
-            kr1, kr3, kr5, kr7, kr9, krJM,
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * B
-        dB =  kf1 * A - kr1 * B - kf2 * B
-        dC =  kf2 * B - kf3 * C + kr3 * D
-        dD =  kf3 * C - kr3 * D - kf4 * D
-        dE =  kf4 * D - kf5 * E + kr5 * F
-        dF =  kf5 * E - kr5 * F - kf6 * F
-        dG =  kf6 * F - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * J
-        dJ =  kf9 * I - kr9 * J - kfJM * J + krJM * M
-        dM =  kfJM * J - krJM * M
-        return torch.stack((dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dM), dim=-1)
-
-
-class Reduced11WithMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=11, theta_dim=16)
-        self.state_names = ["A", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10,
-            kr1, kr3, kr5, kr7, kr9, kr10
-        ) = theta.unbind(dim=-1)
-        dA =  -kf1 * A + kr1 * D
-        dD =   kf1 * A - kr1 * D  - kf2 * D
-        dE =   kf2 * D  - kf3 * E  + kr3 * F
-        dF =   kf3 * E  - kr3 * F  - kf4 * F
-        dG =   kf4 * F  - kf5 * G  + kr5 * H
-        dH =   kf5 * G  - kr5 * H  - kf6 * H
-        dI =   kf6 * H  - kf7 * I  + kr7 * J
-        dJ =   kf7 * I  - kr7 * J  - kf8 * J
-        dK =   kf8 * J  - kf9 * K  + kr9 * L
-        dL =   kf9 * K  - kr9 * L  - kf10 * L + kr10 * M
-        dM =   kf10 * L - kr10 * M
-        return torch.stack((dA, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM), dim=-1)
-
-
-class Reduced12Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=12, theta_dim=17)
-        self.state_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, C, D, E, F, G, H, I, J, K, L = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11,
-            kr1, kr3, kr5, kr7, kr9, kr11
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * B
-        dB =  kf1 * A - kr1 * B - kf2 * B
-        dC =  kf2 * B - kf3 * C + kr3 * D
-        dD =  kf3 * C - kr3 * D - kf4 * D
-        dE =  kf4 * D - kf5 * E + kr5 * F
-        dF =  kf5 * E - kr5 * F - kf6 * F
-        dG =  kf6 * F - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * J
-        dJ =  kf9 * I - kr9 * J - kf10 * J
-        dK =  kf10 * J - kf11 * K + kr11 * L
-        dL =  kf11 * K - kr11 * L
-        return torch.stack((dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dK, dL), dim=-1)
-
-
-class Reduced12WithMScaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=12, theta_dim=17)
-        self.state_names = ["A", "B", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11,
-            kr1, kr4, kr6, kr8, kr10, kr11
-        ) = theta.unbind(dim=-1)
-        dA =  -kf1 * A + kr1 * B
-        dB =   kf1 * A - kr1 * B  - kf2 * B
-        dD =   kf2 * B             - kf3 * D
-        dE =   kf3 * D  - kf4 * E  + kr4 * F
-        dF =   kf4 * E  - kr4 * F  - kf5 * F
-        dG =   kf5 * F  - kf6 * G  + kr6 * H
-        dH =   kf6 * G  - kr6 * H  - kf7 * H
-        dI =   kf7 * H  - kf8 * I  + kr8 * J
-        dJ =   kf8 * I  - kr8 * J  - kf9 * J
-        dK =   kf9 * J  - kf10 * K + kr10 * L
-        dL =   kf10 * K - kr10 * L - kf11 * L + kr11 * M
-        dM =   kf11 * L - kr11 * M
-        return torch.stack((dA, dB, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM), dim=-1)
-
-
-class Full13Scaffold(MechanisticScaffold):
-    def __init__(self):
-        super().__init__(P=13, theta_dim=19)
-        self.state_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]
-
-    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        A, B, C, D, E, F, G, H, I, J, K, L, M = y.unbind(dim=-1)
-        (
-            kf1, kf2, kf3, kf4, kf5, kf6, kf7, kf8, kf9, kf10, kf11, kf12,
-            kr1, kr3, kr5, kr7, kr9, kr11, kr12
-        ) = theta.unbind(dim=-1)
-        dA = -kf1 * A + kr1 * B
-        dB =  kf1 * A - kr1 * B - kf2 * B
-        dC =  kf2 * B - kf3 * C + kr3 * D
-        dD =  kf3 * C - kr3 * D - kf4 * D
-        dE =  kf4 * D - kf5 * E + kr5 * F
-        dF =  kf5 * E - kr5 * F - kf6 * F
-        dG =  kf6 * F - kf7 * G + kr7 * H
-        dH =  kf7 * G - kr7 * H - kf8 * H
-        dI =  kf8 * H - kf9 * I + kr9 * J
-        dJ =  kf9 * I - kr9 * J - kf10 * J
-        dK =  kf10 * J - kf11 * K + kr11 * L
-        dL =  kf11 * K - kr11 * L - kf12 * L + kr12 * M
-        dM =  kf12 * L - kr12 * M
-        return torch.stack((dA, dB, dC, dD, dE, dF, dG, dH, dI, dJ, dK, dL, dM), dim=-1)
-
-
-
 class MOFSynthesis12Scaffold(MechanisticScaffold):
     """
     Full 12-state MOF synthesis scaffold. Preserves all mechanistic structure
@@ -1170,31 +709,333 @@ class TXTLSimpleDNAScaffold(MechanisticScaffold):
 
         return torch.stack((dmm, dpm, dDNA), dim=-1)
 
+class MethaneGlobal4Step_NO_Scaffold(MechanisticScaffold):
+    """
+    A physically grounded 4-step macroscopic scaffold for Methane oxidation.
+    Instead of a 49-parameter black box, we only learn 4 kinetic parameters 
+    representing the main branches of combustion.
+    
+    States (7): CH4, O2, CO, CO2, H2O, OH, NO
+    Parameters (4):
+      0: k_methane_ox : CH4 -> CO + H2O (Partial oxidation)
+      1: k_co_ox      : CO -> CO2       (CO burnout)
+      2: k_oh_prod    : O2 + H2O -> OH  (Radical pool generation)
+      3: k_thermal_no : O2 -> NO        (Thermal NO formation proxy)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=4) # Dropped from 49 to 4!
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "NO"]
+        
+        # Bounding the 4 reaction rates
+        self.theta_lo_vec = [1e-5, 1e-5, 1e-5, 1e-6]
+        self.theta_hi_vec = [10.0, 10.0, 10.0, 1.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, NO = y.unbind(dim=-1)
+        k_methane, k_co, k_oh, k_no = theta.unbind(dim=-1)
+
+        # Clamp to prevent negative concentrations causing runaway physics
+        CH4_p = torch.clamp_min(CH4, 0.0)
+        O2_p  = torch.clamp_min(O2,  0.0)
+        CO_p  = torch.clamp_min(CO,  0.0)
+        H2O_p = torch.clamp_min(H2O, 0.0)
+
+        # Ensure rates are positive
+        k_methane = torch.clamp_min(k_methane, 0.0)
+        k_co      = torch.clamp_min(k_co, 0.0)
+        k_oh      = torch.clamp_min(k_oh, 0.0)
+        k_no      = torch.clamp_min(k_no, 0.0)
+
+        # Calculate fluxes for the 4 macroscopic steps (using simple mass action / linear rates)
+        # 1. CH4 + 1.5 O2 -> CO + 2 H2O
+        r1 = k_methane * CH4_p * O2_p 
+        
+        # 2. CO + 0.5 O2 -> CO2
+        r2 = k_co * CO_p * O2_p
+        
+        # 3. O2 -> 2 OH (Conceptual radical formation)
+        r3 = k_oh * O2_p
+        
+        # 4. N2 + O2 -> 2 NO (N2 is assumed constant in air, so rate just depends on O2)
+        r4 = k_no * O2_p
+
+        # Apply stoichiometry to state derivatives
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - 0.5 * r2 - r3 - r4
+        dCO  =  r1 - r2
+        dCO2 =  r2
+        dH2O =  2.0 * r1
+        dOH  =  2.0 * r3
+        dNO  =  2.0 * r4
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
+
+class MethaneGlobal4Step_CH2O_Scaffold(MechanisticScaffold):
+    """
+    A physically grounded 4-step macroscopic scaffold for the Smooke methane model.
+    Routes carbon explicitly through the CH2O intermediate.
+    
+    States (7): CH4, O2, CO, CO2, H2O, OH, CH2O
+    Parameters (4):
+      0: k_methane : CH4 + O2 -> CH2O + H2O      (Methane to Formaldehyde)
+      1: k_ch2o    : CH2O + 0.5 O2 -> CO + H2O   (Formaldehyde to CO)
+      2: k_co      : CO + 0.5 O2 -> CO2          (CO burnout)
+      3: k_oh      : O2 -> 2 OH                  (Radical pool proxy)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=4)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "CH2O"]
+        
+        self.theta_lo_vec = [1e-5, 1e-5, 1e-5, 1e-6]
+        self.theta_hi_vec = [10.0, 10.0, 10.0, 1.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, CH2O = y.unbind(dim=-1)
+        k_methane, k_ch2o, k_co, k_oh = theta.unbind(dim=-1)
+
+        # Clamp states to prevent negative concentrations
+        CH4_p  = torch.clamp_min(CH4, 0.0)
+        O2_p   = torch.clamp_min(O2,  0.0)
+        CO_p   = torch.clamp_min(CO,  0.0)
+        CH2O_p = torch.clamp_min(CH2O, 0.0)
+
+        # Clamp rates to prevent reverse physics
+        k_methane = torch.clamp_min(k_methane, 0.0)
+        k_ch2o    = torch.clamp_min(k_ch2o, 0.0)
+        k_co      = torch.clamp_min(k_co, 0.0)
+        k_oh      = torch.clamp_min(k_oh, 0.0)
+
+        # 1. CH4 -> CH2O
+        r1 = k_methane * CH4_p * O2_p 
+        
+        # 2. CH2O -> CO
+        r2 = k_ch2o * CH2O_p * O2_p
+        
+        # 3. CO -> CO2
+        r3 = k_co * CO_p * O2_p
+        
+        # 4. OH generation proxy
+        r4 = k_oh * O2_p
+
+        # Apply mass-balanced stoichiometry to the derivatives
+        dCH4  = -r1
+        dO2   = -r1 - 0.5 * r2 - 0.5 * r3 - r4
+        dCO   =  r2 - r3
+        dCO2  =  r3
+        dH2O  =  r1 + r2
+        dOH   =  2.0 * r4
+        dCH2O =  r1 - r2
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dCH2O), dim=-1)
+
+
+class MethaneDomainInformedCH2O_OHGate4Step_Scaffold(MechanisticScaffold):
+        """
+        Domain-informed 4-step CH2O scaffold with OH-gated CH2O oxidation.
+
+        States (7): CH4, O2, CO, CO2, H2O, OH, CH2O
+        Parameters (4):
+            0: k_methane : CH4 + O2 -> CH2O + H2O
+            1: k_ch2o    : CH2O + OH -> CO + H2O + H (OH-gated)
+            2: k_co      : CO + 0.5 O2 -> CO2
+            3: k_oh      : O2 -> 2 OH
+        """
+        def __init__(self):
+                super().__init__(P=7, theta_dim=4)
+                self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "CH2O"]
+
+                self.theta_lo_vec = [1e-5, 1e-5, 1e-5, 1e-6]
+                self.theta_hi_vec = [10.0, 10.0, 10.0, 1.0]
+
+        def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+                CH4, O2, CO, CO2, H2O, OH, CH2O = y.unbind(dim=-1)
+                k_methane, k_ch2o, k_co, k_oh = theta.unbind(dim=-1)
+
+                CH4_p  = torch.clamp_min(CH4, 0.0)
+                O2_p   = torch.clamp_min(O2,  0.0)
+                CO_p   = torch.clamp_min(CO,  0.0)
+                CH2O_p = torch.clamp_min(CH2O, 0.0)
+                OH_p   = torch.clamp_min(OH,  0.0)
+
+                k_methane = torch.clamp_min(k_methane, 0.0)
+                k_ch2o    = torch.clamp_min(k_ch2o, 0.0)
+                k_co      = torch.clamp_min(k_co, 0.0)
+                k_oh      = torch.clamp_min(k_oh, 0.0)
+
+                r1 = k_methane * CH4_p * O2_p
+                r2 = k_ch2o * CH2O_p * (OH_p / (OH_p + 1e-4))
+                r3 = k_co * CO_p * O2_p
+                r4 = k_oh * O2_p
+
+                dCH4  = -r1
+                dO2   = -r1 - 0.5 * r3 - r4
+                dCO   = r2 - r3
+                dCO2  = r3
+                dH2O  = r1 + r2
+                dOH   = 2.0 * r4
+                dCH2O = r1 - r2
+
+                return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dCH2O), dim=-1)
+    
+class MethaneDomainInformedOHGate4Step_NO_Scaffold(MechanisticScaffold):
+    """
+    Domain-informed macroscopic scaffold for Methane oxidation.
+    Incorporates reversibility, water-assisted CO oxidation, and fractional exponents.
+    
+    States (7): CH4, O2, CO, CO2, H2O, OH, NO
+    Parameters (8):
+      0: k_methane_ox : CH4 forward oxidation
+      1: n_o2_methane : Fractional order of O2 in CH4 oxidation
+      2: k_co_f       : CO -> CO2 forward rate
+      3: k_co_r       : CO2 -> CO reverse rate (Equilibrium bottleneck)
+      4: k_wgs        : Water-gas shift proxy (CO + H2O -> CO2)
+      5: k_oh_prod    : Radical pool generation
+      6: k_thermal_no : NO formation
+      7: n_o2_no      : Fractional order of O2 in NO formation (Thermal NO is highly non-linear)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "NO"]
+        
+        # Bounds: rates can be wide, exponents bounded between ~0.1 and 2.0
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5, 1e-5, 1e-5, 1e-6, 0.1]
+        self.theta_hi_vec = [10.0, 2.0, 10.0, 10.0, 10.0, 10.0, 1.0,  2.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, NO = y.unbind(dim=-1)
+        (k_methane, n_o2_methane, k_co_f, k_co_r, 
+         k_wgs, k_oh, k_no, n_o2_no) = theta.unbind(dim=-1)
+
+        # Clamp states to prevent negative concentrations and NaN powers
+        eps = 1e-8
+        CH4_p = torch.clamp_min(CH4, eps)
+        O2_p  = torch.clamp_min(O2,  eps)
+        CO_p  = torch.clamp_min(CO,  eps)
+        CO2_p = torch.clamp_min(CO2, eps)
+        H2O_p = torch.clamp_min(H2O, eps)
+        OH_p  = torch.clamp_min(OH,  0.0)
+
+        # Clamp parameters to bounds
+        k_methane    = torch.clamp_min(k_methane, 0.0)
+        n_o2_methane = torch.clamp(n_o2_methane, min=0.1, max=2.0)
+        k_co_f       = torch.clamp_min(k_co_f, 0.0)
+        k_co_r       = torch.clamp_min(k_co_r, 0.0)
+        k_wgs        = torch.clamp_min(k_wgs, 0.0)
+        k_oh         = torch.clamp_min(k_oh, 0.0)
+        k_no         = torch.clamp_min(k_no, 0.0)
+        n_o2_no      = torch.clamp(n_o2_no, min=0.1, max=2.0)
+
+        # 1. CH4 Oxidation (with learned fractional O2 dependence + OH gating)
+        oh_gate = OH_p / (OH_p + 1e-3)
+        r1 = k_methane * CH4_p * (O2_p ** n_o2_methane) * oh_gate
+        
+        # 2. Reversible CO Burnout + Water Gas Shift Proxy
+        # r2_f: CO + 0.5 O2 -> CO2
+        # r2_r: CO2 -> CO + 0.5 O2
+        # r_wgs: CO + H2O -> CO2 + (hidden)
+        r2_f  = k_co_f * CO_p * (O2_p ** 0.5)
+        r2_r  = k_co_r * CO2_p
+        r_wgs = k_wgs * CO_p * H2O_p
+        
+        # 3. OH Generation
+        r3 = k_oh * O2_p
+        
+        # 4. Thermal NO formation (highly sensitive to O2)
+        r4 = k_no * (O2_p ** n_o2_no)
+
+        # Apply stoichiometry
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - 0.5 * r2_f + 0.5 * r2_r - r3 - r4
+        dCO  =  r1 - r2_f + r2_r - r_wgs
+        dCO2 =  r2_f - r2_r + r_wgs
+        dH2O =  2.0 * r1 - r_wgs
+        dOH  =  2.0 * r3
+        dNO  =  2.0 * r4
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
+    
+class MethaneRevWGS_OHGate4Step_NO_Scaffold(MechanisticScaffold):
+    """
+    Advanced Domain-informed macroscopic scaffold.
+    Fixes the CO2 overshoot problem by replacing O2-driven CO burnout 
+    with OH-gated CO burnout, mirroring the true CO + OH <-> CO2 + H reaction.
+    Also introduces a reversible Water-Gas Shift proxy.
+    
+    States (7): CH4, O2, CO, CO2, H2O, OH, NO
+    Parameters (8):
+      0: k_methane_ox : CH4 forward oxidation
+      1: n_o2_methane : Fractional order of O2 in CH4 oxidation
+      2: k_co_oh      : CO -> CO2 forward rate (GATED BY OH)
+      3: k_co_r       : CO2 -> CO reverse rate 
+      4: k_wgs_f      : Water-gas shift forward (CO + H2O -> CO2 + ...)
+      5: k_wgs_r      : Water-gas shift reverse (CO2 -> CO + H2O proxy)
+      6: k_oh_prod    : Radical pool generation
+      7: k_thermal_no : NO formation
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "NO"]
+        
+        # Bounds optimized for the new kinetic formulation
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-6]
+        self.theta_hi_vec = [10.0, 2.0, 10.0, 10.0, 10.0, 10.0, 10.0, 1.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, NO = y.unbind(dim=-1)
+        (k_methane, n_o2_methane, k_co_oh, k_co_r, 
+         k_wgs_f, k_wgs_r, k_oh, k_no) = theta.unbind(dim=-1)
+
+        # Clamp states to prevent negative concentrations and NaN powers
+        eps = 1e-8
+        CH4_p = torch.clamp_min(CH4, eps)
+        O2_p  = torch.clamp_min(O2,  eps)
+        CO_p  = torch.clamp_min(CO,  eps)
+        CO2_p = torch.clamp_min(CO2, eps)
+        H2O_p = torch.clamp_min(H2O, eps)
+        OH_p  = torch.clamp_min(OH,  eps)
+
+        # Clamp parameters to bounds
+        k_methane    = torch.clamp_min(k_methane, 0.0)
+        n_o2_methane = torch.clamp(n_o2_methane, min=0.1, max=2.0)
+        k_co_oh      = torch.clamp_min(k_co_oh, 0.0)
+        k_co_r       = torch.clamp_min(k_co_r, 0.0)
+        k_wgs_f      = torch.clamp_min(k_wgs_f, 0.0)
+        k_wgs_r      = torch.clamp_min(k_wgs_r, 0.0)
+        k_oh         = torch.clamp_min(k_oh, 0.0)
+        k_no         = torch.clamp_min(k_no, 0.0)
+
+        # 1. CH4 Oxidation (Requires OH pool to truly kick off - induction proxy)
+        # We add a mild OH saturation term to force the ignition delay
+        r1 = k_methane * CH4_p * (O2_p ** n_o2_methane) * (OH_p / (OH_p + 1e-3))
+        
+        # 2. Reversible CO Burnout (GATED BY OH instead of O2)
+        # r2_f: CO + OH -> CO2 + H (proxy)
+        r2_f = k_co_oh * CO_p * OH_p
+        r2_r = k_co_r * CO2_p
+        
+        # 3. Fully Reversible Water-Gas Shift
+        r_wgs_f = k_wgs_f * CO_p * H2O_p
+        r_wgs_r = k_wgs_r * CO2_p  # We don't track H2, so we approximate the reverse rate linearly
+        r_wgs_net = r_wgs_f - r_wgs_r
+        
+        # 4. OH Generation (Fuel inhibition proxy: early CH4 suppresses OH accumulation)
+        r3 = k_oh * O2_p / (1.0 + 10.0 * CH4_p)
+        
+        # 5. NO formation
+        r4 = k_no * O2_p
+
+        # Apply stoichiometry
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - r3 - r4
+        dCO  =  r1 - r2_f + r2_r - r_wgs_net
+        dCO2 =  r2_f - r2_r + r_wgs_net
+        dH2O =  2.0 * r1 - r_wgs_net
+        dOH  =  2.0 * r3 - r2_f  # OH is consumed during CO burnout
+        dNO  =  2.0 * r4
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
 
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
-    "reduced2":          Reduced2Scaffold(),
-    "reduced3":          Reduced3Scaffold(),
-    "reduced4":          Reduced4Scaffold(),
-    "reduced4_AEIM":     Reduced4AEIMScaffold(),
-    "reduced5":          Reduced5Scaffold(),
-    "reduced6":          Reduced6Scaffold(),
-    "reduced6_ADGJLM":   Reduced6ADGJLMScaffold(),
-    "reduced6_AGHILM":   Reduced6AGHILMScaffold(),
-    "reduced6_DGHILM":   Reduced6DGHILMScaffold(),
-    "reduced6_ABCDLM":   Reduced6ABCDLMScaffold(),
-    "reduced6_ACFHKM":   Reduced6ACFHKMScaffold(),
-    "reduced7":          Reduced7Scaffold(),
-    "reduced8":          Reduced8Scaffold(),
-    "reduced8_ACEGIJLM": Reduced8ACEGIJLMScaffold(),
-    "reduced8_ADGHJKLM": Reduced8ADGHJKLMScaffold(),
-    "reduced9":          Reduced9Scaffold(),
-    "reduced10":         Reduced10Scaffold(),
-    "reduced10_with_M":  Reduced10WithMScaffold(),
-    "reduced11":         Reduced11Scaffold(),
-    "reduced11_with_M":  Reduced11WithMScaffold(),
-    "reduced12":         Reduced12Scaffold(),
-    "reduced12_with_M":  Reduced12WithMScaffold(),
-    "full13":            Full13Scaffold(),
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
     "mof_synthesis_8":   MOFSynthesis8Scaffold(),
     "mof_synthesis_6":   MOFSynthesis6Scaffold(),
@@ -1205,4 +1046,9 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_maturation_dna": TXTLMaturationDNAScaffold(),
     "txtl_simple_dna":     TXTLSimpleDNAScaffold(),
     "txtl_resource_and_maturation_dna": TXTLResourceandMaturationDNAScaffold(),
+    "methane_global4_no":    MethaneGlobal4Step_NO_Scaffold(),
+    "methane_global4_ch2o":  MethaneGlobal4Step_CH2O_Scaffold(),
+    "methane_domain4_ch2o_ohgate": MethaneDomainInformedCH2O_OHGate4Step_Scaffold(),
+    "methane_domain4_no_ohgate": MethaneDomainInformedOHGate4Step_NO_Scaffold(),
+    "methane_revWGS_ohgate_no": MethaneRevWGS_OHGate4Step_NO_Scaffold(),
 }

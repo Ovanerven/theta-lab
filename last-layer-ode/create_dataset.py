@@ -10,12 +10,16 @@ from scipy.interpolate import interp1d
 from sim.benchmark_models import FullModel
 from sim.MOF_model import MOF_Synthesis
 from sim.Single_enzyme import SingleEnzyme
+from sim.explicit_methane_models import GRI30_FullModel, Kazakov_MiddleModel, Smooke_ReducedModel
 from sim.syndata_simulator_ODE import simulate_chain_with_bolus, simulate_ivp_with_bolus, single_event_generator
 
 SIM_MODELS = {
-    "full13":        FullModel,
-    "mof_synthesis": MOF_Synthesis,
-    "single_enzyme": SingleEnzyme,
+    "full13":               FullModel,
+    "mof_synthesis":        MOF_Synthesis,
+    "single_enzyme":        SingleEnzyme,
+    "gri30_full":           GRI30_FullModel,
+    "kazakov_middle":       Kazakov_MiddleModel,
+    "smooke_reduced_model": Smooke_ReducedModel,
 }
 
 
@@ -116,10 +120,142 @@ def _single_enzyme_config() -> ModelConfig:
     )
 
 
+def _gri30_full_config() -> ModelConfig:
+    """
+    GRI-Mech 3.0 methane / air full network (53 states, 325 effective k coefficients).
+
+    The supervisor's `explicit_methane_models.py` collapses each published reaction
+    onto a single effective mass-action coefficient, so all 325 k's are dimensionally
+    rate constants of one normalised mass-action term. With all k=1, stoichiometric
+    methane / air (CH4=1, O2=2, N2=7.52) plateaus by t≈5 (probe trajectories
+    confirm this).
+
+    Strategy here:
+      - Fix all k = 1.0 (no per-trajectory variation). This makes GRI30 a
+        deterministic ground-truth generator; trajectory diversity comes from
+        the bolus schedule and y0.
+      - Bolus controls bind to the four feed inputs from the model's `dim=True`
+        metadata: feed_CH4, feed_O2, feed_N2, feed_H2O — routed onto species
+        CH4 (idx 13), O2 (idx 3), N2 (idx 47), H2O (idx 5).
+      - Initial condition: stoichiometric CH4 + 2*O2 + 7.52*N2 (the air mix);
+        all other species 0.
+      - Use BDF (`ivp` simulator) — chemistry is stiff.
+
+    Suggested CLI:
+      python last-layer-ode/create_dataset.py --model gri30_full \\
+          --t-span 5 --n-steps 200 --n-samples 1000 \\
+          --control-indices 13,3,47,5 \\
+          --obs-indices 13,3,14,15,5,4 \\
+          --output-file datasets/gri30_full.npz
+    """
+    default_params = [1.0] * 325
+    param_ranges = [(v, v) for v in default_params]
+
+    # 53-state initial condition: stoichiometric CH4 / O2 / N2 mix.
+    # Indices follow the GRI30 species list returned by dim=True.
+    x0_default = [0.0] * 53
+    x0_default[13] = 1.0   # CH4
+    x0_default[3]  = 2.0   # O2
+    x0_default[47] = 7.52  # N2 (diluent)
+
+    bolus_ranges = {
+        "CH4": (0.05, 0.5),
+        "O2":  (0.1,  1.0),
+        "N2":  (0.5,  3.0),
+        "H2O": (0.1,  1.0),
+    }
+
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 1.0),
+        bolus_count_range=(2, 8),
+        simulator="ivp",
+    )
+
+
+def _kazakov_middle_config() -> ModelConfig:
+    """
+    Kazakov middle-size methane mechanism (28 states, 116 effective k coefficients).
+
+    Strategy:
+      - Fix all k = 1.0 (deterministic ground-truth generator).
+      - Bolus controls bind to feed inputs: feed_CH4, feed_O2, feed_N2, feed_H2O.
+        Indices in Kazakov: CH4=11, O2=3, N2=22, H2O=5.
+      - Initial condition: stoichiometric CH4 + 2*O2 + 7.52*N2.
+      - Use BDF (ivp simulator) — chemistry is stiff.
+    """
+    default_params = [1.0] * 116
+    param_ranges = [(v, v) for v in default_params]
+
+    # 28-state initial condition
+    x0_default = [0.0] * 28
+    x0_default[11] = 1.0   # CH4
+    x0_default[3]  = 2.0   # O2
+    x0_default[22] = 7.52  # N2
+
+    bolus_ranges = {
+        "CH4": (0.05, 0.5),
+        "O2":  (0.1,  1.0),
+        "N2":  (0.5,  3.0),
+        "H2O": (0.1,  1.0),
+    }
+
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 1.0),
+        bolus_count_range=(2, 8),
+        simulator="ivp",
+    )
+
+
+def _smooke_reduced_config() -> ModelConfig:
+    """
+    Smooke reduced methane mechanism (16 states, 35 effective k coefficients).
+
+    Strategy:
+      - Fix all k = 1.0 (deterministic ground-truth generator).
+      - Bolus controls bind to feed inputs: feed_CH4, feed_O2, feed_N2, feed_H2O.
+        Indices in Smooke: CH4=0, O2=2, N2=15, H2O=8.
+      - Initial condition: stoichiometric CH4 + 2*O2 + 7.52*N2.
+      - Use BDF (ivp simulator) — chemistry is stiff.
+    """
+    default_params = [1.0] * 35
+    param_ranges = [(v, v) for v in default_params]
+
+    # 16-state initial condition
+    x0_default = [0.0] * 16
+    x0_default[0]  = 1.0   # CH4
+    x0_default[2]  = 2.0   # O2
+    x0_default[15] = 7.52  # N2
+
+    bolus_ranges = {
+        "CH4": (0.05, 0.5),
+        "O2":  (0.1,  1.0),
+        "N2":  (0.5,  3.0),
+        "H2O": (0.1,  1.0),
+    }
+
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 1.0),
+        bolus_count_range=(2, 8),
+        simulator="ivp",
+    )
+
+
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
-    "full13":        ModelConfig(),
-    "mof_synthesis": _mof_synthesis_config(),
-    "single_enzyme": _single_enzyme_config(),
+    "full13":               ModelConfig(),
+    "mof_synthesis":        _mof_synthesis_config(),
+    "single_enzyme":        _single_enzyme_config(),
+    "gri30_full":           _gri30_full_config(),
+    "kazakov_middle":       _kazakov_middle_config(),
+    "smooke_reduced_model": _smooke_reduced_config(),
 }
 
 
@@ -273,7 +409,10 @@ def generate_training_dataset(
     out_path = Path(output_file)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    n_states_full, n_params_full, names_full = model_fn(None, None, None, dim=True)
+    _dim = model_fn(None, None, None, dim=True)
+    # Some models (MOF, single_enzyme, full13) return (states, params, names);
+    # methane models return (states, params, names, observed, inputs, source).
+    n_states_full, n_params_full, names_full = _dim[0], _dim[1], _dim[2]
     names_full = list(names_full)
 
     # Load model-specific config
@@ -446,7 +585,8 @@ def main():
                         choices=list(SIM_MODELS.keys()),
                         help="Simulation model to use for data generation. "
                              "Use --t-span 30 for mof_synthesis. "
-                             "Use --t-span 10 --n-steps 200 for single_enzyme.")
+                             "Use --t-span 10 --n-steps 200 for single_enzyme. "
+                             "Use --t-span 5 --n-steps 200 for gri30_full.")
     parser.add_argument("--n-samples", type=int, default=1000)
     parser.add_argument("--t-span", type=float, default=300.0)
     parser.add_argument("--n-steps", type=int, default=600)
