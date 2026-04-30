@@ -57,6 +57,21 @@ class ODEDataset(Dataset):
         self.control_names = d["control_names"].astype(str) if "control_names" in d else None
         self.obs_names = d["obs_names"].astype(str) if "obs_names" in d else None
 
+        # MinMax stats for u (per channel). u_scaled_cols may be a subset of
+        # control columns (e.g. excludes DNA c). Map names back to indices in
+        # u_seq's last dim so the model can apply per-channel minmax to the
+        # right columns and leave others (DNA c) untouched.
+        self.u_scale_max = d["u_scale_max"].astype(np.float32) if "u_scale_max" in d else None
+        if "u_scaled_cols" in d and self.control_names is not None:
+            scaled = list(d["u_scaled_cols"].astype(str))
+            ctrl_list = list(self.control_names)
+            try:
+                self.u_scaled_cols_idx = np.array([ctrl_list.index(c) for c in scaled], dtype=np.int64)
+            except ValueError:
+                self.u_scaled_cols_idx = None
+        else:
+            self.u_scaled_cols_idx = None
+
         # Variable-length support
         if "lengths" in d:
             self.lengths = d["lengths"].astype(np.int64)  # (N,)
@@ -597,6 +612,9 @@ class TrainConfig:
     exclude_ode_cols_from_gru: bool = False  # if True, exclude u cols that route to ODE states (e.g. DNA c)
     head_bias_init: float = 0.0   # init all head biases to this (<0 starts theta near lo; e.g. -5.0)
     head_weight_gain: float = 1.0  # Xavier gain for head weights (>1 amplifies per-experiment variation)
+    detach_y_prev: bool = True   # detach y_prev before feeding to GRU (matches supervisor reference).
+                                 # If False, gradients flow through y_prev → GRU → theta across timesteps,
+                                 # giving a longer credit-assignment path but more memory + instability.
 
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
@@ -971,6 +989,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.head_bias_init),
         head_weight_gain=float(cfg.head_weight_gain),
+        detach_y_prev=bool(cfg.detach_y_prev),
+        u_minmax_max=(torch.tensor(ds.u_scale_max, dtype=torch.float32)
+                      if str(cfg.u_transform) in ("minmax", "minmax_sqrt") and ds.u_scale_max is not None
+                      else None),
+        u_minmax_cols=(list(ds.u_scaled_cols_idx)
+                       if str(cfg.u_transform) in ("minmax", "minmax_sqrt") and ds.u_scaled_cols_idx is not None
+                       else None),
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.

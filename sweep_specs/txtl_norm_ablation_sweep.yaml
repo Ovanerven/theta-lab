@@ -1,0 +1,68 @@
+# Norm-stack ablation, anchored on b0 of txtl_r_depletion_sweep
+# (lamr_3e-3, lamo=0, log1p_clip1 + normalize_by_species_mean=true).
+#
+# Hypothesis: combining log1p_clip1 AND mean-normalization may double-up the
+# scale handling (log compression then per-species rescale). Try each in
+# isolation against the anchor.
+#
+# Three arms, single seed, otherwise identical to the b0 anchor.
+
+study: txtl_norm_ablation_sweep
+runs_per_job: 1
+time: "01:30:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  # ── Match b0 of txtl_r_depletion_sweep ──────────────────────────────────
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.3
+  u_transform: cumsum_sqrt
+  seed: 1
+  split_seed: 42
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 0.003
+  lambda_o_terminal: 0.0
+  tf_drop_epoch: 25
+  auto_scale_aux_losses: true
+
+runs:
+  # A: anchor — exact repro of b0 (mse + log1p_clip1 + mean normalization)
+  - {exp_name: anchor_log1p_and_mean,
+     loss_type: mse,
+     obs_normalization: log1p_clip1,
+     normalize_by_species_mean: true}
+
+  # B: log1p_clip1 alone, no mean normalization
+  - {exp_name: log1p_no_mean,
+     loss_type: mse,
+     obs_normalization: log1p_clip1,
+     normalize_by_species_mean: false}
+
+  # C: mean normalization alone, no log1p (linear obs)
+  - {exp_name: mean_only_no_log,
+     loss_type: mse,
+     obs_normalization: none,
+     normalize_by_species_mean: true}
+
+  # D: NRMSE — sqrt comes from the loss, divided by species mean. No log1p.
+  #    Equivalent to per-species NRMSE: sqrt(mean(err^2)) / mean(y_train).
+  - {exp_name: nrmse_mean,
+     loss_type: rmse,
+     obs_normalization: none,
+     normalize_by_species_mean: true}

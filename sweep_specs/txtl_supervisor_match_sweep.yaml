@@ -1,0 +1,133 @@
+# Sweep building on the most-promising arm from txtl_init_loss_tf_sweep_rerun
+# (endpoint_1: Rp=-0.196, Rm=-0.099) and probing two new hypotheses:
+#
+#   1. Cumsum-on-u may be HARMFUL. The supervisor's reference parser (see
+#      datasets/supervisorhint_dataparser.py) feeds the GRU per-step boluses
+#      after MinMaxScaler + sqrt — NO cumsum. Only DNA c is cumulative, and
+#      that already happens implicitly inside the ODE state. We test
+#      u_transform variants holding everything else at the promising config:
+#         cumsum_sqrt (baseline / current best)  vs  sqrt  vs  minmax_sqrt  vs  minmax  vs  none
+#
+#   2. Detaching y_prev when feeding the GRU. The current default is True
+#      (matches supervisor: `det_mm = mm_gt_prev.detach()`). Test False —
+#      gradients flow through y_prev → GRU → theta across timesteps, longer
+#      credit-assignment path. Wired end-to-end via cfg.detach_y_prev.
+#
+#   3. A "supervisor_exact" arm that mirrors as much of the supervisor's
+#      reference setup as possible:
+#         - u_transform=minmax_sqrt    (MinMaxScaler + sqrt on per-step boluses)
+#         - y_transform=sqrt            (sqrt on y_in)
+#         - exclude_ode_cols_from_gru   (DNA c omitted from GRU)
+#         - gru_y_obs_only              (only mm, pm fed back)
+#         - tf_every=100                (k % 100 == 0 in supervisor)
+#         - tf_drop_epoch=huge          (supervisor never drops TF)
+#         - lambda_endpoint=0, lambda_pm_tail=0, lambda_r_terminal=0
+#         - obs_normalization=none      (supervisor uses raw values)
+#         - loss_type=mse
+#         - hidden=200, num_layers=2    (supervisor: hidden=200, layers=2)
+#         - lr=0.0018                   (supervisor's decay arg)
+#         - detach_y_prev=true
+#
+# Implementation notes (deltas from earlier sweeps):
+#   - u_transform: minmax / minmax_sqrt require dataset npz to expose
+#     u_scale_max + u_scaled_cols (real_ivtt_raw_no_outliers.npz has both).
+#     ODEDataset now reads them; OdeRNN registers a per-channel max buffer.
+#   - cfg.detach_y_prev wired end-to-end through train_R.py → OdeRNN.
+
+study: txtl_supervisor_match_sweep
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  seed: 1
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_endpoint: 1.0
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  auto_scale_aux_losses: true
+
+  tf_drop_epoch: 25
+  tf_every: 50
+
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+runs:
+  # ── Anchor: best-known balanced arm (rerun/endpoint_1 reproduction) ──
+  - {exp_name: anchor_endpoint_1_cumsum_sqrt, u_transform: cumsum_sqrt}
+
+  # ── (1) u_transform ablation: drop cumsum, vary scaling ──
+  - {exp_name: u_sqrt,        u_transform: sqrt}
+  - {exp_name: u_minmax_sqrt, u_transform: minmax_sqrt}
+  - {exp_name: u_minmax,      u_transform: minmax}
+  - {exp_name: u_none,        u_transform: none}
+  - {exp_name: u_cumsum,      u_transform: cumsum}        # cumsum without sqrt — isolate which piece hurts
+
+  # ── (2) detach_y_prev ablation (with the strongest u variant: minmax_sqrt) ──
+  - {exp_name: detach_y_off_minmax_sqrt, u_transform: minmax_sqrt, detach_y_prev: false}
+  - {exp_name: detach_y_off_cumsum_sqrt, u_transform: cumsum_sqrt, detach_y_prev: false}
+  - {exp_name: detach_y_off_sqrt,        u_transform: sqrt,        detach_y_prev: false}
+
+  # ── (3) Supervisor-exact arm ──
+  - exp_name: supervisor_exact
+    u_transform: minmax_sqrt
+    y_transform: sqrt
+    gru_y_obs_only: true
+    exclude_ode_cols_from_gru: true
+    detach_y_prev: true
+    tf_every: 100
+    tf_drop_epoch: 999999          # never drop TF (supervisor alternates throughout)
+    teacher_forcing: true
+    obs_normalization: none
+    loss_type: mse
+    lambda_endpoint: 0.0
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 0.0
+    lambda_o_terminal: 0.0
+    auto_scale_aux_losses: false
+    hidden: 200
+    num_layers: 2
+    dropout: 0.0
+    weight_decay: 0.0
+    lr: 0.0018
+
+  # ── (4) Supervisor-exact + endpoint loss (test if endpoint helps even with sup setup) ──
+  - exp_name: supervisor_exact_plus_endpoint1
+    u_transform: minmax_sqrt
+    y_transform: sqrt
+    gru_y_obs_only: true
+    exclude_ode_cols_from_gru: true
+    detach_y_prev: true
+    tf_every: 100
+    tf_drop_epoch: 999999
+    obs_normalization: none
+    loss_type: mse
+    lambda_endpoint: 1.0
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 0.0
+    auto_scale_aux_losses: true
+    hidden: 200
+    num_layers: 2
+    dropout: 0.0
+    lr: 0.0018
+
+  # ── (5) Promising arm + supervisor's TF schedule (every 100, never dropped) ──
+  - {exp_name: promising_tf_every100_nodrop, u_transform: minmax_sqrt, tf_every: 100, tf_drop_epoch: 999999}
+  - {exp_name: promising_tf_every100_drop25, u_transform: minmax_sqrt, tf_every: 100, tf_drop_epoch: 25}

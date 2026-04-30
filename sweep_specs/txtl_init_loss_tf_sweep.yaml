@@ -1,0 +1,74 @@
+# Init/Loss/TF sweep based on user-proposed groups (28 runs).
+# Baseline matches txtl_r_depletion_sweep defaults; each run overrides one idea.
+
+study: txtl_init_loss_tf_sweep_rerun_sqrt_utrans
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  u_transform: sqrt
+  seed: 1
+
+  # Baseline loss setup (same as recent r_depletion sweep)
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  auto_scale_aux_losses: true
+
+  # Teacher forcing baseline (cliff at epoch 25)
+  tf_drop_epoch: 25
+  tf_every: 50
+
+runs:
+  # === Group 1: Initialization Sweep ===
+  - {exp_name: init_gain3, head_weight_gain: 3.0}
+  - {exp_name: init_gain5, head_weight_gain: 5.0}
+  - {exp_name: init_bias_lo, head_bias_init: -2.0}
+  - {exp_name: init_bias_hi, head_bias_init: 2.0}
+  - {exp_name: init_gain3_bias_lo, head_weight_gain: 3.0, head_bias_init: -2.0}
+  - {exp_name: init_gain3_bias_hi, head_weight_gain: 3.0, head_bias_init: 2.0}
+
+  # === Group 2: Loss Space & Endpoint Sweep ===
+  - {exp_name: loss_sqrt, obs_normalization: sqrt}
+  - {exp_name: loss_none, obs_normalization: none}
+  - {exp_name: endpoint_1, lambda_endpoint: 1.0}
+  - {exp_name: endpoint_5, lambda_endpoint: 5.0}
+  - {exp_name: pm_tail_abs, auto_scale_aux_losses: false, lambda_pm_tail: 1.0}
+  - {exp_name: sqrt_endpoint_1, obs_normalization: sqrt, lambda_endpoint: 1.0}
+
+  # === Group 3: Teacher Forcing Sweep ===
+  - {exp_name: tf_drop0, tf_drop_epoch: 0}
+  - {exp_name: tf_drop5, tf_drop_epoch: 5}
+  - {exp_name: tf_drop50, tf_drop_epoch: 50}
+  - {exp_name: tf_every1, tf_every: 1}
+  - {exp_name: tf_every10, tf_every: 10}
+  - {exp_name: tf_every10_drop0, tf_every: 10, tf_drop_epoch: 0}
+
+  # === Group 4: VTXmax Bounds Check (theta_hi_vec index 2) ===
+  # theta_hi_vec order: [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+  - {exp_name: vtx_hi_0p05, theta_hi_vec: [5.0e-4, 5.0e-4, 5.0e-2, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3]}
+  - {exp_name: vtx_hi_0p01, theta_hi_vec: [5.0e-4, 5.0e-4, 1.0e-2, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3]}
+
+  # === Group 5: Kitchen Sink ===
+  - {exp_name: fix_combo, obs_normalization: sqrt, head_weight_gain: 3.0, lambda_endpoint: 1.0}
+  - {exp_name: fix_combo_bias_lo, obs_normalization: sqrt, head_weight_gain: 3.0, head_bias_init: -2.0, lambda_endpoint: 1.0}
+  - {exp_name: fix_combo_no_tf, obs_normalization: sqrt, head_weight_gain: 3.0, tf_drop_epoch: 0}
+  - {exp_name: fix_combo_abs_tail, obs_normalization: sqrt, head_weight_gain: 3.0, auto_scale_aux_losses: false, lambda_pm_tail: 1.0}
+  - {exp_name: fix_aggressive, obs_normalization: sqrt, head_weight_gain: 5.0, lambda_endpoint: 5.0, tf_drop_epoch: 5}
+  - {exp_name: fix_aggressive_no_tf, obs_normalization: sqrt, head_weight_gain: 5.0, lambda_endpoint: 5.0, tf_drop_epoch: 0}
+  - {exp_name: sqrt_no_tf, obs_normalization: sqrt, tf_drop_epoch: 0}
+  - {exp_name: endpoint_no_tf, lambda_endpoint: 1.0, tf_drop_epoch: 0}

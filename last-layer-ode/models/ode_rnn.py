@@ -53,6 +53,9 @@ class OdeRNN(nn.Module):
                                             # confused by unobservable latent states.
         head_bias_init: float = 0.0,        # init all head biases to this value (<0 starts theta near lo)
         head_weight_gain: float = 1.0,      # Xavier gain for head weights (>1 amplifies per-experiment variation)
+        detach_y_prev: bool = True,         # if False, allow gradients to flow through y_prev in GRU
+        u_minmax_max: Optional[torch.Tensor] = None,  # per-channel max for "minmax" / "minmax_sqrt" u_transform
+        u_minmax_cols: Optional[list] = None,         # indices in u_seq[:,:,U] that u_minmax_max corresponds to
         **kwargs,
     ):
         super().__init__()
@@ -66,6 +69,7 @@ class OdeRNN(nn.Module):
         self.theta_hi     = float(theta_hi)
         self.theta_bounded = bool(theta_bounded)
         self.gru_u_cols   = list(gru_u_cols) if gru_u_cols is not None else None
+        self.detach_y_prev = bool(detach_y_prev)
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -107,6 +111,18 @@ class OdeRNN(nn.Module):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
+        # Per-channel MinMax max (used by "minmax" / "minmax_sqrt" u_transform).
+        # Built into a (U,) vector with 1.0 in non-scaled columns (e.g. DNA c)
+        # so applying scale = 1/u_max_full leaves them unchanged.
+        if u_minmax_max is not None and u_minmax_cols is not None:
+            u_max_full = torch.ones(self.U, dtype=torch.float32)
+            cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
+            u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
+            self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
+            self._has_u_minmax = True
+        else:
+            self._has_u_minmax = False
+
     def forward(
         self,
         y0: torch.Tensor,                     # (B,P)
@@ -116,7 +132,9 @@ class OdeRNN(nn.Module):
         y_seq: Optional[torch.Tensor] = None, # (B,K,P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
-        u_transform: str = "none",            # GRU input transform: "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
+        u_transform: str = "none",            # GRU input transform:
+                                              #   "none" | "cumsum" | "sqrt" | "cumsum_sqrt"
+                                              #   "minmax" | "minmax_sqrt"  (require u_minmax_max at init)
         y_transform: str = "none",            # y_in transform: "none" | "sqrt" | "log1p"
                                               # Without a transform, large protein values (~10^3) dominate
                                               # the lift layer over reagent values (~1) and the GRU stops
@@ -138,7 +156,13 @@ class OdeRNN(nn.Module):
             u_gru = u_seq.cumsum(dim=1)
         else:
             u_gru = u_seq
-        if u_transform in ("sqrt", "cumsum_sqrt"):
+        if u_transform in ("minmax", "minmax_sqrt"):
+            if not self._has_u_minmax:
+                raise ValueError(
+                    f"u_transform={u_transform!r} requires u_minmax_max/u_minmax_cols at model init."
+                )
+            u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
             u_gru = u_gru.clamp_min(0.0).sqrt()
 
         y_prev = y0
@@ -147,7 +171,7 @@ class OdeRNN(nn.Module):
             u_gru_k = u_gru[:, k, :]   # transformed — used for GRU features
             dt_k = dt_seq[:, k]
 
-            y_in = y_prev.detach()
+            y_in = y_prev.detach() if self.detach_y_prev else y_prev
 
             if teacher_forcing and k > 0 and (k % tf_every == 0) and y_seq is not None:
                 if use_partial:

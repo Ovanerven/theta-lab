@@ -1,0 +1,44 @@
+# Rerun failed arms from txtl_init_loss_tf_sweep (b7-b14)
+
+study: txtl_init_loss_tf_sweep_rerun
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_mig
+no_plot: false
+base_config: configs/txtl_maturation_gru_fix.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  epochs: 50
+  endpoint_r2: true
+  lr: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  u_transform: cumsum_sqrt
+  seed: 1
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  auto_scale_aux_losses: true
+
+  tf_drop_epoch: 25
+  tf_every: 50
+
+runs:
+  # Group 2 (b7-b11)
+  - {exp_name: loss_none, obs_normalization: none}
+  - {exp_name: endpoint_1, lambda_endpoint: 1.0}
+  - {exp_name: endpoint_5, lambda_endpoint: 5.0}
+  - {exp_name: pm_tail_abs, auto_scale_aux_losses: false, lambda_pm_tail: 1.0}
+  - {exp_name: sqrt_endpoint_1, obs_normalization: sqrt, lambda_endpoint: 1.0}
+
+  # Group 3 (b12-b14)
+  - {exp_name: tf_drop0, tf_drop_epoch: 0}
+  - {exp_name: tf_drop5, tf_drop_epoch: 5}
+  - {exp_name: tf_drop50, tf_drop_epoch: 50}
