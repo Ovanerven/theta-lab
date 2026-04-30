@@ -7,17 +7,10 @@ import torch.nn.functional as F
 from scaffolds import MechanisticScaffold
 
 
-def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
+def gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    # Linear-sigmoid: arithmetic midpoint at x=0. Matches supervisor reference.
     return lo + (hi - lo) * torch.sigmoid(x)
 
-
-# def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-#     # Linear alternative (DO NOT USE for wide bounds):
-#     #   return lo + (hi - lo) * torch.sigmoid(x)
-#     # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
-#     # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
-#     # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
-#     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
     # Sigmoid: strictly bounded in [lo, hi], initialises at geometric mean sqrt(lo*hi) when x=0.
@@ -56,6 +49,9 @@ class OdeRNN(nn.Module):
         detach_y_prev: bool = True,         # if False, allow gradients to flow through y_prev in GRU
         u_minmax_max: Optional[torch.Tensor] = None,  # per-channel max for "minmax" / "minmax_sqrt" u_transform
         u_minmax_cols: Optional[list] = None,         # indices in u_seq[:,:,U] that u_minmax_max corresponds to
+        theta_head_transform: str = "log_gamma",      # "log_gamma" (default) | "gamma" (linear-sigmoid; supervisor)
+        head_bottle: bool = False,                    # if True, insert hidden→120→SiLU→40→SiLU before head (supervisor)
+        lift_skip: bool = False,                      # if True, drop the lift MLP and feed feat→GRU directly (supervisor)
         **kwargs,
     ):
         super().__init__()
@@ -70,6 +66,11 @@ class OdeRNN(nn.Module):
         self.theta_bounded = bool(theta_bounded)
         self.gru_u_cols   = list(gru_u_cols) if gru_u_cols is not None else None
         self.detach_y_prev = bool(detach_y_prev)
+        if theta_head_transform not in ("log_gamma", "gamma"):
+            raise ValueError(f"theta_head_transform must be 'log_gamma' or 'gamma', got {theta_head_transform}")
+        self.theta_head_transform = str(theta_head_transform)
+        self.head_bottle_enabled = bool(head_bottle)
+        self.lift_skip = bool(lift_skip)
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -88,20 +89,35 @@ class OdeRNN(nn.Module):
         gru_y_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
         gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
-        self.lift = nn.Sequential(
-            nn.Linear(gru_feat_dim + gru_y_dim, lift_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-        )
+        feat_in = gru_feat_dim + gru_y_dim
+        if self.lift_skip:
+            self.lift = nn.Identity()
+            gru_input_dim = feat_in
+        else:
+            self.lift = nn.Sequential(
+                nn.Linear(feat_in, lift_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+            )
+            gru_input_dim = lift_dim
         self.gru = nn.GRU(
-            input_size=lift_dim,
+            input_size=gru_input_dim,
             hidden_size=hidden,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0.0,
         )
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim
-        self.head = nn.Linear(hidden, head_out)
+        if self.head_bottle_enabled:
+            self.head_bottle = nn.Sequential(
+                nn.Linear(hidden, 120), nn.SiLU(),
+                nn.Linear(120, 40),     nn.SiLU(),
+            )
+            head_in = 40
+        else:
+            self.head_bottle = nn.Identity()
+            head_in = hidden
+        self.head = nn.Linear(head_in, head_out)
         if head_bias_init != 0.0:
             nn.init.constant_(self.head.bias, float(head_bias_init))
         if head_weight_gain != 1.0:
@@ -114,14 +130,16 @@ class OdeRNN(nn.Module):
         # Per-channel MinMax max (used by "minmax" / "minmax_sqrt" u_transform).
         # Built into a (U,) vector with 1.0 in non-scaled columns (e.g. DNA c)
         # so applying scale = 1/u_max_full leaves them unchanged.
+        # Always register the buffer so TorchScript can resolve the attribute.
+        # When unused, it stays at all-ones (a no-op divisor).
+        u_max_full = torch.ones(self.U, dtype=torch.float32)
         if u_minmax_max is not None and u_minmax_cols is not None:
-            u_max_full = torch.ones(self.U, dtype=torch.float32)
             cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
             u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
-            self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
             self._has_u_minmax = True
         else:
             self._has_u_minmax = False
+        self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
     def forward(
         self,
@@ -159,7 +177,7 @@ class OdeRNN(nn.Module):
         if u_transform in ("minmax", "minmax_sqrt"):
             if not self._has_u_minmax:
                 raise ValueError(
-                    f"u_transform={u_transform!r} requires u_minmax_max/u_minmax_cols at model init."
+                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
                 )
             u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
         if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
@@ -191,12 +209,15 @@ class OdeRNN(nn.Module):
             feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
-            raw = self.head(z.squeeze(1))
+            raw = self.head(self.head_bottle(z.squeeze(1)))
 
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
                 else:
                     theta_k = F.softplus(raw_theta)
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
@@ -205,7 +226,10 @@ class OdeRNN(nn.Module):
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
                 else:
                     theta_k = F.softplus(raw)
                 y = y_prev + (u_k @ self.u_to_y_jump)

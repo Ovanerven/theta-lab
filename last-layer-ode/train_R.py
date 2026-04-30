@@ -616,6 +616,15 @@ class TrainConfig:
                                  # If False, gradients flow through y_prev → GRU → theta across timesteps,
                                  # giving a longer credit-assignment path but more memory + instability.
 
+    # Architecture toggles to mirror supervisor reference (datasets/supervisorhint_dataparser.py):
+    #   - theta_head_transform: "log_gamma" (default, geometric midpoint at init)
+    #                           vs "gamma" (linear-sigmoid, arithmetic midpoint — supervisor)
+    #   - head_bottle: insert hidden→120→SiLU→40→SiLU before head (supervisor's `bottle`)
+    #   - lift_skip: drop the lift MLP and feed [u_feat, y_feat] straight into GRU
+    theta_head_transform: str = "log_gamma"
+    head_bottle: bool = False
+    lift_skip: bool = False
+
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
 
@@ -696,6 +705,12 @@ class TrainConfig:
     autocast_bf16: bool = False
 
     endpoint_r2: bool = False  # if True, runs endpoint R² analysis & saves plot in exp_dir
+
+    # Early stopping: stop after `early_stop_patience` epochs without best_val improvement.
+    # 0 (default) disables. `early_stop_min_delta` requires at least this much improvement
+    # to count as progress (set >0 to ignore tiny noise-level decreases).
+    early_stop_patience: int = 0
+    early_stop_min_delta: float = 0.0
 
     # 'ode_rnn' (default), 'ode_rnn_2020' (latent ODE-RNN style),
     # or 'neural_ode' (pure MLP baseline)
@@ -996,6 +1011,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         u_minmax_cols=(list(ds.u_scaled_cols_idx)
                        if str(cfg.u_transform) in ("minmax", "minmax_sqrt") and ds.u_scaled_cols_idx is not None
                        else None),
+        theta_head_transform=str(cfg.theta_head_transform),
+        head_bottle=bool(cfg.head_bottle),
+        lift_skip=bool(cfg.lift_skip),
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -1070,6 +1088,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     best_val = float("inf")
     best_state = None
+    epochs_since_improve = 0
 
     train_losses: list[float] = []
     val_losses: list[float] = []
@@ -1455,9 +1474,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 sp_last = (sp_total / max(1, va_batches)).numpy()
                 val_species_losses.append(sp_last)
 
-            if va_loss < best_val:
+            if va_loss < best_val - float(cfg.early_stop_min_delta):
                 best_val = va_loss
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                epochs_since_improve = 0
+            else:
+                epochs_since_improve += 1
 
         ep_time = time.time() - ep_t0
 
@@ -1487,6 +1509,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
         if math.isnan(tr_loss) or math.isnan(va_loss):
             print(f"NaN detected at epoch {ep} — stopping early.")
+            break
+
+        if int(cfg.early_stop_patience) > 0 and epochs_since_improve >= int(cfg.early_stop_patience):
+            print(
+                f"Early stop at epoch {ep}: no val improvement for {epochs_since_improve} epochs "
+                f"(patience={int(cfg.early_stop_patience)}, best_val={best_val:.6f})."
+            )
             break
 
         if wandb_run is not None:

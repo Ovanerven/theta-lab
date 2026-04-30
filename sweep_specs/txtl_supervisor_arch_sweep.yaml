@@ -1,0 +1,108 @@
+# Architecture-test sweep anchored on configs/txtl_supervisor_pure.yaml.
+#
+# Goal: starting from the closest-to-supervisor pure config we have, toggle each
+# remaining architectural delta one at a time, then combine them, then run the
+# all-on combo for the long supervisor budget. Theta bounds are fixed to the
+# supervisor reference values for ALL arms (VTXmax/VTLmax floors lifted from
+# 1e-7 → 3e-5 to match datasets/supervisorhint_dataparser.py).
+#
+# Architectural deltas exposed (see last-layer-ode/models/ode_rnn.py):
+#   - theta_head_transform: log_gamma (geom. midpoint init)
+#                           vs gamma (linear-sigmoid; arithmetic midpoint — supervisor)
+#   - head_bottle: insert hidden→120→SiLU→40→SiLU before head (supervisor)
+#   - lift_skip: drop the lift MLP, feed [u_feat, y_feat] straight into GRU (supervisor)
+
+study: txtl_supervisor_arch_sweep
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_supervisor_pure.yaml
+
+fixed:
+  # Reaffirm the supervisor-pure anchor (same as base_config; explicit for clarity).
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+
+  val_n: 64
+  test_n: 64
+  seed: 1
+  split_seed: 42
+  endpoint_r2: true
+
+  # Supervisor-faithful bounds (incl. VTXmax/VTLmax floors lifted to 3e-5).
+  # Theta = [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+  theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+  theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+
+  # Supervisor optimizer / schedule
+  epochs: 2000
+  batch_size: 200
+  lr: 0.0018
+  weight_decay: 0.0
+  hidden: 200
+  num_layers: 2
+  dropout: 0.2
+  grad_clip: 1.0
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 999999
+
+  u_transform: sqrt
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+  head_bias_init: 0.0
+  head_weight_gain: 1.0
+
+  loss_type: log1p_clip1_mse
+  obs_normalization: none
+  auto_scale_aux_losses: false
+
+  lambda_endpoint: 0.0
+  lambda_pm_tail: 0.0
+  lambda_r_terminal: 0.0
+  lambda_o_terminal: 0.0
+
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+  obs_idx: [3, 5]
+
+  # Arch defaults (current) — arms below override one or more.
+  theta_head_transform: log_gamma
+  head_bottle: false
+  lift_skip: false
+
+  early_stop_patience: 100
+  early_stop_min_delta: 0.0
+
+runs:
+  # ── Anchor: supervisor_pure as-is (no arch flips) ─────────────────────
+  - {exp_name: anchor_pure}
+
+  # ── Single architectural toggles ──────────────────────────────────────
+  - {exp_name: arch_gamma_linear, theta_head_transform: gamma}
+  - {exp_name: arch_head_bottle,  head_bottle: true}
+  - {exp_name: arch_lift_skip,    lift_skip: true}
+
+  # ── Pairwise combos (to detect interactions) ──────────────────────────
+  - {exp_name: arch_gamma_bottle,
+     theta_head_transform: gamma, head_bottle: true}
+  - {exp_name: arch_gamma_liftskip,
+     theta_head_transform: gamma, lift_skip: true}
+  - {exp_name: arch_bottle_liftskip,
+     head_bottle: true, lift_skip: true}
+
+  # ── All three on (closest to supervisor architecture) ─────────────────
+  - {exp_name: arch_supervisor_full,
+     theta_head_transform: gamma, head_bottle: true, lift_skip: true}
+
+  # ── Shorter-budget controls so we can compare effects without waiting 2000ep ──
+  - {exp_name: anchor_pure_400ep,           epochs: 400}
+  - {exp_name: arch_supervisor_full_400ep,  epochs: 400,
+     theta_head_transform: gamma, head_bottle: true, lift_skip: true}

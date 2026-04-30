@@ -1,0 +1,91 @@
+# Mirror of the `supervisor_pure_2000ep` arm of
+# sweep_specs/txtl_supervisor_combined_sweep.yaml, fully resolved into a single
+# config runnable with:
+#   python last-layer-ode/train_R.py --config configs/txtl_supervisor_pure.yaml
+#
+# = base configs/txtl_endpoint_promising.yaml
+# + sweep `fixed:` block
+# + `supervisor_pure_2000ep` overrides (epoch budget, optim, no aux losses,
+#   neutral head init, hidden=200, dropout=0.2, obs_normalization=none, ...)
+#
+# See bottom of this file (and the chat that produced it) for the residual
+# discrepancies vs datasets/supervisorhint_dataparser.py / hints.txt.
+
+study: txtl_supervisor_pure
+exp_name: supervisor_pure_2000ep
+out_root: experiments
+
+dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+scaffold: txtl_resource_and_maturation_dna
+model_class: ode_rnn_txtl
+
+# Supervisor budget
+epochs: 2000
+batch_size: 200
+lr: 0.0018
+weight_decay: 0.0
+
+val_n: 64
+test_n: 64
+seed: 1
+split_seed: 42
+
+stratified_split: true
+stratify_bins: 5
+stratify_targets: [3, 5]
+obs_idx: [3, 5]
+
+hidden: 200
+lift_dim: 32
+num_layers: 2
+dropout: 0.2
+grad_clip: 1.0
+
+teacher_forcing: true
+tf_every: 100
+tf_drop_epoch: 999999
+
+u_transform: sqrt
+y_transform: sqrt
+gru_y_obs_only: true
+exclude_ode_cols_from_gru: true
+detach_y_prev: true
+
+# Neutral head init (no bias offset, xavier-gain=1)
+head_bias_init: 0.0
+head_weight_gain: 1.0
+
+# Architecture (left at current defaults; flip these to mirror supervisor's
+# ode_rnn architecture more closely — see ode_rnn.py docstrings).
+theta_head_transform: gamma   # supervisor uses "gamma" (linear-sigmoid)
+head_bottle: true                # supervisor uses true (hidden→120→40 MLP before head)
+lift_skip: true                  # supervisor uses true (no lift, raw feat → GRU)
+
+# Plain MSE, no obs renormalisation, no aux losses.
+loss_type: mse
+obs_normalization: none
+auto_scale_aux_losses: false
+
+lambda_endpoint: 0.0
+lambda_pm_tail: 0.0
+pm_tail_frac: 0.5
+
+lambda_r_terminal: 0.0
+r_terminal_frac: 0.05
+lambda_o_terminal: 0.0
+o_terminal_frac: 0.05
+
+# Theta = [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+theta_lo: 1.0e-6
+theta_hi: 1.0
+theta_lo_vec: [1.0e-6, 1.0e-6, 1.0e-7, 1.0e-5, 1.0e-7, 1.0e-5, 5.0e-5]
+theta_hi_vec: [5.0e-4, 5.0e-4, 1.2e-1, 1.0e-2, 8.0e-2, 3.5e-4, 3.5e-3]
+n_substeps: 1
+
+early_stop_patience: 200
+early_stop_min_delta: 0.0
+
+ckpt_every: 50
+jit_scripting: true
+torch_compile: false
+endpoint_r2: true
