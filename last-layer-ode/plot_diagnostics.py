@@ -10,6 +10,7 @@ import torch
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.subplots as subplots
 import matplotlib.pyplot as plt
 import yaml
 
@@ -135,10 +136,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.get("head_bias_init", 0.0)),
         head_weight_gain=float(cfg.get("head_weight_gain", 1.0)),
+        head_bottle_dims=cfg.get("head_bottle_dims", None),
+        head_dims=cfg.get("head_dims", None),
     ).to(device)
 
-    # strict=False: tolerates buffers added after a model was saved (e.g. theta_lo_vec/theta_hi_vec).
-    # Those buffers are always re-initialised from the scaffold in __init__, so values are correct.
     model.load_state_dict(ckpt["state_dict"], strict=False)
     model.eval()
 
@@ -177,9 +178,6 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     if V.size == 0:
         return
 
-    # obs_names: the subset of state_names that V actually covers.
-    # If obs_idx is given, V[:,i] corresponds to state_names[obs_idx[i]].
-    # Fall back to using state_names directly when obs_idx is absent.
     if obs_idx is not None and len(obs_idx) == V.shape[1]:
         obs_names = [state_names[i] for i in obs_idx]
     else:
@@ -189,7 +187,7 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     im = ax.imshow(V.T, aspect="auto", interpolation="nearest")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Species")
-    ax.set_title("Val per-species loss (log1p-MSE)")
+    ax.set_title("Val per-species loss")
     ax.set_yticks(np.arange(len(obs_names)))
     ax.set_yticklabels(obs_names)
     fig.colorbar(im, ax=ax)
@@ -200,7 +198,6 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     last = V[-1]
     fig, ax = plt.subplots(figsize=(10, 4))
     if obs_idx is not None and len(obs_idx) == len(last):
-        # Place bars at the correct positions in the full state space.
         full = np.zeros(len(state_names))
         for i, idx in enumerate(obs_idx):
             full[idx] = last[i]
@@ -217,6 +214,85 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     ax.grid(True, axis="y", alpha=0.25)
     fig.tight_layout()
     fig.savefig(out_dir / "val_species_final.png", dpi=150)
+    plt.close(fig)
+
+
+def _save_bolus_panel(t, u_val, control_names, title, out_path):
+    """Saves a standalone square-ish plot for the inputs/boluses."""
+    U = u_val.shape[-1]
+    fig, axes = plt.subplots(U, 1, figsize=(5, 4 * U), sharex=True)
+    if U == 1:
+        axes = [axes]
+    
+    for j, ax in enumerate(axes):
+        ax.bar(t, u_val[:, j], width=(t[-1]-t[0])*0.015, color='C2', alpha=0.8)
+        ax.set_ylabel(control_names[j])
+        ax.grid(True, alpha=0.25)
+    
+    axes[-1].set_xlabel("Time")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def _save_progression_dashboard(t, y_true, y_pred, u_val, theta_val, state_names, control_names, param_names, title, out_path):
+    """Saves a strict 3-column Left-to-Right progression: Inputs -> Params -> States."""
+    P = y_pred.shape[-1]
+    U = u_val.shape[-1]
+    D = theta_val.shape[-1] if theta_val is not None else 0
+
+    n_rows = max(P, U, D)
+    
+    # 3 columns, perfectly square subplots: width=12 (3 cols * 4 in), height=4*n_rows
+    fig, axes = plt.subplots(n_rows, 3, figsize=(12, 4 * n_rows))
+    if n_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    for i in range(n_rows):
+        # 1. Inputs (Left Column)
+        ax_u = axes[i, 0]
+        if i < U:
+            ax_u.bar(t, u_val[:, i], width=(t[-1]-t[0])*0.02, color='C2', alpha=0.7)
+            ax_u.set_title(f"Input: {control_names[i]}", fontsize=10, color='C2')
+            ax_u.grid(True, alpha=0.25)
+            ax_u.set_xlim([t[0], t[-1]])
+            if i == U - 1:
+                ax_u.set_xlabel("Time")
+        else:
+            ax_u.axis("off")
+
+        # 2. Parameters / Theta (Middle Column)
+        ax_th = axes[i, 1]
+        if theta_val is not None and i < D:
+            ax_th.plot(t, theta_val[:, i], linewidth=2, color='C3')
+            name = param_names[i] if (param_names is not None and i < len(param_names)) else f"θ{i}"
+            ax_th.set_title(f"Param: {name}", fontsize=10, color='C3')
+            ax_th.grid(True, alpha=0.25)
+            ax_th.set_xlim([t[0], t[-1]])
+            if i == D - 1:
+                ax_th.set_xlabel("Time")
+        else:
+            ax_th.axis("off")
+
+        # 3. States / Trajectories (Right Column)
+        ax_y = axes[i, 2]
+        if i < P:
+            ax_y.plot(t, y_true[:, i], linewidth=2, label="true", color='C0')
+            ax_y.plot(t, y_pred[:, i], linewidth=2, linestyle="--", label="pred", color='C1')
+            ax_y.set_title(f"State: {state_names[i]}", fontsize=10)
+            ax_y.grid(True, alpha=0.25)
+            ax_y.set_xlim([t[0], t[-1]])
+            if i == 0:
+                ax_y.legend(fontsize=8)
+            if i == P - 1:
+                ax_y.set_xlabel("Time")
+        else:
+            ax_y.axis("off")
+
+    fig.suptitle(title, fontsize=14)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
@@ -253,40 +329,75 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
+    u_np = u_seq.cpu().numpy()
     dt_np = dt_seq.cpu().numpy()
     lengths_np = batch_lengths.cpu().numpy() if batch_lengths is not None else None
     theta_np = _theta.cpu().numpy() if _theta is not None else None
 
+    if getattr(raw_ds, "control_names", None) is not None:
+        control_names = raw_ds.control_names.tolist()
+    else:
+        control_names = [f"u{j}" for j in range(u_np.shape[-1])]
+
     P = y_pred.shape[-1]
     for i in range(n_samples):
         Li = int(lengths_np[i]) if lengths_np is not None else y_pred.shape[1]
-        t = np.concatenate([[0.0], np.cumsum(dt_np[i, :Li])])
-        fig, axes = plt.subplots(P, 1, figsize=(11, max(6, 2.0 * P)), sharex=True)
+        t = np.concatenate([[0.0], np.cumsum(dt_np[i, :Li])])[1:] 
+        sample_id_str = f"{i:03d}_idx{plotted_indices[i]}"
+        
+        y_true_i = y_true[i, :Li, :]
+        y_pred_i = y_pred[i, :Li, :]
+        u_val_i = u_np[i, :Li, :]
+        theta_val_i = theta_np[i, :Li, :] if theta_np is not None else None
+
+        # ---------------------------------------------------------
+        # Plot 1: Trajectories (now scaled to be perfectly square)
+        # ---------------------------------------------------------
+        fig, axes = plt.subplots(P, 1, figsize=(6, 4 * P), sharex=True)
         if P == 1:
             axes = [axes]
-
         for p, ax in enumerate(axes):
-            ax.plot(t[1:], y_true[i, :Li, p], linewidth=2, label="true")
-            ax.plot(t[1:], y_pred[i, :Li, p], linewidth=2, linestyle="--", label="pred")
+            ax.plot(t, y_true_i[:, p], linewidth=2, label="true")
+            ax.plot(t, y_pred_i[:, p], linewidth=2, linestyle="--", label="pred")
             ax.set_ylabel(state_names[p] if p < len(state_names) else f"s{p}")
             ax.grid(True, alpha=0.25)
             if p == 0:
                 ax.legend()
-
         axes[-1].set_xlabel("Time")
-        fig.suptitle(f"Prediction vs truth [{split_label}] (sample {i}, idx {plotted_indices[i]})")
+        fig.suptitle(f"Prediction vs truth [{split_label}] (sample {sample_id_str})")
         fig.tight_layout()
-        fig.savefig(out_dir / f"pred_vs_true_{i:03d}.png", dpi=150)
+        fig.savefig(out_dir / f"pred_vs_true_{sample_id_str}.png", dpi=150)
         plt.close(fig)
 
+        # ---------------------------------------------------------
+        # Plot 2: Boluses / Inputs
+        # ---------------------------------------------------------
+        _save_bolus_panel(
+            t, u_val_i, control_names, 
+            title=f"Inputs/Boluses [{split_label}] (sample {sample_id_str})", 
+            out_path=out_dir / f"inputs_bolus_{sample_id_str}.png"
+        )
+
+        # ---------------------------------------------------------
+        # Plot 3: Parameters (Theta)
+        # ---------------------------------------------------------
         if theta_np is not None:
             _save_theta_panel(
-                theta_np[i, :Li, :],
-                dt_np[i, :Li],
-                out_dir / f"theta_from_pred_{i:03d}_idx{plotted_indices[i]}.png",
-                title=f"Learned θ(t) [{split_label}] (sample {i}, idx {plotted_indices[i]})",
+                theta_val_i, dt_np[i, :Li],
+                out_dir / f"theta_sample_{sample_id_str}.png",
+                title=f"Learned θ(t) [{split_label}] (sample {sample_id_str})",
                 param_names=param_names,
             )
+
+        # ---------------------------------------------------------
+        # Plot 4: Combined Progression Dashboard
+        # ---------------------------------------------------------
+        _save_progression_dashboard(
+            t, y_true_i, y_pred_i, u_val_i, theta_val_i, 
+            state_names, control_names, param_names, 
+            title=f"Progression Overview [{split_label}] (sample {sample_id_str})", 
+            out_path=out_dir / f"progression_all_{sample_id_str}.png"
+        )
 
     if theta_np is None:
         print("[warn] model returned no theta; skipping theta plots for plotted samples")
@@ -299,14 +410,14 @@ def _save_theta_panel(
     title: str,
     param_names: list[str] | None = None,
 ):
-    """Render a 2-column grid of θ_j(t) for a single sample and save to PNG."""
+    """Render a 2-column grid of θ_j(t), forced to be square."""
     t = np.concatenate([[0.0], np.cumsum(dt)])
     tt = t[1:]
     _, D = theta_np.shape
     n_cols = 2
     n_rows = (D + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 2.2 * n_rows), sharex=True)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(8, 4 * n_rows), sharex=True)
     axes = np.array(axes).reshape(-1)
 
     for j, ax in enumerate(axes):
@@ -326,7 +437,7 @@ def _save_theta_panel(
 
 
 def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
-    """Plot the learned beta(t) residual terms (only meaningful for basal / beta_regularization runs)."""
+    """Plot the learned beta(t) residual terms."""
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
@@ -351,7 +462,7 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     tt = t[1:]
 
     P = beta_np.shape[1]
-    fig, axes = plt.subplots(P, 1, figsize=(11, max(6, 2.0 * P)), sharex=True)
+    fig, axes = plt.subplots(P, 1, figsize=(6, 4 * P), sharex=True)
     if P == 1:
         axes = [axes]
 
@@ -388,12 +499,12 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
 
     plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names)
 
-    # Plot beta residuals if use_basal was enabled
     if cfg.get("use_basal", False):
         plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
 
     print(f"Saved plots to {out_dir}")
     return out_dir
+
 
 def plot_epoch_prediction_overlays(
     exp_dir: str | Path,
@@ -411,7 +522,6 @@ def plot_epoch_prediction_overlays(
 
     device = device_auto()
 
-    # This loads config + dataset + builds model; it also loads model.pt (fine, we overwrite next)
     model, ds, state_names, _param_names = rebuild_model_from_experiment(exp_dir, device=device)
     cfg_overlay = load_yaml(exp_dir / "config.yaml")
     u_transform_overlay = str(cfg_overlay.get("u_transform", "none"))
@@ -451,16 +561,16 @@ def plot_epoch_prediction_overlays(
 
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
-    y0, u_seq, y_seq = ds[sample_idx]  # y_seq is (K,P) at t1..tK
+    y0, u_seq, y_seq = ds[sample_idx]
     K = int(u_seq.shape[0])
-    dt = raw_ds.dt[:K].astype(np.float32)  # (K,)
-    t = np.cumsum(dt)                  # (K,) -> times for y_seq points (t1..tK)
+    dt = raw_ds.dt[:K].astype(np.float32)
+    t = np.cumsum(dt)
 
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
-    dt_b = torch.from_numpy(raw_ds.dt[:K]).unsqueeze(0).to(device)  # (1,K)
+    dt_b = torch.from_numpy(raw_ds.dt[:K]).unsqueeze(0).to(device)
 
-    y_true = y_seq.cpu().numpy()  # (K,P)
+    y_true = y_seq.cpu().numpy()
     P = int(y_true.shape[1])
 
     preds: dict[int, np.ndarray] = {}
@@ -478,10 +588,9 @@ def plot_epoch_prediction_overlays(
             if model.__class__.__name__ == "OdeTransformerGrouped":
                 model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)
             pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **model_kwargs)
-        preds[ep] = pred[0].detach().cpu().numpy()  # (K,P)
+        preds[ep] = pred[0].detach().cpu().numpy()
 
-    fig_h = max(6.0, 2.0 * P)
-    fig, axes = plt.subplots(P, 1, figsize=(11, fig_h), sharex=True)
+    fig, axes = plt.subplots(P, 1, figsize=(6, 4 * P), sharex=True)
     if P == 1:
         axes = [axes]
 
@@ -491,9 +600,7 @@ def plot_epoch_prediction_overlays(
         name = state_names[p] if p < len(state_names) else f"y{p}"
 
         ax.plot(t, y_true[:, p], linewidth=2.2, label="true")
-        # Sort epochs so that alpha increases with epoch (newer = less transparent)
         for i, ep in enumerate(sorted(chosen)):
-            # Alpha: earlier = more transparent, newer = less
             alpha = 0.3 + 0.7 * (i / max(n_chosen - 1, 1))
             ax.plot(t, preds[ep][:, p], linewidth=1.6, alpha=alpha, label=f"ep{ep:04d}")
 
@@ -516,6 +623,7 @@ def plot_epoch_prediction_overlays(
     print(f"[epoch overlay] saved: {out_path}")
     return out_path
 
+
 if __name__ == "__main__":
     import argparse
 
@@ -524,16 +632,13 @@ if __name__ == "__main__":
     parser.add_argument("--n-samples", type=int, default=5)
     parser.add_argument("--sample-idx", type=int, default=0)
 
-    # optional: epoch overlay plot
     parser.add_argument("--epoch-overlays", action="store_true")
     parser.add_argument("--epochs", type=str, default=None, help='Comma list like "10,20,50"')
     parser.add_argument("--max-overlays", type=int, default=8)
     args = parser.parse_args()
 
-    # 1) normal plots (loss curves, pred vs true, theta)
     plot_experiment(args.exp_dir, n_samples=args.n_samples, sample_idx=args.sample_idx)
 
-    # 2) optional overlays from checkpoints
     if args.epoch_overlays:
         epochs = None
         if args.epochs is not None:
