@@ -1087,6 +1087,73 @@ class MethaneRevWGS_OHGate4Step_NO_Scaffold(MechanisticScaffold):
         dNO  =  2.0 * r4
 
         return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
+    
+
+class methaneHydrogenBalance_Scaffold(MechanisticScaffold):
+    """
+    Advanced Scaffold (V3) with Virtual Hydrogen Balance.
+    - Uses Hydrogen atom conservation to calculate a virtual H2 state.
+    - Corrects CO2 accumulation by using H2 in the reverse WGS equilibrium.
+    - Refines OH stoichiometry to prevent radical starvation.
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "NO"]
+        # Initial Hydrogen reservoir (adjust based on your dataset inlet)
+        # For stoichiometric CH4/Air: 4 * CH4_init + 2 * H2O_init
+        self.H_total_init = 4.0 
+        
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-6]
+        self.theta_hi_vec = [50.0, 2.0, 50.0, 50.0, 50.0, 50.0, 50.0, 1.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, NO = y.unbind(dim=-1)
+        (k_methane, n_o2_methane, k_co_oh, k_co_r, 
+         k_wgs_f, k_wgs_r, k_oh, k_no) = theta.unbind(dim=-1)
+
+        eps = 1e-8
+        CH4_p, O2_p, CO_p, CO2_p, H2O_p, OH_p = [torch.clamp_min(s, eps) for s in [CH4, O2, CO, CO2, H2O, OH]]
+
+        # --- 1. VIRTUAL HYDROGEN BALANCE ---
+        # Calculate how much Hydrogen is "missing" from the explicit states
+        # H_balance = Total_H - (4*CH4 + 2*H2O + 1*OH)
+        H_missing = self.H_total_init - (4.0 * CH4_p + 2.0 * H2O_p + OH_p)
+        H2_virtual = torch.clamp_min(0.5 * H_missing, eps)
+
+        # --- 2. KINETIC RATES ---
+        # CH4 Oxidation (Partial oxidation to CO + H2/H2O)
+        r1 = k_methane * CH4_p * (O2_p ** n_o2_methane) * (OH_p / (OH_p + 1e-3))
+        
+        # Reversible CO Burnout: CO + OH <-> CO2 + H (proxy)
+        # The reverse rate MUST depend on H2 (as a proxy for H) to prevent CO2 accumulation [1]
+        r2_f = k_co_oh * CO_p * OH_p
+        r2_r = k_co_r * CO2_p * (H2_virtual / (H2O_p + eps)) 
+        
+        # Reversible Water-Gas Shift: CO + H2O <-> CO2 + H2
+        r_wgs_f = k_wgs_f * CO_p * H2O_p
+        r_wgs_r = k_wgs_r * CO2_p * H2_virtual
+        r_wgs_net = r_wgs_f - r_wgs_r
+        
+        # OH Generation with exponential auto-ignition switch
+        r3 = k_oh * O2_p * torch.exp(-10.0 * CH4_p)
+        
+        # NO formation
+        r4 = k_no * O2_p
+
+        # --- 3. STOICHIOMETRY ---
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - r3 - r4
+        dCO  =  r1 - r2_f + r2_r - r_wgs_net
+        dCO2 =  r2_f - r2_r + r_wgs_net
+        # H2O is only produced by fuel oxidation; WGS consumes/produces it
+        dH2O =  2.0 * r1 - r_wgs_net 
+        # OH is produced by O2 and recycled/consumed by CO burnout
+        # In reality, CO + OH -> CO2 + H, and H + O2 -> OH + O (chain branching)
+        # We model this by making the OH loss for CO burnout very small (0.1)
+        dOH  =  2.0 * r3 - 0.1 * r2_f 
+        dNO  =  2.0 * r4
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
 
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
@@ -1104,5 +1171,6 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "methane_domain4_ch2o_ohgate": MethaneDomainInformedCH2O_OHGate4Step_Scaffold(),
     "methane_domain4_no_ohgate": MethaneDomainInformedOHGate4Step_NO_Scaffold(),
     "methane_revWGS_ohgate_no": MethaneRevWGS_OHGate4Step_NO_Scaffold(),
+    "methane_hydrogen_balance": methaneHydrogenBalance_Scaffold(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
 }

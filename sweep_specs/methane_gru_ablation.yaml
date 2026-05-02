@@ -9,7 +9,7 @@
 #   TF4  tf_every=10, drop at 70  (5x more frequent)
 #   TF5  tf_every=50, never drop  (current default — TF throughout all 100 epochs)
 
-study: methane_gri30_ablation_gru
+study: methane_gri30_ablation_gru_advanced
 runs_per_job: 1
 time: "01:00:00"
 partition: gpu_h100
@@ -18,7 +18,7 @@ no_plot: false
 fixed:
   base_config: configs/methane/gru_methane_gri30_revWGS_ohgate.yaml
   dataset_path: datasets/gri30_obs7.npz
-  scaffold: methane_revWGS_ohgate_no
+  scaffold: methane_hydrogen_balance
 
 runs:
   # A1 — fixed global theta (no NN)
