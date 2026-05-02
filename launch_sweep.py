@@ -67,9 +67,9 @@ from pathlib import Path
 import yaml
 
 
-RESERVED_RUN_KEYS = {"base_config", "env", "exp_name", "time"}
+RESERVED_RUN_KEYS = {"base_config", "env", "exp_name", "time", "train_script"}
 DEFAULT_ENV = "thesis_env"
-TRAIN_CMD = "python -u last-layer-ode/train.py"
+TRAIN_CMD = "python -u last-layer-ode/train_R.py"
 SACCT_CMD = "sacct -j $SLURM_JOB_ID --format=JobID,Elapsed,MaxRSS,State -n"
 
 
@@ -124,8 +124,10 @@ def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
     base_config = run.get("base_config") or spec.get("base_config", "configs/archs/gru.yaml")
     exp_name = resolve_exp_name(spec, run)
     no_plot = spec.get("no_plot", False)
+    train_script = run.get("train_script") or spec.get("train_script") or TRAIN_CMD.split()[-1]
+    cmd = f"python -u {train_script}"
 
-    parts = [TRAIN_CMD]
+    parts = [cmd]
     if no_plot:
         parts.append("--no-plot")
     parts += [

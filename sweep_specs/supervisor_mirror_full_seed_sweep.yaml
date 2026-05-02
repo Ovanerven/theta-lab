@@ -1,9 +1,14 @@
-# Seed/split sensitivity over the FULL mirror.
-# Use AFTER `supervisor_mirror_ablation.yaml` confirms which diffs matter; this
-# is the equivalent of supervisor_mirror_seed_sweep.yaml but on the corrected
-# config so the seed search is over the same prior the supervisor uses.
+# Split-seed sensitivity sweep over the fully-corrected supervisor mirror.
+# split_seeds chosen from the notebook seed survey (balanced distribution
+# across train/val/test for all three splits, stratified, 15% each).
+# seed=1 kept fixed — only the data partition varies.
+#
+# Changes vs old version:
+#   - val_n/test_n raised to 104 (~15% of N=695)
+#   - base_config is supervisor_mirror_full.yaml (includes R-terminal loss
+#     and theta_state_reg_r_mask fixes landed 2026-05-02)
 
-study: supervisor_mirror_full_seed56
+study: supervisor_mirror_full_split_sweep
 runs_per_job: 1
 time: "05:00:00"
 partition: gpu_h100
@@ -14,16 +19,13 @@ fixed:
   dataset_path: datasets/real_ivtt_raw_no_outliers.npz
   scaffold: txtl_resource_and_maturation_dna
   model_class: ode_rnn_txtl
-  val_n: 64
-  test_n: 64
+  val_n: 104
+  test_n: 104
   endpoint_r2: true
 
 runs:
-  # - {exp_name: s1_sp42,    seed: 1,    split_seed: 42}
-  # - {exp_name: s17_sp99,   seed: 17,   split_seed: 99}
-  # - {exp_name: s42_sp7,    seed: 42,   split_seed: 7}
-  # - {exp_name: s137_sp23,  seed: 137,  split_seed: 23}
-  # - {exp_name: s256_sp11,  seed: 256,  split_seed: 11}
-  # - {exp_name: s314_sp88,  seed: 314,  split_seed: 88}
-  - {exp_name: s56_sp56,  seed: 56,  split_seed: 56}
-
+  - {exp_name: sp33,      seed: 1, split_seed: 33}
+  - {exp_name: sp12,      seed: 1, split_seed: 12}
+  - {exp_name: sp176,     seed: 1, split_seed: 176}
+  - {exp_name: sp129,     seed: 1, split_seed: 129}
+  - {exp_name: sp33_rl0,  seed: 1, split_seed: 33, lambda_r_terminal: 0.0}  # ablate R-terminal loss
