@@ -119,40 +119,30 @@ def _single_enzyme_config() -> ModelConfig:
         simulator="ivp",
     )
 
+import numpy as np
+import cantera as ct
 
 def _gri30_full_config() -> ModelConfig:
     """
     GRI-Mech 3.0 methane / air full network (53 states, 325 effective k coefficients).
-
-    The supervisor's `explicit_methane_models.py` collapses each published reaction
-    onto a single effective mass-action coefficient, so all 325 k's are dimensionally
-    rate constants of one normalised mass-action term. With all k=1, stoichiometric
-    methane / air (CH4=1, O2=2, N2=7.52) plateaus by t≈5 (probe trajectories
-    confirm this).
-
-    Strategy here:
-      - Fix all k = 1.0 (no per-trajectory variation). This makes GRI30 a
-        deterministic ground-truth generator; trajectory diversity comes from
-        the bolus schedule and y0.
-      - Bolus controls bind to the four feed inputs from the model's `dim=True`
-        metadata: feed_CH4, feed_O2, feed_N2, feed_H2O — routed onto species
-        CH4 (idx 13), O2 (idx 3), N2 (idx 47), H2O (idx 5).
-      - Initial condition: stoichiometric CH4 + 2*O2 + 7.52*N2 (the air mix);
-        all other species 0.
-      - Use BDF (`ivp` simulator) — chemistry is stiff.
-
-    Suggested CLI:
-      python last-layer-ode/create_dataset.py --model gri30_full \\
-          --t-span 5 --n-steps 200 --n-samples 1000 \\
-          --control-indices 13,3,47,5 \\
-          --obs-indices 13,3,14,15,5,4 \\
-          --output-file datasets/gri30_full.npz
     """
-    default_params = [1.0] * 325
-    param_ranges = [(v, v) for v in default_params]
+    # 1. Load the real GRI-Mech 3.0 database using Cantera
+    # Cantera comes with gri30.yaml pre-installed
+    gas = ct.Solution('gri30.yaml')
+    
+    # 2. Set realistic combustion conditions
+    # T = 1500 Kelvin, P = 1 atm, stoichiometric CH4/Air
+    gas.TPX = 1500.0, ct.one_atm, 'CH4:1.0, O2:2.0, N2:7.52'
+    
+    # 3. Extract the 325 forward rate constants
+    # These are physically accurate parameters spanning many orders of magnitude
+    real_k_params = gas.forward_rate_constants.tolist()
+    
+    # Optional: If your ODE simulator struggles with extreme stiffness, 
+    # you can clip the highest rates, but try the raw physical rates first!
+    param_ranges = [(v, v) for v in real_k_params]
 
     # 53-state initial condition: stoichiometric CH4 / O2 / N2 mix.
-    # Indices follow the GRI30 species list returned by dim=True.
     x0_default = [0.0] * 53
     x0_default[13] = 1.0   # CH4
     x0_default[3]  = 2.0   # O2
@@ -171,8 +161,62 @@ def _gri30_full_config() -> ModelConfig:
         bolus_ranges=bolus_ranges,
         bolus_default=(0.1, 1.0),
         bolus_count_range=(2, 8),
-        simulator="ivp",
+        simulator="ivp", # Make sure you are using 'Radau' or 'BDF' in your ivp solver for stiffness!
     )
+
+# def _gri30_full_config() -> ModelConfig:
+#     """
+#     GRI-Mech 3.0 methane / air full network (53 states, 325 effective k coefficients).
+
+#     The supervisor's `explicit_methane_models.py` collapses each published reaction
+#     onto a single effective mass-action coefficient, so all 325 k's are dimensionally
+#     rate constants of one normalised mass-action term. With all k=1, stoichiometric
+#     methane / air (CH4=1, O2=2, N2=7.52) plateaus by t≈5 (probe trajectories
+#     confirm this).
+
+#     Strategy here:
+#       - Fix all k = 1.0 (no per-trajectory variation). This makes GRI30 a
+#         deterministic ground-truth generator; trajectory diversity comes from
+#         the bolus schedule and y0.
+#       - Bolus controls bind to the four feed inputs from the model's `dim=True`
+#         metadata: feed_CH4, feed_O2, feed_N2, feed_H2O — routed onto species
+#         CH4 (idx 13), O2 (idx 3), N2 (idx 47), H2O (idx 5).
+#       - Initial condition: stoichiometric CH4 + 2*O2 + 7.52*N2 (the air mix);
+#         all other species 0.
+#       - Use BDF (`ivp` simulator) — chemistry is stiff.
+
+#     Suggested CLI:
+#       python last-layer-ode/create_dataset.py --model gri30_full \\
+#           --t-span 5 --n-steps 200 --n-samples 1000 \\
+#           --control-indices 13,3,47,5 \\
+#           --obs-indices 13,3,14,15,5,4 \\
+#           --output-file datasets/gri30_full.npz
+#     """
+#     default_params = [1.0] * 325
+#     param_ranges = [(v, v) for v in default_params]
+
+#     # 53-state initial condition: stoichiometric CH4 / O2 / N2 mix.
+#     # Indices follow the GRI30 species list returned by dim=True.
+#     x0_default = [0.0] * 53
+#     x0_default[13] = 1.0   # CH4
+#     x0_default[3]  = 2.0   # O2
+#     x0_default[47] = 7.52  # N2 (diluent)
+
+#     bolus_ranges = {
+#         "CH4": (0.05, 0.5),
+#         "O2":  (0.1,  1.0),
+#         "N2":  (0.5,  3.0),
+#         "H2O": (0.1,  1.0),
+#     }
+
+#     return ModelConfig(
+#         param_ranges=param_ranges,
+#         x0_default=x0_default,
+#         bolus_ranges=bolus_ranges,
+#         bolus_default=(0.1, 1.0),
+#         bolus_count_range=(2, 8),
+#         simulator="ivp",
+#     )
 
 
 def _kazakov_middle_config() -> ModelConfig:

@@ -132,7 +132,7 @@ def nrmse(pred, true):
 def run(scaffold_name, dataset_path, sample_idx,
         gd_steps=400, lr=0.05,
         theta_lo=1e-3, theta_hi=2.0, n_substeps=4,
-        loss_species=None,
+        loss_species=None, no_rollout=False,
         device=torch.device("cpu")):
     sc        = SCAFFOLDS[scaffold_name]
     rhs       = sc
@@ -209,41 +209,46 @@ def run(scaffold_name, dataset_path, sample_idx,
     thetas_onestep = theta_os.detach().cpu().numpy()
 
     # ── 2) Honest rollout (sequential) ────────────────────────────────────────
-    pred_rollout   = np.zeros((K, P))
-    thetas_rollout = np.zeros((K, theta_dim))
-    losses_rollout = np.zeros(K)
+    if no_rollout:
+        pred_rollout   = np.zeros((K, P))
+        thetas_rollout = np.zeros((K, theta_dim))
+        losses_rollout = np.zeros(K)
+    else:
+        pred_rollout   = np.zeros((K, P))
+        thetas_rollout = np.zeros((K, theta_dim))
+        losses_rollout = np.zeros(K)
 
-    y_cur = y_true[0].unsqueeze(0).clone()
+        y_cur = y_true[0].unsqueeze(0).clone()
 
-    for k in range(K):
-        u_k      = u_tensor[k].unsqueeze(0)
-        dt_k     = dt_t[k].unsqueeze(0)
-        y_target = y_true[k + 1].unsqueeze(0)
+        for k in range(K):
+            u_k      = u_tensor[k].unsqueeze(0)
+            dt_k     = dt_t[k].unsqueeze(0)
+            y_target = y_true[k + 1].unsqueeze(0)
 
-        y_after_jump_k = y_cur + (u_k @ jump)
+            y_after_jump_k = y_cur + (u_k @ jump)
 
-        raw = torch.zeros(1, theta_dim, device=device, requires_grad=True)
-        opt = torch.optim.Adam([raw], lr=lr)
+            raw = torch.zeros(1, theta_dim, device=device, requires_grad=True)
+            opt = torch.optim.Adam([raw], lr=lr)
 
-        for _ in range(gd_steps):
-            opt.zero_grad()
-            theta_k = log_gamma(raw, lo_t, hi_t)
-            y_hat   = rk4(rhs, y_after_jump_k.detach(), dt_k, theta_k, n_substeps)
-            diff    = torch.log1p(y_hat) - torch.log1p(y_target)
-            loss    = diff.index_select(-1, loss_idx_t).pow(2).mean()
-            loss.backward()
-            opt.step()
+            for _ in range(gd_steps):
+                opt.zero_grad()
+                theta_k = log_gamma(raw, lo_t, hi_t)
+                y_hat   = rk4(rhs, y_after_jump_k.detach(), dt_k, theta_k, n_substeps)
+                diff    = torch.log1p(y_hat) - torch.log1p(y_target)
+                loss    = diff.index_select(-1, loss_idx_t).pow(2).mean()
+                loss.backward()
+                opt.step()
 
-        with torch.no_grad():
-            theta_k = log_gamma(raw, lo_t, hi_t)
-            y_hat   = rk4(rhs, y_after_jump_k, dt_k, theta_k, n_substeps)
-            diff    = torch.log1p(y_hat) - torch.log1p(y_target)
-            final_loss = diff.index_select(-1, loss_idx_t).pow(2).mean()
+            with torch.no_grad():
+                theta_k = log_gamma(raw, lo_t, hi_t)
+                y_hat   = rk4(rhs, y_after_jump_k, dt_k, theta_k, n_substeps)
+                diff    = torch.log1p(y_hat) - torch.log1p(y_target)
+                final_loss = diff.index_select(-1, loss_idx_t).pow(2).mean()
 
-        pred_rollout[k]   = y_hat.squeeze(0).detach().cpu().numpy()
-        thetas_rollout[k] = theta_k.squeeze(0).detach().cpu().numpy()
-        losses_rollout[k] = float(final_loss)
-        y_cur = y_hat.detach()
+            pred_rollout[k]   = y_hat.squeeze(0).detach().cpu().numpy()
+            thetas_rollout[k] = theta_k.squeeze(0).detach().cpu().numpy()
+            losses_rollout[k] = float(final_loss)
+            y_cur = y_hat.detach()
 
     return dict(
         y_full         = y_full,
@@ -267,7 +272,7 @@ def _nrmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def _run_one_worker(kwargs: dict) -> dict:
     """Top-level worker for ProcessPoolExecutor (must be picklable)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    res = run(**kwargs, device=torch.device("cpu"))
+    res = run(**kwargs, no_rollout=True, device=torch.device("cpu"))
     state_names = res["state_names"]
     y_true = res["y_full"][1:]          # (K, P)
     pred   = res["pred_onestep"]        # (K, P)
@@ -431,6 +436,8 @@ def main():
                         help="Species for NRMSE table in multi-sample mode (default: same as --loss-species).")
     parser.add_argument("--out-csv",     type=str, default=None,
                         help="Save per-sample NRMSE + summary row to this CSV path (multi-sample mode only).")
+    parser.add_argument("--no-rollout",  action="store_true",
+                        help="Skip the honest rollout (much faster; one-step oracle only).")
     args = parser.parse_args()
 
     device = device_auto()
@@ -530,6 +537,7 @@ def main():
             theta_hi     = args.theta_hi,
             n_substeps   = args.n_substeps,
             loss_species = loss_species,
+            no_rollout   = args.no_rollout,
             device       = device,
         )
         all_results[scaffold_name] = res
