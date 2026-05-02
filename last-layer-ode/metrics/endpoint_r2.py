@@ -161,6 +161,20 @@ def plot_endpoints(results: list[dict], protein_sp: str, mrna_sp: str,
     print(f"Saved plot -> {out_path}")
 
 
+def save_r2_cache(exp_dir: Path, result: dict, r2_protein: float, r2_mrna: float) -> None:
+    import csv
+    cache = exp_dir / "r2_cache.csv"
+    with open(cache, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["run", "n", "r2_protein_final", "r2_mrna_max"])
+        writer.writeheader()
+        writer.writerow({
+            "run": exp_dir.name,
+            "n": result["n"],
+            "r2_protein_final": f"{r2_protein:.8f}",
+            "r2_mrna_max": f"{r2_mrna:.8f}",
+        })
+
+
 def print_table(results: list[dict], protein_sp: str, mrna_sp: str) -> None:
     print()
     print(f"{'run':<55}  {'n':>4}  {'R²(protein final)':>18}  {'R²(mRNA max)':>14}")

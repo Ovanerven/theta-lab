@@ -1,0 +1,42 @@
+# Single-knob ablation off the FULL supervisor mirror.
+#
+# Each run starts from configs/supervisor_mirror_full.yaml and flips ONE flag
+# back to your previous (Gaia) setting. If `full_mirror` clearly outperforms
+# the others, that confirms his result reproduces; the gap from each ablated
+# run tells you which subset of the diffs is actually load-bearing.
+#
+# Holding seed=1, split_seed=42 fixed across all 11 runs so any difference is
+# attributable to the flipped flag, not the seed lottery.
+
+study: supervisor_mirror_ablation
+runs_per_job: 1
+time: "05:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/supervisor_mirror_full.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  seed: 1
+  split_seed: 42
+  endpoint_r2: true
+
+runs:
+  # Reference: full mirror (every match ON)
+  - {exp_name: full_mirror}
+
+  # Ablate one diff at a time
+  - {exp_name: ab_dna_in_gru,        exclude_ode_cols_from_gru: false}
+  - {exp_name: ab_u_sqrt_only,       u_transform: sqrt}
+  - {exp_name: ab_no_tf_drop,        tf_drop_epoch: 999999}
+  - {exp_name: ab_no_pm_halftime,    pm_halftime_weight: 1.0}
+  - {exp_name: ab_no_pm_endpoint,    lambda_pm_endpoint: 0.0}
+  - {exp_name: ab_no_theta_reg,      lambda_theta_state_reg: 0.0}
+  - {exp_name: ab_bottle_120_40,     head_bottle_dims: [120, 40]}
+  - {exp_name: ab_nn_gru,            gru_variant: nn_gru}
+  - {exp_name: ab_default_gru_init,  gru_init: default}
+  - {exp_name: ab_default_head_init, head_init: default}

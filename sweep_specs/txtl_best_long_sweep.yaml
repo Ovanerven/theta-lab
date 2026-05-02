@@ -1,0 +1,119 @@
+# Long-budget sweep targeting the best signals found across both completed sweeps:
+#
+#   txtl_supervisor_combined_sweep (top 3):
+#     #1 -0.1662  lr_super            lr=1.8e-3, dropout=0.1, head_bottle=False, λ_endpoint=1.0
+#     #2 -0.1958  dropout_super       lr=1e-3,   dropout=0.2, head_bottle=False, λ_endpoint=1.0
+#     #4 -0.2209  arch_head_bottle    lr=1e-3,   dropout=0.1, head_bottle=True,  λ_endpoint=1.0
+#
+#   txtl_smart_merge_sweep (top 3):
+#     #1 -0.2151  A2_b5_bottle        lr=1e-3,   dropout=0.1, head_bottle=True,  λ_endpoint=0
+#     #2 -0.2896  H0_arch_full+floors lr=1e-3,   dropout=0.1, gamma+bottle+liftskip+floors, λ_endpoint=1.0
+#     #3 -0.3290  C1_endpoint_floors  lr=1e-3,   dropout=0.1, head_bottle=False, λ_endpoint=1.0
+#
+# Cross-sweep signals:
+#   - head_bottle=True  consistently good in both sweeps
+#   - lr=1.8e-3         best combined, never tested in merge → test it here
+#   - dropout=0.2       #2 combined, never tested in merge → test it here
+#   - H0 arch           best arch combo from merge, only ran 1000 ep → run 2000 ep
+#
+# Strategy:
+#   - Anchor on head_bottle=True + λ_endpoint=1.0 (shared top signal)
+#   - Cross lr (1e-3 vs 1.8e-3) x dropout (0.1 vs 0.2) for the bottle arch
+#   - Run H0 (full arch) with both LRs
+#   - One no-bottle control with lr=1.8e-3 to isolate bottle vs LR contribution
+# ─────────────────────────────────────────────────────────────────────────────
+
+study: txtl_best_long_sweep
+runs_per_job: 1
+time: "10:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+  seed: 1
+  split_seed: 5
+
+  # b5 recipe
+  u_transform: sqrt
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+  head_bias_init: 2.0
+  head_weight_gain: 3.0
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 1.0e-05
+  r_terminal_frac: 0.05
+  lambda_endpoint: 1.0
+  endpoint_mrna_obs_idx: 0
+  endpoint_protein_obs_idx: 1
+  lambda_o_terminal: 0.0
+  auto_scale_aux_losses: true
+
+  batch_size: 200
+  epochs: 2000
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  grad_clip: 1.0
+
+  # no early stopping
+  early_stop_patience: 999999
+  early_stop_min_delta: 0.0
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+  theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+  obs_idx: [3, 5]
+
+  # default arch (arms can override)
+  theta_head_transform: log_gamma
+  head_bottle: true
+  lift_skip: false
+
+runs:
+  # ═══ A. Bottle arch × LR × dropout ═══
+  # Grid of the two signals (lr=1.8e-3, dropout=0.2) neither of which was combined
+  # with head_bottle in any prior sweep.
+  - {exp_name: A0_bottle_lr1e3_drop1,    lr: 0.001,  dropout: 0.1}
+  - {exp_name: A1_bottle_lr18e4_drop1,   lr: 0.0018, dropout: 0.1}   # lr_super LR + bottle
+  - {exp_name: A2_bottle_lr1e3_drop2,    lr: 0.001,  dropout: 0.2}   # dropout_super + bottle
+  - {exp_name: A3_bottle_lr18e4_drop2,   lr: 0.0018, dropout: 0.2}   # both winner signals + bottle
+
+  # ═══ B. H0 full arch (gamma + bottle + liftskip + lifted floors) × LR ═══
+  # H0 was #2 merge at 1000 ep; run 2000 ep + test the lr=1.8e-3 that was never tried there.
+  - exp_name: B0_arch_full_lr1e3
+    lr: 0.001
+    dropout: 0.1
+    theta_head_transform: gamma
+    lift_skip: true
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+
+  - exp_name: B1_arch_full_lr18e4
+    lr: 0.0018
+    dropout: 0.1
+    theta_head_transform: gamma
+    lift_skip: true
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+
+  # ═══ C. No-bottle control ═══
+  # Isolates whether bottle is the driver or lr=1.8e-3 alone explains the combined sweep win.
+  - {exp_name: C0_no_bottle_lr18e4, lr: 0.0018, dropout: 0.1, head_bottle: false}

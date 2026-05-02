@@ -12,12 +12,10 @@ import torch
 
 from models.ode_rnn import OdeRNN
 
-TINY = 1e-7
-
 
 def _safe(x: torch.Tensor) -> torch.Tensor:
     """Replace near-zero with 1 so masked branches in torch.where stay finite."""
-    return torch.where(x.abs() < TINY, torch.ones_like(x), x)
+    return torch.where(x.abs() < 1e-7, torch.ones_like(x), x)
 
 
 def _conv(A: torch.Tensor,
@@ -30,7 +28,7 @@ def _conv(A: torch.Tensor,
       = A * dt * e_out                          [r_in == r_out]
     """
     diff = r_out - r_in
-    is_deg = diff.abs() < TINY
+    is_deg = diff.abs() < 1e-7
     generic = A * (e_in - e_out) / _safe(diff)
     degen   = A * dt * e_out
     return torch.where(is_deg, degen, generic)
@@ -38,13 +36,13 @@ def _conv(A: torch.Tensor,
 
 def _coeff(A: torch.Tensor, diff: torch.Tensor) -> torch.Tensor:
     """A / diff with near-zero diff mapped to 0 (degenerate-case coefficient)."""
-    return torch.where(diff.abs() < TINY, torch.zeros_like(A), A / _safe(diff))
+    return torch.where(diff.abs() < 1e-7, torch.zeros_like(A), A / _safe(diff))
 
 
 def _integ(C: torch.Tensor, r_x: torch.Tensor,
            lam_O: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
     """C * (1 - exp(-(lam_O + r_x)*dt)) / (lam_O + r_x)  — integral of C*exp(-(lam_O+r_x)*t)."""
-    r_tot = (lam_O + r_x).clamp_min(TINY)
+    r_tot = (lam_O + r_x).clamp_min(1e-7)
     return C * (1.0 - torch.exp(-r_tot * dt)) / r_tot
 
 
@@ -63,7 +61,7 @@ def _integ_bleach(C: torch.Tensor, r_x: torch.Tensor,
     rtot = lam_O + r_x
     diff = kbleach - rtot
     e_tot = torch.exp(-rtot * dt)
-    is_deg = diff.abs() < TINY
+    is_deg = diff.abs() < 1e-7
     generic = C * (e_tot - e_b) / _safe(diff)
     degen = C * dt * e_b
     return torch.where(is_deg, degen, generic)

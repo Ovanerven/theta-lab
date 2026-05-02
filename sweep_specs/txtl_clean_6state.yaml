@@ -1,0 +1,105 @@
+# Clean 6-state baseline — strip everything, see what happens.
+#
+# Goal: isolate "is the structural setup capable of fitting this data?"
+# Removes the 7-state O bottleneck; uses only knobs the supervisor reference
+# uses; no aux loss terms, no head init tricks, no architecture toggles.
+#
+# Three arms differing only in loss-space transform, since that's the one
+# choice that has order-of-magnitude impact on amplitude vs the loss:
+#   raw    : MSE in raw space — full tail weight, may be unstable
+#   sqrt   : MSE in sqrt space — supervisor's choice
+#   log1p  : MSE in log1p space — current default; included as a control
+
+study: txtl_clean_6state
+runs_per_job: 1
+time: "06:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_mat_dna.npz
+  scaffold: txtl_maturation_dna
+  model_class: ode_rnn
+
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+  seed: 1
+  split_seed: 5
+
+  # mm at idx 2, pm at idx 4 in the 6-state space
+  obs_idx: [2, 4]
+
+  # Supervisor θ bounds, length 6
+  theta_lo_vec: [1.0e-6, 3.0e-5, 1.0e-5, 3.0e-5, 1.0e-5, 5.0e-5]
+  theta_hi_vec: [5.0e-4, 0.12,   1.0e-2, 0.08,   3.5e-4, 3.5e-3]
+
+  # GRU input cleanup
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+  # Plain transforms — supervisor's exact recipe (sqrt of minmaxed u, sqrt of y)
+  u_transform: minmax_sqrt
+  y_transform: sqrt
+
+  # Modest capacity for ~570 train samples
+  hidden: 128
+  num_layers: 1
+  dropout: 0.2
+  weight_decay: 0.01
+  batch_size: 64
+  lr: 1.0e-3
+  epochs: 1000
+  grad_clip: 1.0
+
+  # Standard TF
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  # Linear-sigmoid θ head (supervisor's choice). Defaults elsewhere.
+  theta_head_transform: gamma
+  theta_bounded: true
+
+  # Default head init (no bias=2 / gain=3 tricks)
+  head_bias_init: 0.0
+  head_weight_gain: 1.0
+
+  # Standard split
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [2, 4]
+
+  # No aux losses
+  lambda_r_terminal: 0.0
+  lambda_o_terminal: 0.0
+  lambda_endpoint: 0.0
+  lambda_pm_tail: 0.0
+  l1_regularization: false
+  l2_regularization: false
+
+  # Numerical: with dt=60s and kdm up to 1e-2, k*dt ≈ 0.6 → RK4 with 1 substep
+  # is fine but 4 is safer.
+  n_substeps: 4
+
+  early_stop_patience: 100
+  early_stop_min_delta: 0.0
+
+runs:
+  # The actual experiment: vary only the loss-space transform.
+  - exp_name: sqrt_loss
+    loss_type: mse
+    obs_normalization: sqrt
+    normalize_by_species_mean: true
+
+  - exp_name: log1p_loss
+    loss_type: log_mse
+    obs_normalization: none
+    normalize_by_species_mean: false
+
+  - exp_name: raw_mse
+    loss_type: mse
+    obs_normalization: none
+    normalize_by_species_mean: true

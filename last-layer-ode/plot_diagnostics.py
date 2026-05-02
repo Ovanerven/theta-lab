@@ -50,7 +50,7 @@ def _test_subset(ds: ODEDataset, exp_dir: Path) -> ODEDataset | torch.utils.data
     return ds
 
 
-def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[torch.nn.Module, ODEDataset, list[str], list[str]]:
+def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path: Path | None = None) -> Tuple[torch.nn.Module, ODEDataset, list[str], list[str]]:
     cfg = load_yaml(exp_dir / "config.yaml")
 
     dataset_path = Path(cfg["dataset_path"])
@@ -110,7 +110,21 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         obs_idx_cfg = cfg.get("obs_idx")
         gru_y_cols = list(obs_idx_cfg) if obs_idx_cfg is not None else list(range(scaffold.P))
 
-    ckpt = torch.load(exp_dir / "model.pt", map_location="cpu")
+    # Allow plotting any checkpoint (including in-progress runs).
+    # Priority: explicit ckpt_path > model.pt (final best) > model_last.pt > newest checkpoints/ckpt_ep*.pt.
+    if ckpt_path is not None:
+        chosen = Path(ckpt_path)
+    elif (exp_dir / "model.pt").exists():
+        chosen = exp_dir / "model.pt"
+    elif (exp_dir / "model_last.pt").exists():
+        chosen = exp_dir / "model_last.pt"
+    else:
+        ckpts = sorted((exp_dir / "checkpoints").glob("ckpt_ep*.pt")) if (exp_dir / "checkpoints").exists() else []
+        if not ckpts:
+            raise FileNotFoundError(f"No checkpoints in {exp_dir} (looked for model.pt, model_last.pt, checkpoints/ckpt_ep*.pt)")
+        chosen = ckpts[-1]
+    print(f"Loading checkpoint: {chosen}")
+    ckpt = torch.load(chosen, map_location="cpu")
 
     model_class_name = cfg.get("model_class", "ode_rnn")
     ModelClass = MODELS[model_class_name]
@@ -138,6 +152,9 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device) -> Tuple[
         head_weight_gain=float(cfg.get("head_weight_gain", 1.0)),
         head_bottle_dims=cfg.get("head_bottle_dims", None),
         head_dims=cfg.get("head_dims", None),
+        theta_head_transform=str(cfg.get("theta_head_transform", "log_gamma")),
+        head_bottle=bool(cfg.get("head_bottle", False)),
+        lift_skip=bool(cfg.get("lift_skip", False)),
     ).to(device)
 
     model.load_state_dict(ckpt["state_dict"], strict=False)
@@ -480,13 +497,13 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     plt.close(fig)
 
 
-def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0) -> Path:
+def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0, ckpt_path: str | Path | None = None) -> Path:
     exp_dir = Path(exp_dir)
     out_dir = exp_dir / "plots"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     device = device_auto()
-    model, ds, state_names, param_names = rebuild_model_from_experiment(exp_dir, device=device)
+    model, ds, state_names, param_names = rebuild_model_from_experiment(exp_dir, device=device, ckpt_path=ckpt_path)
 
     cfg = load_yaml(exp_dir / "config.yaml")
     obs_idx = list(cfg.get("obs_idx", [])) or None
@@ -635,9 +652,12 @@ if __name__ == "__main__":
     parser.add_argument("--epoch-overlays", action="store_true")
     parser.add_argument("--epochs", type=str, default=None, help='Comma list like "10,20,50"')
     parser.add_argument("--max-overlays", type=int, default=8)
+    parser.add_argument("--ckpt", type=str, default=None,
+                        help="Specific checkpoint path (default: model.pt > model_last.pt > newest checkpoints/ckpt_ep*.pt)")
     args = parser.parse_args()
 
-    plot_experiment(args.exp_dir, n_samples=args.n_samples, sample_idx=args.sample_idx)
+    # 1) normal plots (loss curves, pred vs true, theta)
+    plot_experiment(args.exp_dir, n_samples=args.n_samples, sample_idx=args.sample_idx, ckpt_path=args.ckpt)
 
     if args.epoch_overlays:
         epochs = None

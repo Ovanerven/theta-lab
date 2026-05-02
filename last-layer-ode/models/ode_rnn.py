@@ -7,21 +7,50 @@ import torch.nn.functional as F
 from scaffolds import MechanisticScaffold
 
 
-def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
+def gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    # Linear-sigmoid: arithmetic midpoint at x=0. Matches supervisor reference.
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
-# def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-#     # Linear alternative (DO NOT USE for wide bounds):
-#     #   return lo + (hi - lo) * torch.sigmoid(x)
-#     # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
-#     # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
-#     # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
-#     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor, tau: float = 1.0) -> torch.Tensor:
+    # Sigmoid in log-space: bounded in [lo, hi], geometric midpoint at x=0.
+    # tau > 1 flattens the sigmoid (supervisor uses tau=2.3), preventing head saturation.
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x / tau))
 
-def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-    # Sigmoid: strictly bounded in [lo, hi], initialises at geometric mean sqrt(lo*hi) when x=0.
-    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+
+class StackedGRUCellBlock(nn.Module):
+    """Drop-in replacement for nn.GRU that mirrors the supervisor's stacked GRUCell.
+
+    Differs from nn.GRU: dropout is applied to EVERY layer's output (including
+    the last) when training, so the head sees a dropped activation.
+    Default init: orthogonal_(W_hh) + xavier_uniform_(W_ih) + zeros for biases.
+    """
+
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int, dropout: float):
+        super().__init__()
+        self.input_size = int(input_size)
+        self.hidden_size = int(hidden_size)
+        self.num_layers = int(num_layers)
+        cells = [nn.GRUCell(self.input_size, self.hidden_size)]
+        cells += [nn.GRUCell(self.hidden_size, self.hidden_size) for _ in range(self.num_layers - 1)]
+        self.cells = nn.ModuleList(cells)
+        self.dropout = nn.Dropout(float(dropout))
+        for c in self.cells:
+            nn.init.orthogonal_(c.weight_hh)
+            nn.init.xavier_uniform_(c.weight_ih)
+            nn.init.zeros_(c.bias_hh)
+            nn.init.zeros_(c.bias_ih)
+
+    def forward(self, x: torch.Tensor, h: torch.Tensor):
+        # x: (B, 1, input_size); h: (num_layers, B, hidden_size)
+        out = x.squeeze(1)
+        new_h = []
+        for li, cell in enumerate(self.cells):
+            state = cell(out, h[li])
+            new_h.append(state)
+            out = self.dropout(state) if self.training else state
+        h_new = torch.stack(new_h, dim=0)
+        return out.unsqueeze(1), h_new
 
 
 class OdeRNN(nn.Module):
@@ -56,6 +85,14 @@ class OdeRNN(nn.Module):
         detach_y_prev: bool = True,         # if False, allow gradients to flow through y_prev in GRU
         u_minmax_max: Optional[torch.Tensor] = None,  # per-channel max for "minmax" / "minmax_sqrt" u_transform
         u_minmax_cols: Optional[list] = None,         # indices in u_seq[:,:,U] that u_minmax_max corresponds to
+        theta_head_transform: str = "log_gamma",      # "log_gamma" (default) | "gamma" (linear-sigmoid; supervisor)
+        theta_head_tau: float = 1.0,                  # temperature for log_gamma sigmoid; supervisor uses 2.3 (gentler slope)
+        head_bottle: bool = False,                    # if True, insert hidden→…→SiLU stack before head (see head_bottle_dims)
+        head_bottle_dims: Optional[list] = None,      # bottle layer widths; default [120, 40]; supervisor: [128, 64]
+        lift_skip: bool = False,                      # if True, drop the lift MLP and feed feat→GRU directly (supervisor)
+        gru_variant: str = "nn_gru",                  # "nn_gru" (default) | "stacked_cell" (supervisor's stacked GRUCell + dropout-on-last)
+        gru_init: str = "default",                    # "default" (PyTorch defaults) | "supervisor" (orthogonal_ W_hh + xavier_ W_ih + zeros)
+        head_init: str = "default",                   # "default" (PyTorch defaults; respect head_bias_init/head_weight_gain) | "supervisor" (xavier_ + zeros, unconditional)
         **kwargs,
     ):
         super().__init__()
@@ -70,6 +107,22 @@ class OdeRNN(nn.Module):
         self.theta_bounded = bool(theta_bounded)
         self.gru_u_cols   = list(gru_u_cols) if gru_u_cols is not None else None
         self.detach_y_prev = bool(detach_y_prev)
+        if theta_head_transform not in ("log_gamma", "gamma"):
+            raise ValueError(f"theta_head_transform must be 'log_gamma' or 'gamma', got {theta_head_transform}")
+        self.theta_head_transform = str(theta_head_transform)
+        self.theta_head_tau = float(theta_head_tau)
+        self.head_bottle_enabled = bool(head_bottle)
+        self.head_bottle_dims = list(head_bottle_dims) if head_bottle_dims is not None else [120, 40]
+        self.lift_skip = bool(lift_skip)
+        if gru_variant not in ("nn_gru", "stacked_cell"):
+            raise ValueError(f"gru_variant must be 'nn_gru' or 'stacked_cell', got {gru_variant}")
+        if gru_init not in ("default", "supervisor"):
+            raise ValueError(f"gru_init must be 'default' or 'supervisor', got {gru_init}")
+        if head_init not in ("default", "supervisor"):
+            raise ValueError(f"head_init must be 'default' or 'supervisor', got {head_init}")
+        self.gru_variant = str(gru_variant)
+        self.gru_init = str(gru_init)
+        self.head_init = str(head_init)
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -88,24 +141,72 @@ class OdeRNN(nn.Module):
         gru_y_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
         gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
-        self.lift = nn.Sequential(
-            nn.Linear(gru_feat_dim + gru_y_dim, lift_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-        )
-        self.gru = nn.GRU(
-            input_size=lift_dim,
-            hidden_size=hidden,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
+        feat_in = gru_feat_dim + gru_y_dim
+        if self.lift_skip:
+            self.lift = nn.Identity()
+            gru_input_dim = feat_in
+        else:
+            self.lift = nn.Sequential(
+                nn.Linear(feat_in, lift_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+            )
+            gru_input_dim = lift_dim
+        if self.gru_variant == "stacked_cell":
+            self.gru = StackedGRUCellBlock(gru_input_dim, hidden, num_layers, dropout)
+        else:
+            self.gru = nn.GRU(
+                input_size=gru_input_dim,
+                hidden_size=hidden,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim
-        self.head = nn.Linear(hidden, head_out)
-        if head_bias_init != 0.0:
-            nn.init.constant_(self.head.bias, float(head_bias_init))
-        if head_weight_gain != 1.0:
-            nn.init.xavier_uniform_(self.head.weight, gain=float(head_weight_gain))
+        if self.head_bottle_enabled:
+            dims = self.head_bottle_dims
+            layers: list[nn.Module] = []
+            prev = hidden
+            for d in dims:
+                layers += [nn.Linear(prev, int(d)), nn.SiLU()]
+                prev = int(d)
+            self.head_bottle = nn.Sequential(*layers)
+            head_in = prev
+        else:
+            self.head_bottle = nn.Identity()
+            head_in = hidden
+        self.head = nn.Linear(head_in, head_out)
+
+        # Head init: "supervisor" applies xavier_uniform + zeros UNCONDITIONALLY.
+        # "default" preserves the legacy guard (only override on non-default config values).
+        if self.head_init == "supervisor":
+            nn.init.xavier_uniform_(self.head.weight, gain=1.0)
+            nn.init.zeros_(self.head.bias)
+        else:
+            if head_bias_init != 0.0:
+                nn.init.constant_(self.head.bias, float(head_bias_init))
+            if head_weight_gain != 1.0:
+                nn.init.xavier_uniform_(self.head.weight, gain=float(head_weight_gain))
+
+        # GRU init: "supervisor" forces orthogonal_(W_hh) + xavier_uniform_(W_ih) + zeros(biases)
+        # on whichever variant is in use. nn.GRU stores params under names like
+        # "weight_ih_l{k}", "weight_hh_l{k}", "bias_ih_l{k}", "bias_hh_l{k}".
+        # StackedGRUCellBlock already applies this init at construction; redo to honor seed ordering.
+        if self.gru_init == "supervisor":
+            if self.gru_variant == "stacked_cell":
+                for c in self.gru.cells:
+                    nn.init.orthogonal_(c.weight_hh)
+                    nn.init.xavier_uniform_(c.weight_ih)
+                    nn.init.zeros_(c.bias_hh)
+                    nn.init.zeros_(c.bias_ih)
+            else:
+                for name, p in self.gru.named_parameters():
+                    if "weight_ih" in name:
+                        nn.init.xavier_uniform_(p)
+                    elif "weight_hh" in name:
+                        nn.init.orthogonal_(p)
+                    elif "bias" in name:
+                        nn.init.zeros_(p)
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
@@ -114,14 +215,16 @@ class OdeRNN(nn.Module):
         # Per-channel MinMax max (used by "minmax" / "minmax_sqrt" u_transform).
         # Built into a (U,) vector with 1.0 in non-scaled columns (e.g. DNA c)
         # so applying scale = 1/u_max_full leaves them unchanged.
+        # Always register the buffer so TorchScript can resolve the attribute.
+        # When unused, it stays at all-ones (a no-op divisor).
+        u_max_full = torch.ones(self.U, dtype=torch.float32)
         if u_minmax_max is not None and u_minmax_cols is not None:
-            u_max_full = torch.ones(self.U, dtype=torch.float32)
             cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
             u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
-            self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
             self._has_u_minmax = True
         else:
             self._has_u_minmax = False
+        self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
     def forward(
         self,
@@ -159,7 +262,7 @@ class OdeRNN(nn.Module):
         if u_transform in ("minmax", "minmax_sqrt"):
             if not self._has_u_minmax:
                 raise ValueError(
-                    f"u_transform={u_transform!r} requires u_minmax_max/u_minmax_cols at model init."
+                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
                 )
             u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
         if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
@@ -186,17 +289,25 @@ class OdeRNN(nn.Module):
             y_in_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_in_feat = y_in_feat.clamp_min(0.0).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                # Supervisor's transform: sqrt first, then clamp at 1.
+                # sqrt(0)=0 → clamped to 1, so failing experiments (pm≈0) still
+                # give the GRU a non-zero, non-degenerate signal of 1.0 instead of 0.
+                y_in_feat = y_in_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
             elif y_transform == "log1p":
                 y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
             feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
-            raw = self.head(z.squeeze(1))
+            raw = self.head(self.head_bottle(z.squeeze(1)))
 
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw_theta)
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
@@ -205,7 +316,10 @@ class OdeRNN(nn.Module):
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
                 y = y_prev + (u_k @ self.u_to_y_jump)

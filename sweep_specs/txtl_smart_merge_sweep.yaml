@@ -1,0 +1,200 @@
+# Smart-merge sweep — combines what's proven across all prior txtl sweeps with
+# what's never been tested. Avoids duplicating in-flight `txtl_supervisor_combined_sweep`
+# and `txtl_supervisor_arch_sweep`.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Top 6 historical winners (R²(protein final), best-of across all completed sweeps):
+#   #1 +0.034  gru_training_sweep / loss_mse_seed1
+#              scaffold=txtl_maturation_dna, bs=150, lr=1e-4, no transforms, λ_rterm=5
+#   #2 +0.016  init_loss_tf_sweep_rerun / sqrt_endpoint_1
+#              obs_norm=sqrt, u=cumsum_sqrt, y=sqrt, λ_endpoint=1.0, λ_pm_tail=0.5
+#   #4 -0.068  supervisor_match / supervisor_exact_plus_endpoint1
+#              u=minmax_sqrt, y=sqrt, lr=1.8e-3, λ_endpoint=1.0
+#   #5 -0.082  sqrt_utrans / init_gain3_bias_hi  ← "the b5 recipe"
+#              log1p_clip1, sqrt/sqrt, head_bias_init=2.0, head_weight_gain=3.0, λ_pm_tail=0.5
+#   #6 -0.087  supervisor_match / u_none
+#              log1p_clip1, u=none, y=sqrt, λ_endpoint=1.0, λ_pm_tail=0.5
+#
+# Never tested in any completed sweep:
+#   - theta_head_transform=gamma  (linear-sigmoid; supervisor reference)
+#   - head_bottle=true            (hidden→120→SiLU→40→SiLU before head; supervisor)
+#   - lift_skip=true              (drop lift MLP; supervisor)
+#   - loss_type=log1p_clip1_mse   (native form vs obs_norm=log1p_clip1+loss=mse)
+#   - lambda_o_terminal>0
+#   - VTX/VTL theta_lo lifted to 3e-5 (matches supervisor's reference parser)
+#   - VTX/VTL theta_hi widened (>0.12 / >0.08)
+#   - rank-1 scaffold (txtl_maturation_dna) + modern loss machinery
+#
+# Strategy:
+#   - Anchor on b5 (#5) — the proven recipe with the best init head — instead of
+#     supervisor_pure (which arch_sweep already uses and which scored -0.27).
+#   - Toggle each "never tested" knob ON TOP of b5.
+#   - Pair lifted theta_lo floors with the b5 recipe (memory note says floors help).
+#   - Run two arms with rank-1 scaffold (txtl_maturation_dna) + modern loss.
+#   - One reproduce-rank-2 arm with modern head_bias init (rank 2 didn't have it).
+#   - One kitchen-sink long-budget arm.
+# ─────────────────────────────────────────────────────────────────────────────
+
+study: txtl_smart_merge_sweep
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+  seed: 1
+  split_seed: 5
+
+  # ── b5 (#5) recipe — the anchor for arms unless overridden ──
+  u_transform: sqrt
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 1.0e-05
+  r_terminal_frac: 0.05
+  lambda_endpoint: 0.0
+  lambda_o_terminal: 0.0
+  auto_scale_aux_losses: true
+
+  head_bias_init: 2.0       # b5 init — proven helpful
+  head_weight_gain: 3.0
+
+  batch_size: 200
+  epochs: 1000
+  lr: 0.001
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  grad_clip: 1.0
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  # b5 theta bounds (overridden by arms B0/B1/E1/E2/G0)
+  theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+  theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+  obs_idx: [3, 5]
+
+  # Architecture defaults (some arms override)
+  theta_head_transform: log_gamma
+  head_bottle: false
+  lift_skip: false
+
+  # Early stop — runs that plateau die
+  early_stop_patience: 100
+  early_stop_min_delta: 0.0
+
+runs:
+  # ═══ A. Arch toggles on b5 anchor (NOT supervisor_pure, which arch_sweep tests) ═══
+  - {exp_name: A0_b5_anchor}
+  - {exp_name: A1_b5_gamma,      theta_head_transform: gamma}
+  - {exp_name: A2_b5_bottle,     head_bottle: true}
+  - {exp_name: A3_b5_liftskip,   lift_skip: true}
+  - {exp_name: A4_b5_arch_full,  theta_head_transform: gamma, head_bottle: true, lift_skip: true}
+
+  # ═══ B. Lifted theta_lo floors on VTX/VTL (untested; supervisor + memory recommend) ═══
+  - exp_name: B0_b5_lifted_floors
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+  - exp_name: B1_b5_lifted_floors_widened_hi
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ═══ C. λ_endpoint=1.0 on b5 (rank 2 & 4 had it; rank 5 didn't — fill the cell) ═══
+  - {exp_name: C0_b5_plus_endpoint,         lambda_endpoint: 1.0}
+  - {exp_name: C1_b5_plus_endpoint_floors,  lambda_endpoint: 1.0,
+     theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]}
+
+  # ═══ D. loss_type=log1p_clip1_mse (native form, never tested) ═══
+  - {exp_name: D0_b5_native_log1p,  loss_type: log1p_clip1_mse, obs_normalization: none}
+
+  # ═══ E. Rank-1 scaffold (txtl_maturation_dna) + modern loss machinery ═══
+  # Rank 1 was bs=150 lr=1e-4 NO transforms NO obs_norm; pair with what worked elsewhere.
+  - exp_name: E0_matdna_modern_loss
+    scaffold: txtl_maturation_dna
+    obs_idx: [2, 4]                     # mm=2, pm=4 in the 6-state scaffold
+    lambda_endpoint: 1.0
+    endpoint_mrna_obs_idx: 0
+    endpoint_protein_obs_idx: 1
+  - exp_name: E1_matdna_rank1_repro_plus_endpoint
+    scaffold: txtl_maturation_dna
+    obs_idx: [2, 4]
+    batch_size: 150
+    lr: 1.0e-04
+    u_transform: none
+    y_transform: none
+    obs_normalization: none
+    lambda_endpoint: 1.0
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 5.0
+    head_bias_init: 0.0
+    head_weight_gain: 1.0
+    endpoint_mrna_obs_idx: 0
+    endpoint_protein_obs_idx: 1
+
+  # ═══ F. λ_o_terminal once on b5 (combined_sweep tests 3 levels; this confirms with proven head init) ═══
+  - {exp_name: F0_b5_o_term, lambda_o_terminal: 1.0e-03, o_terminal_frac: 0.05}
+
+  # ═══ G. Reproduce rank-2 (sqrt_endpoint_1) WITH b5's head init (never tried) ═══
+  - exp_name: G0_rank2_repro_with_b5_head
+    obs_normalization: sqrt
+    u_transform: cumsum_sqrt
+    y_transform: sqrt
+    lambda_endpoint: 1.0
+    lambda_pm_tail: 0.5
+    # head_bias=2.0, head_weight_gain=3.0 inherited from fixed (rank 2 didn't have these)
+
+  # ═══ H. Hybrid winners — combinations of the strongest signals ═══
+  - exp_name: H0_b5_arch_full_plus_endpoint_floors
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    lambda_endpoint: 1.0
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+
+  - exp_name: H1_b5_full_kitchen_sink
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    lambda_endpoint: 1.0
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ═══ I. Long-budget run of the most-promising hybrid ═══
+  - exp_name: I0_kitchen_sink_long
+    epochs: 1000
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    lambda_endpoint: 1.0
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ═══ J. Smaller-batch hedge with arch + endpoint (proven SGD noise helps b5) ═══
+  - exp_name: J0_b5_bs64_arch_endpoint
+    batch_size: 64
+    epochs: 800
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    lambda_endpoint: 1.0

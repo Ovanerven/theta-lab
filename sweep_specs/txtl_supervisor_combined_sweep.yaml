@@ -1,0 +1,262 @@
+# Sweep combining best-so-far (b5/init_gain3_bias_hi from txtl_init_loss_tf_sweep_rerun_sqrt_utrans:
+#   prot R²=-0.082, mRNA R²=-0.076 — best protein across all sweeps to date)
+# with supervisor's prescribed recipe (hints.txt + datasets/supervisorhint_dataparser.py).
+#
+# Best-so-far config already includes much of the supervisor recipe:
+#   ✓ obs_normalization=log1p_clip1   ("worked for me" hint)
+#   ✓ lambda_pm_tail=0.5              (tail-weighted protein hint)
+#   ✓ u_transform=sqrt                (sqrt on inputs hint)
+#   ✓ y_transform=sqrt                (sqrt on encoder y_in hint)
+#   ✓ gru_y_obs_only, exclude_ode_cols_from_gru, detach_y_prev
+#
+# What best-so-far is missing from supervisor:
+#   ✗ lambda_o_terminal=0             (no O monotone-decay constraint — hints.txt:4,8)
+#   ✗ 50 epochs                       (supervisor: 2000)
+#   ✗ batch_size=32                   (supervisor: 200)
+#   ✗ dropout=0.1                     (supervisor reference: 0.2)
+#   ✗ lr=0.001                        (supervisor: 0.0018)
+#   ✗ Theta bounds on VTX/VTL not widened ("MOST DRAMATIC" hint)
+#   ✗ tf_every=50, tf_drop_epoch=25   (supervisor: every=100, never drop)
+#
+# Strategy:
+#   - Anchor: best-so-far config with batch=200, epochs=400 (the user-requested floor).
+#     With batch 200 vs 32, ~6x fewer optimizer steps per epoch → 400 epochs ≈
+#     comparable wall-clock to the prior 50-epoch runs at batch 32.
+#   - Then individually toggle each missing supervisor piece.
+#   - Then a "supervisor_combined_full" arm that turns them all on.
+#   - Then a small grid of in-between blends so we can see which knob moves R².
+#
+# Notes:
+#   - Keep scaffold=txtl_resource_and_maturation_dna (7 states with O). The
+#     supervisor's 6-state scaffold (txtl_maturation_dna) requires a different
+#     dataset layout (obs_idx [2,4] vs [3,5]); not swapping here. Instead we
+#     constrain the extra O state via lambda_o_terminal (matches "force O down
+#     softly" hint).
+#   - VTX (idx 2) and VTL (idx 4) widened arms test the "MOST DRAMATIC" hint.
+#     Theta vector indices: [lam, ?, VTXmax, kdm, VTLmax, kmt, kmatm].
+
+study: txtl_supervisor_combined_sweep
+runs_per_job: 1
+# Spec-level time covers the longest arm (2000 epochs at batch=200 ≈ 7h).
+# launch_sweep.py reads spec["time"] once — per-run overrides would be ignored.
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+  seed: 1
+
+  # Anchored to best-so-far (b5) ──────────────────────────────────────
+  u_transform: sqrt
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 1.0e-05
+  r_terminal_frac: 0.05
+  auto_scale_aux_losses: true
+
+  head_bias_init: 2.0
+  head_weight_gain: 3.0
+
+  # User-requested baseline shifts ────────────────────────────────────
+  batch_size: 200
+  epochs: 400
+  lr: 0.001
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+
+  # Best-so-far TF schedule (kept as default; some arms override) ─────
+  teacher_forcing: true
+  tf_every: 50
+  tf_drop_epoch: 25
+
+  # Best-so-far theta bounds (kept as default; some arms widen) ───────
+  theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+  theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+
+  # Early stopping: kill the run if best_val hasn't improved for this many epochs.
+  # Saves wallclock on the long-budget arms when they plateau.
+  early_stop_patience: 100
+  early_stop_min_delta: 0.0
+
+runs:
+  # ── Anchor: best-so-far config, just batch=200 + epochs=400 ────────
+  - {exp_name: anchor_b5_bs200_ep400}
+
+  # ── Individual supervisor toggles on top of anchor ─────────────────
+
+  # (1) Add O monotone-decay constraint (hints.txt:4,8)
+  - {exp_name: plus_o_term_low,  lambda_o_terminal: 1.0e-04, o_terminal_frac: 0.05}
+  - {exp_name: plus_o_term_mid,  lambda_o_terminal: 1.0e-03, o_terminal_frac: 0.05}
+  - {exp_name: plus_o_term_high, lambda_o_terminal: 1.0e-02, o_terminal_frac: 0.05}
+
+  # (2) Supervisor's TF schedule (every=100, never drop) — hints.txt is silent
+  #     but the reference parser does this
+  - {exp_name: tf_super,         tf_every: 100, tf_drop_epoch: 999999}
+
+  # (3) Supervisor lr (0.0018) and dropout (0.2)
+  - {exp_name: lr_super,         lr: 0.0018}
+  - {exp_name: dropout_super,    dropout: 0.2}
+  - {exp_name: lr_dropout_super, lr: 0.0018, dropout: 0.2}
+
+  # (4) Widened VTX / VTL bounds — "MOST DRAMATIC" hint (hints.txt:10)
+  #     idx 2 = VTXmax (current hi=0.12), idx 4 = VTLmax (current hi=0.08)
+  - exp_name: bounds_widen_vtx
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+  - exp_name: bounds_widen_vtl
+    theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+  - exp_name: bounds_widen_both
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ── In-between blends ──────────────────────────────────────────────
+
+  # (5) O-term + bound widening
+  - exp_name: o_plus_bounds_both
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # (6) Supervisor TF + supervisor lr/dropout (no other changes)
+  - exp_name: tf_lr_dropout_super
+    tf_every: 100
+    tf_drop_epoch: 999999
+    lr: 0.0018
+    dropout: 0.2
+
+  # (7) Longer training — anchor everything else
+  - {exp_name: ep1000, epochs: 1000}
+
+  # ── Full supervisor-faithful (everything on, anchored on best-so-far) ──
+  - exp_name: supervisor_combined_full
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    tf_every: 100
+    tf_drop_epoch: 999999
+    lr: 0.0018
+    dropout: 0.2
+    epochs: 1000
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ── Sanity arm: same as full but keep my-best loss head settings only ──
+  - exp_name: supervisor_combined_no_bounds_widen
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    tf_every: 100
+    tf_drop_epoch: 999999
+    lr: 0.0018
+    dropout: 0.2
+    epochs: 1000
+
+  # ── Step / batch confound controls ────────────────────────────────
+  # Optimizer-step accounting at N≈567 train:
+  #   bs=32  / 50  ep ≈   900 steps   (b5 best-so-far)
+  #   bs=200 / 400 ep ≈ 1,200 steps   (anchor — ~step-matched to b5)
+  #   bs=200 / 1000 ep≈ 3,000 steps
+  #   bs=200 / 2000 ep≈ 6,000 steps   (supervisor-equivalent)
+  #   bs=64  / 500 ep ≈ 4,500 steps
+  #   bs=32  / 500 ep ≈ 9,000 steps   (supervisor-equivalent step count, b5 batch)
+
+  # (8) Intermediate batch — b5 batch is too noisy?  bs=200 too full-batch?
+  - {exp_name: bs64_ep400,            batch_size: 64,  epochs: 400}
+  - {exp_name: bs64_ep1000,           batch_size: 64,  epochs: 1000}
+  - {exp_name: bs128_ep600,           batch_size: 128, epochs: 600}
+
+  # (9) lr scaling for big batch — sqrt-rule (0.001 × √(200/32) ≈ 0.0025)
+  - {exp_name: bs200_ep1000_lr_sqrt,  epochs: 1000, lr: 0.0025}
+
+  # (10) Cosine decay variant — long runs benefit from proper schedule
+  - {exp_name: bs200_ep1000_cosine,   epochs: 1000, cosine_decay: true, warmup_epochs: 20}
+
+  # ── Two long-budget keystone arms ──────────────────────────────────
+  # Early-stop patience (100, in fixed block) will cap these if they plateau.
+
+  # (11) Pure supervisor reference (no log1p_clip1, no pm_tail, no r/o terminal,
+  #      hidden=200, dropout=0.2, lr=0.0018, tf=k%100 nodrop, 2000 ep). This is
+  #      the "what would happen if I ran exactly the supervisor's recipe at her
+  #      epoch budget" arm.
+  - exp_name: supervisor_pure_2000ep
+    epochs: 2000
+    hidden: 200
+    num_layers: 2
+    dropout: 0.2
+    lr: 0.0018
+    weight_decay: 0.0
+    teacher_forcing: true
+    tf_every: 100
+    tf_drop_epoch: 999999
+    obs_normalization: none
+    loss_type: mse
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 0.0
+    lambda_o_terminal: 0.0
+    auto_scale_aux_losses: false
+    head_bias_init: 0.0
+    head_weight_gain: 1.0
+
+  # (12) Hybrid: my-best loss/init head + supervisor optimizer + widened bounds + 2000 ep.
+  #      Same as supervisor_combined_full but at 2000ep (the long-training version).
+  - exp_name: hybrid_best_x_super_2000ep
+    epochs: 2000
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    tf_every: 100
+    tf_drop_epoch: 999999
+    lr: 0.0018
+    dropout: 0.2
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
+
+  # ── Architecture toggles (supervisor reference vs current) ──────────
+  # Each toggles ONE architectural piece on top of the anchor (b5 + bs200/ep400).
+  # See last-layer-ode/models/ode_rnn.py: theta_head_transform / head_bottle / lift_skip.
+  # NB: gamma() with linear-sigmoid initialises theta at the ARITHMETIC midpoint
+  # of [lo,hi]. With user theta_lo_vec floors at 1e-7 / 1e-6 this is ~30× the
+  # supervisor's init for VTXmax/VTLmax — these arms therefore also raise the
+  # floors to the supervisor reference values so init-point matches the spirit
+  # of the test (otherwise the arm conflates "linear gamma" with "huge init").
+
+  - {exp_name: arch_gamma_linear,
+     theta_head_transform: gamma,
+     theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]}
+  - {exp_name: arch_head_bottle,    head_bottle: true}
+  - {exp_name: arch_lift_skip,      lift_skip: true}
+
+  # All three architecture flags on, anchor otherwise.
+  - exp_name: arch_supervisor_full
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+
+  # All three architecture flags + supervisor optimizer + widened upper bounds + 2000 ep.
+  # The closest "everything supervisor-like that we can do without a 6-state scaffold."
+  - exp_name: arch_supervisor_full_2000ep
+    epochs: 2000
+    theta_head_transform: gamma
+    head_bottle: true
+    lift_skip: true
+    tf_every: 100
+    tf_drop_epoch: 999999
+    lr: 0.0018
+    dropout: 0.2
+    lambda_o_terminal: 1.0e-03
+    o_terminal_frac: 0.05
+    theta_lo_vec: [1.0e-06, 1.0e-06, 3.0e-05, 1.0e-05, 3.0e-05, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 3.0e-01, 1.0e-02, 2.0e-01, 3.5e-04, 3.5e-03]
