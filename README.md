@@ -47,7 +47,7 @@ python last-layer-ode/metrics/compare_runs.py experiments/scaffold_size_effect -
 | `analysis/observability_experiment.py` | Observability experiment (which species are needed for identifiability). |
 
 ``
-python last-layer-ode/analysis/per_step_theta_fit.py --dataset datasets/real_ivtt_full.npz --scaffold txtl_maturation_dna --sample-idx 0 --gd-steps 400 --show-species mm,pm --out results/txtl_maturation_theta_fit
+python last-layer-ode/analysis/per_step_theta_fit.py --dataset datasets/real_ivtt_full.npz --scaffold txtl_resource_and_maturation_dna --sample-idx 0 --gd-steps 400 --loss-species mm,pm --show-species mm,pm --out results/txtl_maturation_theta_fit
 
 python last-layer-ode/analysis/plot_per_step_theta_fit.py --export-dir results/txtl_maturation_theta_fit/exports --scaffolds txtl_maturation_dna --show-species mm,pm --sample-idx 0 --out results/txtl_maturation_theta_fit/figures/summary
 

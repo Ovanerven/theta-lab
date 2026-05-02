@@ -30,7 +30,9 @@ Usage:
 """
 
 import argparse
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -161,7 +163,6 @@ def run(scaffold_name, dataset_path, sample_idx,
     else:
         loss_idx = list(range(P))
     loss_idx_t = torch.tensor(loss_idx, dtype=torch.long, device=device)
-    print(f"  loss species: {[state_names[i] for i in loss_idx]}  (indices {loss_idx})")
 
     y_true   = torch.from_numpy(y_full).float().to(device)
     u_tensor = torch.from_numpy(u_seq).float().to(device)
@@ -206,7 +207,6 @@ def run(scaffold_name, dataset_path, sample_idx,
 
     pred_onestep   = y_hat_os.detach().cpu().numpy()
     thetas_onestep = theta_os.detach().cpu().numpy()
-    print(f"  one-step done  (mean loss={float(losses_os.mean()):.5f})")
 
     # ── 2) Honest rollout (sequential) ────────────────────────────────────────
     pred_rollout   = np.zeros((K, P))
@@ -245,9 +245,6 @@ def run(scaffold_name, dataset_path, sample_idx,
         losses_rollout[k] = float(final_loss)
         y_cur = y_hat.detach()
 
-        if k % max(1, K // 10) == 0:
-            print(f"  rollout step {k:4d}/{K}  loss={float(final_loss):.5f}")
-
     return dict(
         y_full         = y_full,
         t_obs          = t_obs,
@@ -259,6 +256,96 @@ def run(scaffold_name, dataset_path, sample_idx,
         thetas_rollout = thetas_rollout,
         losses_rollout = losses_rollout,
     )
+
+
+def _nrmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
+    rng  = float(np.max(y_true) - np.min(y_true))
+    return rmse / max(rng, 1e-8)
+
+
+def _run_one_worker(kwargs: dict) -> dict:
+    """Top-level worker for ProcessPoolExecutor (must be picklable)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    res = run(**kwargs, device=torch.device("cpu"))
+    state_names = res["state_names"]
+    y_true = res["y_full"][1:]          # (K, P)
+    pred   = res["pred_onestep"]        # (K, P)
+    nrmse_per_species = {
+        sp: _nrmse(y_true[:, j], pred[:, j])
+        for j, sp in enumerate(state_names)
+    }
+    return {"sample_idx": kwargs["sample_idx"], "nrmse": nrmse_per_species}
+
+
+def run_multi_sample(
+    scaffold_name: str,
+    dataset_path: str,
+    sample_indices: list,
+    gd_steps: int = 400,
+    lr: float = 0.05,
+    n_substeps: int = 4,
+    loss_species: list = None,
+    n_workers: int = None,
+    eval_species: list = None,
+    out_csv: str = None,
+) -> None:
+    if n_workers is None:
+        n_workers = os.cpu_count()
+
+    jobs = [
+        dict(scaffold_name=scaffold_name, dataset_path=dataset_path,
+             sample_idx=i, gd_steps=gd_steps, lr=lr, n_substeps=n_substeps,
+             loss_species=loss_species)
+        for i in sample_indices
+    ]
+
+    per_sample: dict[str, list[float]] = {}
+    sample_rows: list[dict] = []
+    done = 0
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_run_one_worker, j): j["sample_idx"] for j in jobs}
+        for fut in as_completed(futures):
+            res = fut.result()
+            sample_rows.append({"sample_idx": res["sample_idx"], **res["nrmse"]})
+            for sp, v in res["nrmse"].items():
+                per_sample.setdefault(sp, []).append(v)
+            done += 1
+            if done % max(1, len(sample_indices) // 10) == 0:
+                print(f"  {done}/{len(sample_indices)} done", flush=True)
+
+    species_to_show = eval_species if eval_species else list(per_sample.keys())
+    print(f"\n{'Species':<10}  {'Mean NRMSE':>12}")
+    print("-" * 25)
+    primary_vals = []
+    for sp in species_to_show:
+        if sp not in per_sample:
+            continue
+        vals = np.array(per_sample[sp])
+        m = float(np.mean(vals))
+        primary_vals.append(m)
+        print(f"  {sp:<8}  {m:>12.4f}")
+    if primary_vals:
+        print(f"  {'PRIMARY':<8}  {float(np.mean(primary_vals)):>12.4f}  (mean over {species_to_show})")
+
+    if out_csv:
+        import csv
+        out_path = Path(out_csv)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_rows.sort(key=lambda r: r["sample_idx"])
+        all_species = [k for k in sample_rows[0] if k != "sample_idx"]
+        with open(out_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["sample_idx"] + all_species)
+            writer.writeheader()
+            writer.writerows(sample_rows)
+        # append a summary row
+        with open(out_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["sample_idx"] + all_species)
+            summary = {"sample_idx": "MEAN"}
+            for sp in all_species:
+                summary[sp] = f"{float(np.mean(per_sample[sp])):.6f}" if sp in per_sample else ""
+            writer.writerow(summary)
+        print(f"Saved per-sample NRMSE -> {out_path}")
 
 
 def export_csv(all_results, scaffold_order, sample_idx, export_dir):
@@ -335,13 +422,60 @@ def main():
                         help="Comma-separated species names to include in the "
                              "per-step loss (e.g. 'mm,pm'). Default: all species. "
                              "Use this to mask latent / zero-padded channels.")
+    parser.add_argument("--n-samples",   type=int, default=None,
+                        help="Run on this many samples in parallel and report mean NRMSE. "
+                             "-1 = all samples. Overrides --sample-idx.")
+    parser.add_argument("--n-workers",   type=int, default=None,
+                        help="Number of parallel workers (default: all CPUs).")
+    parser.add_argument("--eval-species", type=str, default=None,
+                        help="Species for NRMSE table in multi-sample mode (default: same as --loss-species).")
+    parser.add_argument("--out-csv",     type=str, default=None,
+                        help="Save per-sample NRMSE + summary row to this CSV path (multi-sample mode only).")
     args = parser.parse_args()
 
     device = device_auto()
-    print(f"Device: {device}")
 
     out_dir = Path(args.out)
     export_dir = out_dir / "exports"
+
+    # ── Multi-sample parallel mode ────────────────────────────────────────────
+    if args.n_samples is not None:
+        if args.dataset is None:
+            print("[error] --n-samples requires --dataset.")
+            sys.exit(1)
+        sn = normalize_scaffold_name(args.scaffold)
+        if sn not in SCAFFOLDS:
+            print(f"Unknown scaffold '{args.scaffold}'. Available: {list(SCAFFOLDS.keys())}")
+            sys.exit(1)
+        d = np.load(args.dataset, allow_pickle=True)
+        N = d["y0"].shape[0]
+        n = N if args.n_samples == -1 else min(args.n_samples, N)
+        indices = list(range(n))
+        loss_species = (
+            [s.strip() for s in args.loss_species.split(",") if s.strip()]
+            if args.loss_species else None
+        )
+        eval_species = (
+            [s.strip() for s in args.eval_species.split(",") if s.strip()]
+            if args.eval_species else loss_species
+        )
+        n_workers = args.n_workers or os.cpu_count()
+        print(f"Oracle theta fit: scaffold={sn}  samples={n}  workers={n_workers}  gd_steps={args.gd_steps}")
+        run_multi_sample(
+            scaffold_name=sn,
+            dataset_path=args.dataset,
+            sample_indices=indices,
+            gd_steps=args.gd_steps,
+            lr=args.lr,
+            n_substeps=args.n_substeps,
+            loss_species=loss_species,
+            n_workers=n_workers,
+            eval_species=eval_species,
+            out_csv=args.out_csv,
+        )
+        return
+
+    print(f"Device: {device}")
 
     if args.dataset is not None:
         sn = normalize_scaffold_name(args.scaffold)
