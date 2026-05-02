@@ -278,12 +278,21 @@ def r_terminal_loss(
     r_idx: int,
     lengths: Optional[torch.Tensor],
     frac: float = 0.05,
+    mean_state: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Force R -> 0 over the final `frac` of each trajectory (target column is zeros)."""
+    """Force R -> 0 over the final `frac` of each trajectory.
+
+    If mean_state (B, K) is provided, uses Oliver's log1p(R * mean_state)^2 formulation
+    (scale-normalised, softer for large R).  Otherwise falls back to raw R^2.
+    """
     B, K = pred_full.shape[0], pred_full.shape[1]
     r = pred_full[:, :, r_idx]  # (B,K)
     mask = _build_tail_mask(lengths, K, pred_full.device, frac, B).to(r.dtype)
-    se = (r ** 2) * mask
+    if mean_state is not None:
+        proxy = torch.log1p((r * mean_state).clamp_min(0.0))
+        se = (proxy ** 2) * mask
+    else:
+        se = (r ** 2) * mask
     denom = mask.sum().clamp(min=1.0)
     return se.sum() / denom
 
@@ -401,12 +410,14 @@ def theta_state_reg_loss(
     scales: list[float],
     frac: float = 0.05,
     r_state_idx: Optional[int] = None,
+    r_mask: Optional[list] = None,  # per-index bool; None = apply R to all
 ) -> torch.Tensor:
     """Supervisor's per-θ "state proxy" zero-target log1p regularizer.
 
     For each θ-index i with scale s_i:
         proxy_i = clamp_min(0, theta_i / s_i * R_state * mean(y_obs))   [shape (B, K)]
         loss_i  = mean over tail of log1p(proxy_i)^2
+    r_mask controls which indices get the R multiplication (Oliver: only VTXmax and VTLmax).
     Returns the mean of loss_i across the chosen indices.
     """
     if not indices or not scales or len(indices) != len(scales):
@@ -424,11 +435,12 @@ def theta_state_reg_loss(
 
     total = torch.zeros((), device=theta.device, dtype=theta.dtype)
     n = 0
-    for i, s in zip(indices, scales):
+    for j, (i, s) in enumerate(zip(indices, scales)):
         i = int(i); s = float(s)
         if s <= 0.0:
             continue
-        proxy = (theta[..., i:i + 1] / s * r_proxy * mean_st).clamp_min(0.0).squeeze(-1)
+        use_r = r_proxy if (r_mask is None or bool(r_mask[j])) else torch.ones_like(mean_st)
+        proxy = (theta[..., i:i + 1] / s * use_r * mean_st).clamp_min(0.0).squeeze(-1)
         log_p = torch.log1p(proxy)
         total = total + ((log_p ** 2) * tail_mask).sum() / denom
         n += 1
@@ -832,7 +844,8 @@ class TrainConfig:
     theta_state_reg_frac: float = 0.05
     theta_state_reg_indices: list[int] | None = None
     theta_state_reg_scales: list[float] | None = None
-    theta_state_reg_use_r: bool = True   # multiply by predicted R state if scaffold has one
+    theta_state_reg_use_r: bool = True          # multiply ALL indices by predicted R state
+    theta_state_reg_r_mask: list[bool] | None = None  # per-index override; None = all True
 
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
@@ -1509,14 +1522,18 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 return aux * aux_scale[name]
 
             if r_terminal_enabled:
+                _mean_st = y_seq.mean(dim=-1)  # (B, K) — obs mean, matches Oliver's mean_st
                 r_loss = r_terminal_loss(
-                    pred_full, r_idx_full, batch_lengths, float(cfg.r_terminal_frac)
+                    pred_full, r_idx_full, batch_lengths, float(cfg.r_terminal_frac),
+                    mean_state=_mean_st,
                 )
                 loss = loss + float(cfg.lambda_r_terminal) * _scaled_aux(r_loss, "r_terminal")
 
             if o_terminal_enabled:
+                _mean_st = y_seq.mean(dim=-1)
                 o_loss = r_terminal_loss(
-                    pred_full, o_idx_full, batch_lengths, float(cfg.o_terminal_frac)
+                    pred_full, o_idx_full, batch_lengths, float(cfg.o_terminal_frac),
+                    mean_state=_mean_st,
                 )
                 loss = loss + float(cfg.lambda_o_terminal) * _scaled_aux(o_loss, "o_terminal")
 
@@ -1558,6 +1575,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     scales=list(cfg.theta_state_reg_scales or []),
                     frac=float(cfg.theta_state_reg_frac),
                     r_state_idx=theta_state_reg_r_idx,
+                    r_mask=list(cfg.theta_state_reg_r_mask) if cfg.theta_state_reg_r_mask is not None else None,
                 )
                 loss = loss + float(cfg.lambda_theta_state_reg) * _scaled_aux(ts_loss, "theta_state_reg")
 
