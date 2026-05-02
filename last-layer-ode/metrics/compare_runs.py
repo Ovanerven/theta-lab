@@ -27,15 +27,20 @@ from metrics.nrmse import load_or_compute
 OBS_SPECIES = {"mm", "pm"}  # only observed species in the TXTL dataset
 
 
-def _aggregate(rows: list[dict]) -> list[dict]:
-    """One row per run: mean of mm/pm medians as the sort key."""
+def _aggregate(rows: list[dict], stat: str = "median") -> list[dict]:
+    """One row per run: mean of mm/pm medians/means as the sort key.
+
+    Args:
+        rows: Raw rows from load_or_compute
+        stat: Which field to aggregate ("median" or "mean")
+    """
     by_run: dict[str, dict] = {}
     for r in rows:
         run = r["run"]
         if run not in by_run:
             by_run[run] = {"run": run, "scaffold": r["scaffold"],
                            "P": r["P"], "species": {}}
-        by_run[run]["species"][r["species"]] = r["median"]
+        by_run[run]["species"][r["species"]] = r[stat]
 
     result = []
     for run, d in by_run.items():
@@ -71,7 +76,14 @@ def print_table(runs: list[dict]) -> None:
         print(line)
 
 
-def save_csv(runs: list[dict], path: Path) -> None:
+def save_csv(runs: list[dict], path: Path, stat: str = "median") -> None:
+    """Save results CSV.
+
+    Args:
+        runs: Aggregated runs from _aggregate
+        path: Output path
+        stat: Label for the aggregation method ("median" or "mean")
+    """
     all_species: list[str] = []
     for r in runs:
         for s in r["species"]:
@@ -89,7 +101,7 @@ def save_csv(runs: list[dict], path: Path) -> None:
                 + [f"{r['species'].get(s, ''):.6f}" if r["species"].get(s) is not None else ""
                    for s in all_species]
             )
-    print(f"Saved CSV to {path}")
+    print(f"Saved CSV to {path} ({stat})")
 
 
 def plot_comparison(runs: list[dict], out_path: Path) -> None:
@@ -120,7 +132,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("root", help="Experiment folder, e.g. experiments/scaffold_size_effect")
     parser.add_argument("--recompute", action="store_true", help="Ignore cache and recompute NRMSE")
-    parser.add_argument("--csv", type=str, default=None, help="Save summary CSV to this path")
+    parser.add_argument("--csv", type=str, default=None, help="Save summary CSVs to this path (generates _median and _mean variants)")
     parser.add_argument("--plot", action="store_true", help="Save a bar chart")
     parser.add_argument("--plot-out", type=str, default=None)
     parser.add_argument("--no-split", action="store_true",
@@ -135,11 +147,22 @@ if __name__ == "__main__":
     rows = load_or_compute(root, recompute=args.recompute,
                            no_split=args.no_split,
                            dataset_override=args.dataset)
-    runs = _aggregate(rows)
-    print_table(runs)
+    runs_median = _aggregate(rows, stat="median")
+    runs_mean = _aggregate(rows, stat="mean")
+    print_table(runs_median)
 
     if args.csv:
-        save_csv(runs, Path(args.csv))
+        csv_path = Path(args.csv)
+        # Split path into stem and suffix to insert _median/_mean before extension
+        stem = csv_path.stem
+        suffix = csv_path.suffix
+        parent = csv_path.parent
+
+        median_path = parent / f"{stem}_median{suffix}"
+        mean_path = parent / f"{stem}_mean{suffix}"
+
+        save_csv(runs_median, median_path, stat="median")
+        save_csv(runs_mean, mean_path, stat="mean")
     if args.plot:
         out = Path(args.plot_out) if args.plot_out else root / "comparison.png"
-        plot_comparison(runs, out)
+        plot_comparison(runs_median, out)
