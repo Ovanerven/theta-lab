@@ -10,9 +10,9 @@ import torch
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.subplots as subplots
 import matplotlib.pyplot as plt
 import yaml
+import inspect
 
 from train import ODEDataset, collate, collate_varlen, _apply_norm
 from models import MODELS
@@ -37,6 +37,20 @@ def device_auto() -> torch.device:
 def load_yaml(path: Path) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def _filter_model_kwargs(model: torch.nn.Module, kwargs: dict) -> dict:
+    """Return a copy of kwargs containing only keys accepted by model.forward.
+
+    This prevents passing unknown keyword arguments (like `u_transform`) to
+    model.forward implementations that don't accept them.
+    """
+    try:
+        sig = inspect.signature(model.forward)
+        valid = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        return valid
+    except (ValueError, TypeError):
+        return kwargs
 
 
 def _test_subset(ds: ODEDataset, exp_dir: Path) -> ODEDataset | torch.utils.data.Subset:
@@ -253,62 +267,81 @@ def _save_bolus_panel(t, u_val, control_names, title, out_path):
     plt.close(fig)
 
 
-def _save_progression_dashboard(t, y_true, y_pred, u_val, theta_val, state_names, control_names, param_names, title, out_path):
-    """Saves a strict 3-column Left-to-Right progression: Inputs -> Params -> States."""
+def _save_event_driven_dashboard(t, y_true, y_pred, u_val, theta_val, state_names, control_names, param_names, title, out_path):
+    """Saves a dashboard grouped by Params and States, with inputs as vertical event lines."""
     P = y_pred.shape[-1]
     U = u_val.shape[-1]
     D = theta_val.shape[-1] if theta_val is not None else 0
 
-    n_rows = max(P, U, D)
+    # 1. Identify when and what inputs occur
+    events = []
+    for j in range(U):
+        # Find indices where a bolus is applied (using a small threshold to ignore noise)
+        active_indices = np.where(u_val[:, j] > 1e-4)[0]
+        for idx in active_indices:
+            # Store: (time, input_name, color)
+            events.append((t[idx], control_names[j], f'C{j % 10}'))
+
+    # Calculate grid size (4 columns max per row looks clean)
+    total_plots = D + P
+    cols = 4
+    rows = int(np.ceil(total_plots / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(15, 3 * rows), sharex=True)
+    axes = np.array(axes).reshape(-1)
     
-    # 3 columns, perfectly square subplots: width=12 (3 cols * 4 in), height=4*n_rows
-    fig, axes = plt.subplots(n_rows, 3, figsize=(12, 4 * n_rows))
-    if n_rows == 1:
-        axes = np.expand_dims(axes, axis=0)
+    idx = 0
 
-    for i in range(n_rows):
-        # 1. Inputs (Left Column)
-        ax_u = axes[i, 0]
-        if i < U:
-            ax_u.bar(t, u_val[:, i], width=(t[-1]-t[0])*0.02, color='C2', alpha=0.7)
-            ax_u.set_title(f"Input: {control_names[i]}", fontsize=10, color='C2')
-            ax_u.grid(True, alpha=0.25)
-            ax_u.set_xlim([t[0], t[-1]])
-            if i == U - 1:
-                ax_u.set_xlabel("Time")
-        else:
-            ax_u.axis("off")
+    # 2. Plot Parameters (Theta) First
+    if theta_val is not None:
+        for d in range(D):
+            ax = axes[idx]
+            ax.plot(t, theta_val[:, d], linewidth=2, color='C3')
+            name = param_names[d] if (param_names is not None and d < len(param_names)) else f"θ{d}"
+            ax.set_title(f"Param: {name}", fontsize=11, fontweight='bold', color='C3')
+            
+            # Draw event lines
+            for e_time, e_name, e_color in events:
+                ax.axvline(e_time, color=e_color, linestyle='--', alpha=0.6, linewidth=1.5)
+            
+            ax.grid(True, alpha=0.3)
+            ax.set_xlim([t[0], t[-1]])
+            idx += 1
 
-        # 2. Parameters / Theta (Middle Column)
-        ax_th = axes[i, 1]
-        if theta_val is not None and i < D:
-            ax_th.plot(t, theta_val[:, i], linewidth=2, color='C3')
-            name = param_names[i] if (param_names is not None and i < len(param_names)) else f"θ{i}"
-            ax_th.set_title(f"Param: {name}", fontsize=10, color='C3')
-            ax_th.grid(True, alpha=0.25)
-            ax_th.set_xlim([t[0], t[-1]])
-            if i == D - 1:
-                ax_th.set_xlabel("Time")
-        else:
-            ax_th.axis("off")
+    # 3. Plot States (Trajectories) Next
+    for p in range(P):
+        ax = axes[idx]
+        ax.plot(t, y_true[:, p], linewidth=2, label="true", color='C0')
+        ax.plot(t, y_pred[:, p], linewidth=2, linestyle="--", label="pred", color='C1')
+        ax.set_title(f"State: {state_names[p]}", fontsize=11, fontweight='bold')
+        
+        # Draw event lines
+        for e_time, e_name, e_color in events:
+            ax.axvline(e_time, color=e_color, linestyle='--', alpha=0.6, linewidth=1.5)
+            
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([t[0], t[-1]])
+        if p == 0:
+            ax.legend(fontsize=9, loc='upper right')
+        idx += 1
 
-        # 3. States / Trajectories (Right Column)
-        ax_y = axes[i, 2]
-        if i < P:
-            ax_y.plot(t, y_true[:, i], linewidth=2, label="true", color='C0')
-            ax_y.plot(t, y_pred[:, i], linewidth=2, linestyle="--", label="pred", color='C1')
-            ax_y.set_title(f"State: {state_names[i]}", fontsize=10)
-            ax_y.grid(True, alpha=0.25)
-            ax_y.set_xlim([t[0], t[-1]])
-            if i == 0:
-                ax_y.legend(fontsize=8)
-            if i == P - 1:
-                ax_y.set_xlabel("Time")
-        else:
-            ax_y.axis("off")
+    # Hide unused subplots
+    for i in range(idx, len(axes)):
+        axes[i].axis("off")
 
-    fig.suptitle(title, fontsize=14)
-    fig.tight_layout()
+    # Add x-labels to the bottom-most visible plots
+    for ax in axes:
+        if ax.get_subplotspec().is_last_row() or ax.get_subplotspec().rowspan.stop == rows:
+            ax.set_xlabel("Time", fontsize=10)
+
+    # 4. Create a custom legend for the event lines at the top of the figure
+    from matplotlib.lines import Line2D
+    custom_lines = [Line2D([0], [0], color=f'C{j % 10}', linestyle='--', lw=2) for j in range(U)]
+    fig.legend(custom_lines, control_names, loc='upper center', ncol=U, title="Bolus Events", fontsize=10, title_fontsize=12)
+
+    # Adjust layout to make room for the top legend
+    fig.suptitle(title, fontsize=16, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.92]) 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
@@ -342,7 +375,7 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
         model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped" and batch_lengths is not None:
             model_kwargs["lengths"] = batch_lengths
-        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
+        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
@@ -407,13 +440,13 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
             )
 
         # ---------------------------------------------------------
-        # Plot 4: Combined Progression Dashboard
+        # Plot 4: Event-Driven Dashboard
         # ---------------------------------------------------------
-        _save_progression_dashboard(
+        _save_event_driven_dashboard(
             t, y_true_i, y_pred_i, u_val_i, theta_val_i, 
             state_names, control_names, param_names, 
-            title=f"Progression Overview [{split_label}] (sample {sample_id_str})", 
-            out_path=out_dir / f"progression_all_{sample_id_str}.png"
+            title=f"Event Overview [{split_label}] (sample {sample_id_str})", 
+            out_path=out_dir / f"event_dashboard_{sample_id_str}.png"
         )
 
     if theta_np is None:
@@ -471,7 +504,7 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
         model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped":
             model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
-        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
+        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
 
     beta_np = beta[0].cpu().numpy()  # (K, P)
     dt = dt_seq[0].cpu().numpy()
@@ -506,7 +539,8 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
     model, ds, state_names, param_names = rebuild_model_from_experiment(exp_dir, device=device, ckpt_path=ckpt_path)
 
     cfg = load_yaml(exp_dir / "config.yaml")
-    obs_idx = list(cfg.get("obs_idx", [])) or None
+    # cfg.get("obs_idx") can be None (explicit null in YAML). Coerce safely.
+    obs_idx = list(cfg.get("obs_idx") or []) or None
     u_transform = str(cfg.get("u_transform", "none"))
 
     loss_npz = exp_dir / "logs" / "loss_curves.npz"
@@ -604,7 +638,7 @@ def plot_epoch_prediction_overlays(
             model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform_overlay}
             if model.__class__.__name__ == "OdeTransformerGrouped":
                 model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)
-            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **model_kwargs)
+            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **_filter_model_kwargs(model, model_kwargs))
         preds[ep] = pred[0].detach().cpu().numpy()
 
     fig, axes = plt.subplots(P, 1, figsize=(6, 4 * P), sharex=True)

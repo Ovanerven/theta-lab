@@ -1088,6 +1088,89 @@ class MethaneRevWGS_OHGate4Step_NO_Scaffold(MechanisticScaffold):
 
         return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
 
+class methaneRevWGS_fixed(MechanisticScaffold):
+    """
+    Advanced Domain-informed macroscopic scaffold (V2).
+    - Incorporates proxy non-linearities for missing H/H2 reducing agents.
+    - Replaces linear fuel inhibition with an exponential auto-ignition switch.
+    
+    States (7): CH4, O2, CO, CO2, H2O, OH, NO
+    Parameters (8):
+      0: k_methane_ox : CH4 forward oxidation
+      1: n_o2_methane : Fractional order of O2 in CH4 oxidation
+      2: k_co_oh      : CO -> CO2 forward rate (GATED BY OH)
+      3: k_co_r       : CO2 -> CO reverse rate (GATED BY CO proxy for H2)
+      4: k_wgs_f      : Water-gas shift forward (CO + H2O -> CO2 + ...)
+      5: k_wgs_r      : Water-gas shift reverse (CO2 -> CO + H2O proxy)
+      6: k_oh_prod    : Radical pool generation (EXPONENTIAL INHIBITION)
+      7: k_thermal_no : NO formation
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O", "OH", "NO"]
+        
+        # Bounds expanded to allow GRU to capture rapid ignition transients 
+        # now that the structural decomposition loops are fixed.
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-6]
+        self.theta_hi_vec = [50.0, 2.0, 50.0, 50.0, 50.0, 50.0, 50.0, 1.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O, OH, NO = y.unbind(dim=-1)
+        (k_methane, n_o2_methane, k_co_oh, k_co_r, 
+         k_wgs_f, k_wgs_r, k_oh, k_no) = theta.unbind(dim=-1)
+
+        # Clamp states to prevent negative concentrations and NaN powers
+        eps = 1e-8
+        CH4_p = torch.clamp_min(CH4, eps)
+        O2_p  = torch.clamp_min(O2,  eps)
+        CO_p  = torch.clamp_min(CO,  eps)
+        CO2_p = torch.clamp_min(CO2, eps)
+        H2O_p = torch.clamp_min(H2O, eps)
+        OH_p  = torch.clamp_min(OH,  eps)
+
+        # Clamp parameters to bounds
+        k_methane    = torch.clamp_min(k_methane, 0.0)
+        n_o2_methane = torch.clamp(n_o2_methane, min=0.1, max=2.0)
+        k_co_oh      = torch.clamp_min(k_co_oh, 0.0)
+        k_co_r       = torch.clamp_min(k_co_r, 0.0)
+        k_wgs_f      = torch.clamp_min(k_wgs_f, 0.0)
+        k_wgs_r      = torch.clamp_min(k_wgs_r, 0.0)
+        k_oh         = torch.clamp_min(k_oh, 0.0)
+        k_no         = torch.clamp_min(k_no, 0.0)
+
+        # 1. CH4 Oxidation
+        r1 = k_methane * CH4_p * (O2_p ** n_o2_methane) * (OH_p / (OH_p + 1e-3))
+        
+        # 2. Reversible CO Burnout 
+        # FIX: Reverse rate uses (CO / (CO + eps)) proxy to mimic the presence 
+        # of H/H2 reducing agents, preventing spontaneous CO2 decomposition.
+        r2_f = k_co_oh * CO_p * OH_p
+        r2_r = k_co_r * CO2_p * (CO_p / (CO_p + eps))
+        
+        # 3. Fully Reversible Water-Gas Shift
+        r_wgs_f = k_wgs_f * CO_p * H2O_p
+        # FIX: Same proxy applied to WGS reverse rate
+        r_wgs_r = k_wgs_r * CO2_p * (CO_p / (CO_p + eps)) 
+        r_wgs_net = r_wgs_f - r_wgs_r
+        
+        # 4. OH Generation 
+        # FIX: Exponential fuel inhibition creates a realistic, steep auto-ignition delay
+        r3 = k_oh * O2_p * torch.exp(-10.0 * CH4_p)
+        
+        # 5. NO formation
+        r4 = k_no * O2_p
+
+        # Apply stoichiometry
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - r3 - r4
+        dCO  =  r1 - r2_f + r2_r - r_wgs_net
+        dCO2 =  r2_f - r2_r + r_wgs_net
+        dH2O =  2.0 * r1 - r_wgs_net
+        dOH  =  2.0 * r3 - r2_f  # OH is consumed during CO burnout
+        dNO  =  2.0 * r4
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
+
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
     "mof_synthesis_8":   MOFSynthesis8Scaffold(),
@@ -1104,5 +1187,6 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "methane_domain4_ch2o_ohgate": MethaneDomainInformedCH2O_OHGate4Step_Scaffold(),
     "methane_domain4_no_ohgate": MethaneDomainInformedOHGate4Step_NO_Scaffold(),
     "methane_revWGS_ohgate_no": MethaneRevWGS_OHGate4Step_NO_Scaffold(),
+    "methane_revWGS_fixed": methaneRevWGS_fixed(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
 }

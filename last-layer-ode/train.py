@@ -1047,8 +1047,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 epochs=None,
                 max_overlays=8,
             )
-        except ImportError:
-            print("[plot] plot_diagnostics.py not found; skipping plots.")
+        except ImportError as e:
+            import sys
+            print(f"[plot] plot_diagnostics.py import failed: {e}; sys.path={sys.path}; skipping plots.")
         except Exception as e:
             print(f"[plot] failed: {e}")
 

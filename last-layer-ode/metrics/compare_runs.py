@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from metrics.nrmse import load_or_compute
 
 
-OBS_SPECIES = {"mm", "pm"}  # only observed species in the TXTL dataset
+OBS_SPECIES = {"mm", "pm"}  # TXTL-specific observed species names
 
 
 def _aggregate(rows: list[dict]) -> list[dict]:
@@ -40,7 +40,11 @@ def _aggregate(rows: list[dict]) -> list[dict]:
     result = []
     for run, d in by_run.items():
         obs_vals = [v for s, v in d["species"].items() if s in OBS_SPECIES]
-        d["primary"] = float(np.mean(obs_vals)) if obs_vals else float("nan")
+        if obs_vals:
+            d["primary"] = float(np.mean(obs_vals))
+        else:
+            # Generic fallback for non-TXTL datasets: compare using all species.
+            d["primary"] = float(np.mean(list(d["species"].values())))
         result.append(d)
     return sorted(result, key=lambda r: r["primary"])
 
