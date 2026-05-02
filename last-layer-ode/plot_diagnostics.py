@@ -169,8 +169,51 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         theta_head_transform=str(cfg.get("theta_head_transform", "log_gamma")),
         head_bottle=bool(cfg.get("head_bottle", False)),
         lift_skip=bool(cfg.get("lift_skip", False)),
+
+        # --- NEW ADDITIONS TO SYNC WITH TRAIN.PY ---
+        tf_group_size=int(cfg.get("tf_group_size", 32)),
+        ar_gap=int(cfg.get("ar_gap", 4)),
+        forget_bias_init=cfg.get("forget_bias_init", None),
+        legacy_forget_bias_bug=bool(cfg.get("legacy_forget_bias_bug", False)),
+        detach_y_prev=bool(cfg.get("detach_y_prev", True)),
+        # u_minmax values: try ds attributes first (train_R style). If missing,
+        # fall back to reading the raw dataset npz for 'u_scale_max' / 'u_scaled_cols'.
+        u_minmax_max=(torch.tensor(getattr(ds, "u_scale_max", None), dtype=torch.float32)
+                      if str(cfg.get("u_transform", "none")) in ("minmax", "minmax_sqrt") and getattr(ds, "u_scale_max", None) is not None
+                      else None),
+        u_minmax_cols=(list(getattr(ds, "u_scaled_cols_idx", None))
+                       if str(cfg.get("u_transform", "none")) in ("minmax", "minmax_sqrt") and getattr(ds, "u_scaled_cols_idx", None) is not None
+                       else None),
+        # If dataset object didn't include minmax info (older ODEDataset), try loading from the npz file.
     ).to(device)
 
+    # Post-init: ensure u_minmax info is properly wired into the model when u_transform requires it.
+    # The model uses self.u_minmax_max_full (registered buffer) and self._has_u_minmax.
+    # Setting plain attributes like model.u_minmax_max won't help — we must update the buffer.
+    if str(cfg.get("u_transform", "none")) in ("minmax", "minmax_sqrt"):
+        if not getattr(model, "_has_u_minmax", False):
+            try:
+                raw = np.load(str(dataset_path), allow_pickle=True)
+                u_scale_max_raw = None
+                u_scaled_cols_raw = None
+                if "u_scale_max" in raw:
+                    u_scale_max_raw = torch.tensor(raw["u_scale_max"].astype(np.float32), dtype=torch.float32)
+                if "u_scaled_cols" in raw:
+                    if getattr(ds, "control_names", None) is not None:
+                        scaled = list(raw["u_scaled_cols"].astype(str))
+                        ctrl_list = list(ds.control_names)
+                        try:
+                            u_scaled_cols_raw = [ctrl_list.index(c) for c in scaled]
+                        except ValueError:
+                            u_scaled_cols_raw = list(raw["u_scaled_cols"].astype(int))
+                    else:
+                        u_scaled_cols_raw = list(raw["u_scaled_cols"].astype(int))
+                if u_scale_max_raw is not None and u_scaled_cols_raw is not None:
+                    cols = torch.as_tensor(u_scaled_cols_raw, dtype=torch.long)
+                    model.u_minmax_max_full[cols] = u_scale_max_raw.clamp_min(1e-8)
+                    model._has_u_minmax = True
+            except Exception:
+                pass
     model.load_state_dict(ckpt["state_dict"], strict=False)
     model.eval()
 
@@ -370,12 +413,23 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     if batch_lengths is not None:
         batch_lengths = batch_lengths.to(device)
 
+    # Diagnostic info before calling model
+    print(f"[plot_predictions] n_samples={n_samples}, plot_ds_len={len(plot_ds)}")
+    print(f"[plot_predictions] y0.shape={tuple(y0.shape)}, u_seq.shape={tuple(u_seq.shape)}, y_seq.shape={tuple(y_seq.shape)}, dt_seq.shape={tuple(dt_seq.shape)}")
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
+        cfg_local = load_yaml(exp_dir / "config.yaml") if exp_dir else {}
+        y_transform = str(cfg_local.get("y_transform", "none"))
+        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform, "y_transform": y_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped" and batch_lengths is not None:
             model_kwargs["lengths"] = batch_lengths
-        pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+        try:
+            pred, _theta, _beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+        except Exception as e:
+            import traceback
+            print(f"[plot_predictions] ERROR calling model.forward: {e}")
+            traceback.print_exc()
+            return
 
     y_true = y_seq.cpu().numpy()
     y_pred = pred.cpu().numpy()
@@ -499,12 +553,21 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     u_seq = u_seq.unsqueeze(0).to(device)
     dt_seq = dt_seq.unsqueeze(0).to(device)
 
+    print(f"[plot_beta] sample_idx={sample_idx}, y0.shape={tuple(y0.shape)}, u_seq.shape={tuple(u_seq.shape)}, dt_seq.shape={tuple(dt_seq.shape)}")
     with torch.no_grad():
         obs_idx = torch.arange(y0.shape[-1], device=y0.device)
-        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform}
+        cfg_local = load_yaml(exp_dir / "config.yaml") if exp_dir else {}
+        y_transform = str(cfg_local.get("y_transform", "none"))
+        model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform, "y_transform": y_transform}
         if model.__class__.__name__ == "OdeTransformerGrouped":
             model_kwargs["lengths"] = torch.tensor([K], device=y0.device, dtype=torch.long)
-        _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+        try:
+            _, _theta, beta = model(y0, u_seq, dt_seq, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+        except Exception as e:
+            import traceback
+            print(f"[plot_beta] ERROR calling model.forward: {e}")
+            traceback.print_exc()
+            return
 
     beta_np = beta[0].cpu().numpy()  # (K, P)
     dt = dt_seq[0].cpu().numpy()
@@ -576,6 +639,7 @@ def plot_epoch_prediction_overlays(
     model, ds, state_names, _param_names = rebuild_model_from_experiment(exp_dir, device=device)
     cfg_overlay = load_yaml(exp_dir / "config.yaml")
     u_transform_overlay = str(cfg_overlay.get("u_transform", "none"))
+    y_transform_overlay = str(cfg_overlay.get("y_transform", "none"))
 
     ckpt_dir = exp_dir / "checkpoints"
     if not ckpt_dir.exists():
@@ -631,14 +695,20 @@ def plot_epoch_prediction_overlays(
         if "state_dict" not in ckpt:
             raise RuntimeError(f"Checkpoint missing 'state_dict': {ckpt_path}")
 
-        model.load_state_dict(ckpt["state_dict"], strict=True)
+        model.load_state_dict(ckpt["state_dict"], strict=False)
         model.eval()
         with torch.no_grad():
             obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
-            model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform_overlay}
+            model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform_overlay, "y_transform": y_transform_overlay}
             if model.__class__.__name__ == "OdeTransformerGrouped":
                 model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)
-            pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+            try:
+                pred, _theta, _beta = model(y0_b, u_b, dt_b, obs_idx, **_filter_model_kwargs(model, model_kwargs))
+            except Exception as e:
+                import traceback
+                print(f"[epoch overlay] ERROR calling model.forward for epoch {ep}: {e}")
+                traceback.print_exc()
+                raise
         preds[ep] = pred[0].detach().cpu().numpy()
 
     fig, axes = plt.subplots(P, 1, figsize=(6, 4 * P), sharex=True)

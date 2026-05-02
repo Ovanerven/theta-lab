@@ -56,6 +56,19 @@ class ODEDataset(Dataset):
         self.control_names = d["control_names"].astype(str) if "control_names" in d else None
         self.obs_names = d["obs_names"].astype(str) if "obs_names" in d else None
 
+        # MinMax stats for u (per channel). Mirrors train_R.py so replot works
+        # with models trained via either training script.
+        self.u_scale_max = d["u_scale_max"].astype(np.float32) if "u_scale_max" in d else None
+        if "u_scaled_cols" in d and self.control_names is not None:
+            scaled = list(d["u_scaled_cols"].astype(str))
+            ctrl_list = list(self.control_names)
+            try:
+                self.u_scaled_cols_idx = np.array([ctrl_list.index(c) for c in scaled], dtype=np.int64)
+            except ValueError:
+                self.u_scaled_cols_idx = None
+        else:
+            self.u_scaled_cols_idx = None
+
         # Variable-length support
         if "lengths" in d:
             self.lengths = d["lengths"].astype(np.int64)  # (N,)

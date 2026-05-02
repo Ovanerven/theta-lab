@@ -27,8 +27,8 @@ batch_size: 200
 lr: 0.0023
 weight_decay: 0.0008
 
-val_n: 64
-test_n: 64
+val_n: 104
+test_n: 104
 seed: 1
 split_seed: 42
 
@@ -92,18 +92,22 @@ pm_endpoint_obs_idx: 1
 # Supervisor regularizes VTX (×R), kdm, VTL (×R), kmt, kmatm in the last 5%.
 lambda_theta_state_reg: 1.0
 theta_state_reg_frac: 0.05
-theta_state_reg_indices: [2, 3, 4, 5, 6]
+theta_state_reg_indices: [2, 3, 4, 5, 6]           # VTXmax, kdm, VTLmax, kmt, kmatm
 theta_state_reg_scales:  [0.125, 0.01, 0.075, 0.00035, 0.0035]
 theta_state_reg_use_r: true
+theta_state_reg_r_mask:  [true, false, true, false, false]  # R only for VTXmax, VTLmax (Oliver exact)
 
 # Old additive pm_tail OFF (replaced by in-loss pm_halftime_weight)
 lambda_pm_tail: 0.0
 pm_tail_obs_idx: 1
 pm_tail_frac: 0.5
 
-# Other aux losses OFF (supervisor doesn't have separate r/o/endpoint terms)
+# R-terminal: push R → 0 at the tail, Oliver's log1p(R·mean_state)^2 formulation (diff #11)
+lambda_r_terminal: 1.0
+r_terminal_frac: 0.05
+
+# Other aux losses OFF
 lambda_endpoint: 0.0
-lambda_r_terminal: 0.0
 lambda_o_terminal: 0.0
 l1_regularization: false
 l2_regularization: false

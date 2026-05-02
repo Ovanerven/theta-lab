@@ -3,7 +3,7 @@
 # is the equivalent of supervisor_mirror_seed_sweep.yaml but on the corrected
 # config so the seed search is over the same prior the supervisor uses.
 
-study: supervisor_mirror_full_seed_sweep
+study: supervisor_mirror_full_seed56
 runs_per_job: 1
 time: "05:00:00"
 partition: gpu_h100
@@ -19,9 +19,11 @@ fixed:
   endpoint_r2: true
 
 runs:
-  - {exp_name: s1_sp42,    seed: 1,    split_seed: 42}
-  - {exp_name: s17_sp99,   seed: 17,   split_seed: 99}
-  - {exp_name: s42_sp7,    seed: 42,   split_seed: 7}
-  - {exp_name: s137_sp23,  seed: 137,  split_seed: 23}
-  - {exp_name: s256_sp11,  seed: 256,  split_seed: 11}
-  - {exp_name: s314_sp88,  seed: 314,  split_seed: 88}
+  # - {exp_name: s1_sp42,    seed: 1,    split_seed: 42}
+  # - {exp_name: s17_sp99,   seed: 17,   split_seed: 99}
+  # - {exp_name: s42_sp7,    seed: 42,   split_seed: 7}
+  # - {exp_name: s137_sp23,  seed: 137,  split_seed: 23}
+  # - {exp_name: s256_sp11,  seed: 256,  split_seed: 11}
+  # - {exp_name: s314_sp88,  seed: 314,  split_seed: 88}
+  - {exp_name: s56_sp56,  seed: 56,  split_seed: 56}
+
