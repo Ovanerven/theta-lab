@@ -1,0 +1,97 @@
+# Seed sensitivity sweep — tests whether the best results so far are due to lucky seeds.
+#
+# Two configs that scored best across both completed sweeps:
+#   lr_super    (combined, R²=-0.1662): lr=1.8e-3, head_bottle=False  seed=1 split_seed=42
+#   A2_b5_bottle (merge,   R²=-0.2151): lr=1e-3,   head_bottle=True   seed=1 split_seed=5
+#
+# Design: vary init seed and split_seed independently per config.
+# Each config already has one (seed, split_seed) baseline from prior sweeps.
+# New runs cover the other corners to isolate:
+#   - init sensitivity:  same split, different weight init
+#   - split sensitivity: same init, different train/test partition
+#
+#   lr_super already done: (seed=1, split=42)
+#     new: (seed=2, split=42)  ← vary init only
+#          (seed=3, split=42)  ← vary init only
+#          (seed=1, split=5)   ← vary split only
+#
+#   A2_b5_bottle already done: (seed=1, split=5)
+#     new: (seed=2, split=5)   ← vary init only
+#          (seed=3, split=5)   ← vary init only
+#          (seed=1, split=42)  ← vary split only
+# ─────────────────────────────────────────────────────────────────────────────
+
+study: txtl_seed_sensitivity
+runs_per_job: 1
+time: "06:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_endpoint_promising.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+
+  # b5 recipe
+  u_transform: sqrt
+  y_transform: sqrt
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+  head_bias_init: 2.0
+  head_weight_gain: 3.0
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 1.0e-05
+  r_terminal_frac: 0.05
+  lambda_endpoint: 1.0
+  endpoint_mrna_obs_idx: 0
+  endpoint_protein_obs_idx: 1
+  lambda_o_terminal: 0.0
+  auto_scale_aux_losses: true
+
+  batch_size: 200
+  epochs: 1000
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  grad_clip: 1.0
+  dropout: 0.1
+
+  early_stop_patience: 999999
+  early_stop_min_delta: 0.0
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+  theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+
+  stratified_split: true
+  stratify_bins: 5
+  stratify_targets: [3, 5]
+  obs_idx: [3, 5]
+
+  theta_head_transform: log_gamma
+  lift_skip: false
+
+runs:
+  # ═══ lr_super config (lr=1.8e-3, no bottle) ═══
+  # baseline already done: seed=1, split_seed=42  →  R²=-0.1662
+  - {exp_name: lrsuper_s2_sp42,  lr: 0.0018, head_bottle: false, seed: 2, split_seed: 42}  # vary init
+  - {exp_name: lrsuper_s3_sp42,  lr: 0.0018, head_bottle: false, seed: 3, split_seed: 42}  # vary init
+  - {exp_name: lrsuper_s1_sp5,   lr: 0.0018, head_bottle: false, seed: 1, split_seed: 5}   # vary split
+
+  # ═══ A2_b5_bottle config (lr=1e-3, head_bottle=True) ═══
+  # baseline already done: seed=1, split_seed=5   →  R²=-0.2151
+  - {exp_name: bottle_s2_sp5,   lr: 0.001, head_bottle: true, seed: 2, split_seed: 5}    # vary init
+  - {exp_name: bottle_s3_sp5,   lr: 0.001, head_bottle: true, seed: 3, split_seed: 5}    # vary init
+  - {exp_name: bottle_s1_sp42,  lr: 0.001, head_bottle: true, seed: 1, split_seed: 42}   # vary split

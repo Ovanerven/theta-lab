@@ -149,6 +149,9 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.get("head_bias_init", 0.0)),
         head_weight_gain=float(cfg.get("head_weight_gain", 1.0)),
+        theta_head_transform=str(cfg.get("theta_head_transform", "log_gamma")),
+        head_bottle=bool(cfg.get("head_bottle", False)),
+        lift_skip=bool(cfg.get("lift_skip", False)),
     ).to(device)
 
     # strict=False: tolerates buffers added after a model was saved (e.g. theta_lo_vec/theta_hi_vec).

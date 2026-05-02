@@ -1,0 +1,33 @@
+# Seed/split sensitivity sweep for supervisor_mirror_7state config.
+#
+# The current 22413328 run (seed=1, split=42) looks promising — theta_std
+# growing, val loss steadily declining to ~1.5 by ep 32.
+# This sweep checks whether that holds across different weight initialisations
+# (seed) and train/val/test partitions (split_seed).
+#
+# 6 runs: seeds {1, 2, 3} x split_seeds {42, 5}
+#   seed controls model init + training stochasticity
+#   split_seed controls which 64 samples land in val/test
+
+study: supervisor_mirror_seed_sweep
+runs_per_job: 1
+time: "05:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/supervisor_mirror_7state.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 64
+  test_n: 64
+  endpoint_r2: true
+
+runs:
+  - {exp_name: s1_sp42,    seed: 1,    split_seed: 42}
+  - {exp_name: s17_sp99,   seed: 17,   split_seed: 99}
+  - {exp_name: s42_sp7,    seed: 42,   split_seed: 7}
+  - {exp_name: s137_sp23,  seed: 137,  split_seed: 23}
+  - {exp_name: s256_sp11,  seed: 256,  split_seed: 11}
+  - {exp_name: s314_sp88,  seed: 314,  split_seed: 88}

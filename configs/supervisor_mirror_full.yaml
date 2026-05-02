@@ -1,0 +1,122 @@
+# FULL bit-by-bit mirror of configs_oliver. Every difference identified in the
+# audit is a YAML knob here, so individual ablations only need to flip one line.
+#
+# Diffs vs supervisor_mirror_7state.yaml (left ON in this file):
+#   1. exclude_ode_cols_from_gru: true     — supervisor never feeds DNA c into GRU
+#   2. u_transform: minmax_sqrt            — supervisor: MinMax then sqrt at runtime (npz is raw)
+#   3. tf_drop_epoch: 100                  — supervisor turns TF off at ep 100
+#   4. pm_halftime_weight: 3.0             — supervisor weights pm 3x in second half (in-loss)
+#   5. lambda_pm_endpoint: 1.0             — supervisor's `extra_mse_chan` on pm endpoint
+#   6. lambda_theta_state_reg: 1.0         — supervisor's per-θ tail regularizer
+#   7. head_bottle_dims: [128, 64]         — supervisor: 128/64 (NOT 120/40)
+#   8. gru_variant: stacked_cell           — supervisor: stacked GRUCell + dropout-on-last
+#   9. gru_init: supervisor                — orthogonal_(W_hh) + xavier_(W_ih) + zeros
+#  10. head_init: supervisor               — xavier_uniform + zeros (UNCONDITIONAL)
+
+study: supervisor_mirror_full
+exp_name: supervisor_mirror_full
+out_root: experiments
+
+dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+scaffold: txtl_resource_and_maturation_dna
+model_class: ode_rnn_txtl
+
+# Supervisor budget
+epochs: 400
+batch_size: 200
+lr: 0.0023
+weight_decay: 0.0008
+
+val_n: 64
+test_n: 64
+seed: 1
+split_seed: 42
+
+stratified_split: true
+stratify_bins: 5
+stratify_targets: [3, 5]   # mm=3, pm=5 in 7-state [R,O,m,mm,p,pm,DNA]
+
+obs_idx: [3, 5]            # mm, pm
+
+# θ bounds — supervisor's `gamma()` calls in configs_oliver
+theta_lo: 1.0e-6
+theta_hi: 1.0
+theta_lo_vec: [1.0e-6, 1.0e-6, 5.0e-5, 1.0e-5, 5.0e-5, 1.0e-5, 5.0e-5]
+theta_hi_vec: [5.0e-4, 5.0e-4, 1.0e-1, 1.0e-2, 6.0e-2, 3.5e-4, 3.5e-3]
+
+# Architecture
+hidden: 400
+lift_dim: 32
+num_layers: 2
+dropout: 0.2
+grad_clip: 1.0
+n_substeps: 1
+
+# Head — supervisor's log-space gamma with tau=2.3, bottle 128/64
+theta_head_transform: log_gamma
+theta_head_tau: 2.3
+head_bottle: true
+head_bottle_dims: [128, 64]   # diff #7
+lift_skip: true
+head_bias_init: 0.0
+head_weight_gain: 1.0
+
+# GRU + head init (diff #9, #10)
+gru_variant: stacked_cell     # diff #8
+gru_init: supervisor          # diff #9
+head_init: supervisor         # diff #10
+
+# Feature transforms — supervisor recipe (diff #1, #2)
+u_transform: minmax_sqrt              # diff #2 — runtime MinMax (uses u_scale_max from npz) then sqrt
+y_transform: sqrt_clamp1
+gru_y_obs_only: true
+exclude_ode_cols_from_gru: true       # diff #1 — DNA c is bolus-routed; supervisor never feeds it to GRU
+detach_y_prev: true
+
+# Loss
+loss_type: mse
+obs_normalization: log1p_clip1_both
+auto_scale_aux_losses: false
+normalize_by_species_mean: false
+
+# In-loss pm halftime ×3 (diff #4)
+pm_halftime_weight: 3.0
+pm_halftime_obs_idx: 1                # pm position in supervised obs space [mm, pm]
+
+# pm-only endpoint MSE (diff #5)
+lambda_pm_endpoint: 1.0
+pm_endpoint_obs_idx: 1
+
+# θ-state proxy regularizer (diff #6)
+# θ order in scaffold: [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+# Supervisor regularizes VTX (×R), kdm, VTL (×R), kmt, kmatm in the last 5%.
+lambda_theta_state_reg: 1.0
+theta_state_reg_frac: 0.05
+theta_state_reg_indices: [2, 3, 4, 5, 6]
+theta_state_reg_scales:  [0.125, 0.01, 0.075, 0.00035, 0.0035]
+theta_state_reg_use_r: true
+
+# Old additive pm_tail OFF (replaced by in-loss pm_halftime_weight)
+lambda_pm_tail: 0.0
+pm_tail_obs_idx: 1
+pm_tail_frac: 0.5
+
+# Other aux losses OFF (supervisor doesn't have separate r/o/endpoint terms)
+lambda_endpoint: 0.0
+lambda_r_terminal: 0.0
+lambda_o_terminal: 0.0
+l1_regularization: false
+l2_regularization: false
+
+# Teacher forcing (diff #3)
+teacher_forcing: true
+tf_every: 200
+tf_drop_epoch: 100        # diff #3 — supervisor turns TF off at ep 100
+
+early_stop_patience: 300
+early_stop_min_delta: 0.0
+
+ckpt_every: 50
+jit_scripting: true
+torch_compile: false
+endpoint_r2: true

@@ -1,0 +1,16 @@
+run,n,r2_protein_final,r2_mrna_max
+A2_b5_bottle,64,-0.215103,-0.204671
+H0_b5_arch_full_plus_endpoint_floors,64,-0.289644,0.185866
+C1_b5_plus_endpoint_floors,64,-0.329000,-0.230300
+H1_b5_full_kitchen_sink,64,-0.415912,-0.260535
+I0_kitchen_sink_long,64,-0.415912,-0.260535
+A1_b5_gamma,64,-0.421600,-0.244100
+C0_b5_plus_endpoint,64,-0.455500,-0.106200
+J0_b5_bs64_arch_endpoint,64,-0.457810,0.310703
+A3_b5_liftskip,64,-0.462312,-0.504825
+B0_b5_lifted_floors,64,-0.540400,-0.169200
+B1_b5_lifted_floors_widened_hi,64,-0.544500,-0.100500
+G0_rank2_repro_with_b5_head,64,-0.564400,-0.436400
+A0_b5_anchor,64,-0.578600,-0.366400
+F0_b5_o_term,64,-0.578600,-0.366400
+A4_b5_arch_full,64,-4.804417,-0.318273

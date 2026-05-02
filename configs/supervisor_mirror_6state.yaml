@@ -1,0 +1,98 @@
+# Supervisor mirror config for real_ivtt_mat_dna.npz (6-state dataset, no O).
+#
+# This dataset has P_obs=6: [R, m, mm, p, pm, DNA].
+# Uses txtl_maturation_dna scaffold (P=6) with RK4 integration.
+# Supervisor's lam_O is dropped (O not in dataset); other 6 params match exactly.
+#
+# Architecture and hyperparams translate the supervisor's configs_oliver exactly:
+#   theta_head_tau=2.3, y_transform=sqrt_clamp1, loss=log1p_clip1_both
+#   lr=0.0023, wd=0.0008, hidden=400, num_layers=2, dropout=0.2
+
+study: fix_training
+exp_name: supervisor_mirror_6state
+out_root: experiments
+
+dataset_path: datasets/real_ivtt_mat_dna.npz
+scaffold: txtl_maturation_dna
+model_class: ode_rnn
+
+# Supervisor budget
+epochs: 400
+batch_size: 200
+lr: 0.0023
+weight_decay: 0.0008
+
+val_n: 64
+test_n: 64
+seed: 1
+split_seed: 42
+
+stratified_split: true
+stratify_bins: 5
+stratify_targets: [2, 4]   # mm=2, pm=4 in 6-state [R,m,mm,p,pm,DNA] space
+
+# Supervise only mm and pm
+obs_idx: [2, 4]
+
+# Supervisor theta bounds — 6-param version (lam_O dropped)
+# Order: [lam, VTXmax, kdm, VTLmax, kmt, kmatm]
+theta_lo: 1.0e-6
+theta_hi: 1.0
+theta_lo_vec: [1.0e-6, 5.0e-5, 1.0e-5, 5.0e-5, 1.0e-5, 5.0e-5]
+theta_hi_vec: [5.0e-4, 1.0e-1, 1.0e-2, 6.0e-2, 3.5e-4, 3.5e-3]
+
+# Architecture
+hidden: 400
+lift_dim: 32
+num_layers: 2
+dropout: 0.2
+grad_clip: 1.0
+n_substeps: 4   # RK4 (no analytical solver for 6-state); 4 substeps for stability
+
+# Head
+theta_head_transform: log_gamma
+theta_head_tau: 2.3
+head_bottle: true
+lift_skip: true
+head_bias_init: 0.0
+head_weight_gain: 1.0
+
+# Feature transforms
+u_transform: sqrt
+y_transform: sqrt_clamp1
+gru_y_obs_only: true
+exclude_ode_cols_from_gru: false
+detach_y_prev: true
+
+# Loss
+loss_type: mse
+obs_normalization: log1p_clip1_both
+auto_scale_aux_losses: false
+normalize_by_species_mean: false
+
+# Supervisor's N=3 second-half weighting is NOT replicated here.
+# The additive pm_tail_loss has a different denominator (0.5K vs 2K),
+# so lambda=2.0 produces a ~9:1 ratio instead of 3:1 and destabilizes training.
+lambda_pm_tail: 0.0
+pm_tail_obs_idx: 1
+pm_tail_frac: 0.5
+
+# No aux losses
+lambda_endpoint: 0.0
+lambda_r_terminal: 0.0
+lambda_o_terminal: 0.0
+l1_regularization: false
+l2_regularization: false
+
+# Teacher forcing
+teacher_forcing: true
+tf_every: 200
+tf_drop_epoch: 999999
+
+early_stop_patience: 100
+early_stop_min_delta: 0.0
+
+ckpt_every: 50
+jit_scripting: false
+torch_compile: false
+endpoint_r2: true

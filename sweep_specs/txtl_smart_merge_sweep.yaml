@@ -37,7 +37,7 @@
 
 study: txtl_smart_merge_sweep
 runs_per_job: 1
-time: "06:00:00"
+time: "08:00:00"
 partition: gpu_h100
 no_plot: false
 base_config: configs/txtl_endpoint_promising.yaml
@@ -50,7 +50,7 @@ fixed:
   test_n: 64
   endpoint_r2: true
   seed: 1
-  split_seed: 42
+  split_seed: 5
 
   # ── b5 (#5) recipe — the anchor for arms unless overridden ──
   u_transform: sqrt
@@ -73,7 +73,7 @@ fixed:
   head_weight_gain: 3.0
 
   batch_size: 200
-  epochs: 400
+  epochs: 1000
   lr: 0.001
   weight_decay: 0.001
   hidden: 256
@@ -82,8 +82,8 @@ fixed:
   grad_clip: 1.0
 
   teacher_forcing: true
-  tf_every: 50
-  tf_drop_epoch: 25
+  tf_every: 100
+  tf_drop_epoch: 99999
 
   # b5 theta bounds (overridden by arms B0/B1/E1/E2/G0)
   theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]

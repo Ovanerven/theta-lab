@@ -143,6 +143,10 @@ def _apply_obs_norm(
     if method == "log1p_clip1":
         floor = 1.0 if is_target else 0.0
         return torch.log1p(torch.clamp(y, min=floor))
+    if method == "log1p_clip1_both":
+        # Supervisor: clip BOTH pred and target at 1, then log1p.
+        # Zeros gradient for predictions < 1, focusing signal on trajectories with real yield.
+        return torch.log1p(torch.clamp(y, min=1.0))
     if method == "zscore":
         m = stats["mean"].to(device=y.device, dtype=y.dtype)
         s = stats["std"].to(device=y.device, dtype=y.dtype)
@@ -154,6 +158,34 @@ def _apply_obs_norm(
     raise ValueError(f"Unknown obs_normalization: {method!r}")
 
 
+def _build_pm_halftime_weights(
+    lengths: Optional[torch.Tensor],
+    K: int,
+    B: int,
+    P_obs: int,
+    pm_obs_idx: int,
+    weight: float,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    """Per-element multiplicative weight for the main MSE.
+
+    Returns (B,K,P_obs) with `weight` on the pm channel for t >= lengths/2 and
+    1 everywhere else. Returns None when `weight == 1.0` (no-op).
+    """
+    if abs(float(weight) - 1.0) < 1e-12:
+        return None
+    w = torch.ones(B, K, P_obs, device=device, dtype=dtype)
+    t_grid = torch.arange(K, device=device).unsqueeze(0)  # (1, K)
+    if lengths is None:
+        half = torch.full((B, 1), K // 2, device=device, dtype=torch.long)
+    else:
+        half = (lengths.long() // 2).unsqueeze(1)
+    second_half = (t_grid >= half).to(dtype)  # (B, K)
+    w[..., pm_obs_idx] = 1.0 + (float(weight) - 1.0) * second_half
+    return w
+
+
 def loss_fn(
     pred: torch.Tensor,
     y_seq: torch.Tensor,
@@ -162,6 +194,7 @@ def loss_fn(
     species_weights: Optional[torch.Tensor] = None,
     obs_normalization: str = "none",
     obs_norm_stats: Optional[dict] = None,
+    time_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Compute per-species loss, optionally masking padded timesteps.
 
@@ -195,13 +228,26 @@ def loss_fn(
     if species_weights is not None:
         se = se * species_weights.view(1, 1, -1)
 
+    # time_weights: per-element (B,K,P_obs) multiplicative weight (e.g. pm halftime ×3).
+    # Both the numerator (se) and the denominator (effective sample count) absorb it,
+    # so the per-channel MSE is the weighted-mean — matches supervisor's exact denominator.
+    P_obs_dim = se.shape[-1]
     if lengths is not None:
-        mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
-        se = se * mask.unsqueeze(-1)
-        denom = mask.sum() * se.shape[-1]
-        out = se.sum() / denom
+        mask = _build_loss_mask(lengths, se.shape[1], se.device).to(se.dtype)  # (B,K)
+        if time_weights is not None:
+            eff = mask.unsqueeze(-1) * time_weights.to(dtype=se.dtype, device=se.device)
+            denom = eff.sum().clamp(min=1.0)
+            out = (se * eff).sum() / denom
+        else:
+            se = se * mask.unsqueeze(-1)
+            denom = mask.sum() * P_obs_dim
+            out = se.sum() / denom.clamp(min=1.0)
     else:
-        out = se.mean()
+        if time_weights is not None:
+            tw = time_weights.to(dtype=se.dtype, device=se.device)
+            out = (se * tw).sum() / tw.sum().clamp(min=1.0)
+        else:
+            out = se.mean()
 
     if loss_type == "rmse":
         out = torch.sqrt(out + 1e-12)
@@ -317,6 +363,76 @@ def endpoint_loss(
         # Match per-step loss which sums w_i * MSE_i over species, then divides by 2 (P_obs).
         return 0.5 * (w_mm * mm_term + w_pm * pm_term)
     return 0.5 * (pm_term + mm_term)
+
+
+def pm_endpoint_loss(
+    pred: torch.Tensor,
+    y_true: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    pm_obs_idx: int,
+    obs_normalization: str = "none",
+    obs_norm_stats: Optional[dict] = None,
+) -> torch.Tensor:
+    """Supervisor's `extra_mse_chan`: MSE on pm at the final valid timestep.
+
+    Computed in the obs_normalization-transformed space so it sits on the same
+    scale as the per-step main loss.
+    """
+    if obs_normalization != "none":
+        pred = _apply_obs_norm(pred, obs_normalization, obs_norm_stats, is_target=False)
+        y_true = _apply_obs_norm(y_true, obs_normalization, obs_norm_stats, is_target=True)
+    B = pred.shape[0]
+    if lengths is None:
+        end_idx = torch.full((B,), pred.shape[1] - 1, device=pred.device, dtype=torch.long)
+    else:
+        end_idx = (lengths.long() - 1).clamp_min(0)
+    b_idx = torch.arange(B, device=pred.device)
+    p_last = pred[b_idx, end_idx, pm_obs_idx]
+    y_last = y_true[b_idx, end_idx, pm_obs_idx]
+    return (p_last - y_last).pow(2).mean()
+
+
+def theta_state_reg_loss(
+    theta: torch.Tensor,            # (B, K, theta_dim) — bounded θ from the model
+    y_obs: torch.Tensor,            # (B, K, P_obs) — supervised obs (already obs_idx-sliced)
+    pred_full: torch.Tensor,        # (B, K, P) — full predicted state (for R proxy)
+    lengths: Optional[torch.Tensor],
+    indices: list[int],
+    scales: list[float],
+    frac: float = 0.05,
+    r_state_idx: Optional[int] = None,
+) -> torch.Tensor:
+    """Supervisor's per-θ "state proxy" zero-target log1p regularizer.
+
+    For each θ-index i with scale s_i:
+        proxy_i = clamp_min(0, theta_i / s_i * R_state * mean(y_obs))   [shape (B, K)]
+        loss_i  = mean over tail of log1p(proxy_i)^2
+    Returns the mean of loss_i across the chosen indices.
+    """
+    if not indices or not scales or len(indices) != len(scales):
+        return torch.zeros((), device=theta.device, dtype=theta.dtype)
+
+    B, K, _ = theta.shape
+    mean_st = y_obs.mean(dim=-1, keepdim=True)  # (B, K, 1)
+    if r_state_idx is not None:
+        r_proxy = pred_full[..., r_state_idx:r_state_idx + 1]
+    else:
+        r_proxy = torch.ones_like(mean_st)
+
+    tail_mask = _build_tail_mask(lengths, K, theta.device, frac, B).to(theta.dtype)  # (B, K)
+    denom = tail_mask.sum().clamp(min=1.0)
+
+    total = torch.zeros((), device=theta.device, dtype=theta.dtype)
+    n = 0
+    for i, s in zip(indices, scales):
+        i = int(i); s = float(s)
+        if s <= 0.0:
+            continue
+        proxy = (theta[..., i:i + 1] / s * r_proxy * mean_st).clamp_min(0.0).squeeze(-1)
+        log_p = torch.log1p(proxy)
+        total = total + ((log_p ** 2) * tail_mask).sum() / denom
+        n += 1
+    return total / max(1, n)
 
 
 def loss_fn_per_species(
@@ -622,8 +738,13 @@ class TrainConfig:
     #   - head_bottle: insert hidden→120→SiLU→40→SiLU before head (supervisor's `bottle`)
     #   - lift_skip: drop the lift MLP and feed [u_feat, y_feat] straight into GRU
     theta_head_transform: str = "log_gamma"
+    theta_head_tau: float = 1.0   # temperature for log_gamma; supervisor uses 2.3 (gentler, avoids head saturation)
     head_bottle: bool = False
+    head_bottle_dims: list[int] | None = None  # default [120, 40]; supervisor: [128, 64]
     lift_skip: bool = False
+    gru_variant: str = "nn_gru"     # "nn_gru" (default) | "stacked_cell" (supervisor: stacked GRUCell + dropout-on-last)
+    gru_init: str = "default"       # "default" | "supervisor" (orthogonal_ W_hh + xavier_ W_ih + zeros)
+    head_init: str = "default"      # "default" | "supervisor" (xavier_uniform + zeros, unconditional)
 
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
@@ -687,6 +808,31 @@ class TrainConfig:
     lambda_pm_tail: float = 0.0
     pm_tail_obs_idx: int = 1     # pm position in the supervised obs space
     pm_tail_frac: float = 0.25
+
+    # In-loss second-half weighting on pm (supervisor's exact recipe):
+    # for t >= lengths/2, multiply pm squared error by `pm_halftime_weight`,
+    # AND include the weight in the per-channel denominator. Unlike pm_tail,
+    # this lives inside the same masked MSE, so changing it doesn't shift the
+    # overall loss magnitude — it only re-balances first vs second half on pm.
+    pm_halftime_weight: float = 1.0   # supervisor: 3.0
+    pm_halftime_obs_idx: int = 1      # pm position in the supervised obs space
+
+    # pm-only endpoint loss (supervisor's `extra_mse_chan` term):
+    # MSE on log1p_clip1 of pm at the final valid timestep of each trajectory.
+    # Differs from `endpoint_loss` which mixes mm-peak + pm-end.
+    lambda_pm_endpoint: float = 0.0
+    pm_endpoint_obs_idx: int = 1
+
+    # Theta-state-proxy regularizer (supervisor's "log1p(theta_i/scale_i * R * mean_state) -> 0"
+    # over the last `theta_state_reg_frac` of each trajectory). Pushes per-step
+    # parameters toward small values in the tail; relevant only for IVTT-style
+    # trajectories where parameters should saturate near zero late in the run.
+    # Indices are positions in the THETA vector (0..theta_dim-1).
+    lambda_theta_state_reg: float = 0.0
+    theta_state_reg_frac: float = 0.05
+    theta_state_reg_indices: list[int] | None = None
+    theta_state_reg_scales: list[float] | None = None
+    theta_state_reg_use_r: bool = True   # multiply by predicted R state if scaffold has one
 
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
@@ -1012,8 +1158,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                        if str(cfg.u_transform) in ("minmax", "minmax_sqrt") and ds.u_scaled_cols_idx is not None
                        else None),
         theta_head_transform=str(cfg.theta_head_transform),
+        theta_head_tau=float(cfg.theta_head_tau),
         head_bottle=bool(cfg.head_bottle),
+        head_bottle_dims=cfg.head_bottle_dims,
         lift_skip=bool(cfg.lift_skip),
+        gru_variant=str(cfg.gru_variant),
+        gru_init=str(cfg.gru_init),
+        head_init=str(cfg.head_init),
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -1178,7 +1329,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             y_loss = np.sqrt(np.clip(y_obs, 0.0, None))
         elif obs_norm_method == "log1p":
             y_loss = np.log1p(np.clip(y_obs, 0.0, None))
-        elif obs_norm_method == "log1p_clip1":
+        elif obs_norm_method in ("log1p_clip1", "log1p_clip1_both"):
             y_loss = np.log1p(np.clip(y_obs, 1.0, None))
         elif obs_norm_method == "zscore":
             m = obs_norm_stats["mean"].detach().cpu().numpy().astype(np.float64)
@@ -1234,6 +1385,32 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     if endpoint_enabled:
         print(f"Endpoint loss: lambda={cfg.lambda_endpoint}, mrna_obs_idx={cfg.endpoint_mrna_obs_idx}, protein_obs_idx={cfg.endpoint_protein_obs_idx}")
 
+    pm_endpoint_enabled = float(cfg.lambda_pm_endpoint) > 0.0
+    if pm_endpoint_enabled:
+        print(f"pm endpoint loss: lambda={cfg.lambda_pm_endpoint}, pm_obs_idx={cfg.pm_endpoint_obs_idx}")
+
+    pm_halftime_enabled = abs(float(cfg.pm_halftime_weight) - 1.0) > 1e-12
+    if pm_halftime_enabled:
+        print(f"pm halftime weight: {cfg.pm_halftime_weight} (pm_obs_idx={cfg.pm_halftime_obs_idx})")
+
+    theta_state_reg_enabled = float(cfg.lambda_theta_state_reg) > 0.0
+    theta_state_reg_r_idx: int | None = None
+    if theta_state_reg_enabled:
+        idxs = cfg.theta_state_reg_indices or []
+        scls = cfg.theta_state_reg_scales or []
+        if not idxs or len(idxs) != len(scls):
+            raise ValueError(
+                "lambda_theta_state_reg>0 requires matching theta_state_reg_indices/scales lists."
+            )
+        if bool(cfg.theta_state_reg_use_r):
+            sn = getattr(scaffold, "state_names", None)
+            if sn is not None and "R" in list(sn):
+                theta_state_reg_r_idx = list(sn).index("R")
+        print(
+            f"theta-state reg: lambda={cfg.lambda_theta_state_reg}, frac={cfg.theta_state_reg_frac}, "
+            f"indices={list(idxs)}, scales={list(scls)}, r_idx={theta_state_reg_r_idx}"
+        )
+
     # Frozen calibration scales for each aux term, populated on the first
     # training batch when `auto_scale_aux_losses` is True.
     aux_scale: dict[str, float] = {}
@@ -1288,12 +1465,26 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     theta_std_first_batch = float(th.std(dim=0).mean().item())
                     theta_mean_first_batch = float(th.mean().item())
 
+            time_weights_main = None
+            if pm_halftime_enabled:
+                time_weights_main = _build_pm_halftime_weights(
+                    batch_lengths,
+                    K=pred.shape[1],
+                    B=pred.shape[0],
+                    P_obs=pred.shape[-1],
+                    pm_obs_idx=int(cfg.pm_halftime_obs_idx),
+                    weight=float(cfg.pm_halftime_weight),
+                    device=pred.device,
+                    dtype=pred.dtype,
+                )
+
             loss = loss_fn(
                 pred, y_seq, batch_lengths,
                 loss_type=cfg.loss_type,
                 species_weights=species_weights,
                 obs_normalization=obs_norm_method,
                 obs_norm_stats=obs_norm_stats,
+                time_weights=time_weights_main,
             )
             # When `auto_scale_aux_losses` is True, each aux term is multiplied
             # by a FROZEN scaling factor `aux_scale[name]`, calibrated on the
@@ -1347,6 +1538,28 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     obs_norm_stats=obs_norm_stats,
                 )
                 loss = loss + float(cfg.lambda_pm_tail) * _scaled_aux(t_loss, "pm_tail")
+
+            if pm_endpoint_enabled:
+                e_loss = pm_endpoint_loss(
+                    pred, y_seq, batch_lengths,
+                    int(cfg.pm_endpoint_obs_idx),
+                    obs_normalization=obs_norm_method,
+                    obs_norm_stats=obs_norm_stats,
+                )
+                loss = loss + float(cfg.lambda_pm_endpoint) * _scaled_aux(e_loss, "pm_endpoint")
+
+            if theta_state_reg_enabled and theta is not None:
+                ts_loss = theta_state_reg_loss(
+                    theta=theta,
+                    y_obs=y_seq,
+                    pred_full=pred_full,
+                    lengths=batch_lengths,
+                    indices=list(cfg.theta_state_reg_indices or []),
+                    scales=list(cfg.theta_state_reg_scales or []),
+                    frac=float(cfg.theta_state_reg_frac),
+                    r_state_idx=theta_state_reg_r_idx,
+                )
+                loss = loss + float(cfg.lambda_theta_state_reg) * _scaled_aux(ts_loss, "theta_state_reg")
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -1438,12 +1651,26 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
 
+                    val_time_weights = None
+                    if pm_halftime_enabled:
+                        val_time_weights = _build_pm_halftime_weights(
+                            batch_lengths,
+                            K=pred.shape[1],
+                            B=pred.shape[0],
+                            P_obs=pred.shape[-1],
+                            pm_obs_idx=int(cfg.pm_halftime_obs_idx),
+                            weight=float(cfg.pm_halftime_weight),
+                            device=pred.device,
+                            dtype=pred.dtype,
+                        )
+
                     loss = loss_fn(
                         pred, y_seq, batch_lengths,
                         loss_type=cfg.loss_type,
                         species_weights=species_weights,
                         obs_normalization=obs_norm_method,
                         obs_norm_stats=obs_norm_stats,
+                        time_weights=val_time_weights,
                     )
                     va_total += float(loss.item())
 
@@ -1705,6 +1932,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             out_path = exp_dir / "endpoint_r2.png"
             endpoint_r2.plot_endpoints([result], protein_sp="pm", mrna_sp="mm",
                                        split="test", out_path=out_path)
+            endpoint_r2.save_r2_cache(exp_dir, result, r2_protein, r2_mrna)
 
             if wandb_run is not None:
                 wandb_run.summary["endpoint_r2/protein_final"] = float(r2_protein)
