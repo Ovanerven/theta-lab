@@ -29,6 +29,11 @@ theta_lo: 1.0e-6
 theta_hi: 100.0
 n_substeps: 1
 
+# Per-species z-score normalization: prevents model from being rewarded
+# for predicting 0 on sparse radical species (CH3, CH2O, HO2 etc).
+# Stats computed from training split only; plain MSE loss is used.
+obs_normalization: zscore
+
 ckpt_every: 10
 jit_scripting: true
 model_class: ode_rnn
