@@ -37,31 +37,39 @@ class ModelConfig:
     bolus_default: Tuple[float, float] = (0.5, 3.0)
     bolus_count_range: Tuple[int, int] = (2, 50)
     simulator: str = "rk4"
-    cantera_T: float = 1500.0
+    cantera_T: float = 1000.0
+    cantera_T_range: Optional[Tuple[float, float]] = None  # if set, T sampled U(lo,hi) per sample
+    cantera_phi_range: Optional[Tuple[float, float]] = None  # equivalence ratio range; None = fixed composition
     cantera_composition: str = 'CH4:1.0, O2:2.0, N2:7.52'
+    cantera_use_mole_fractions: bool = False  # convert concentrations → mole fractions before storing
     default_tail: Optional[float] = None  # if set, overrides CLI --tail for this model
 
 def _aramco_30_config() -> ModelConfig:
     """
     AramcoMech 3.0 configuration using Cantera to fetch real kinetics.
+
+    Hardness levers:
+      cantera_T_range=(950, 1050): ignition delay varies ~0.5-5s across samples,
+        forcing the model to learn rate-constant temperature dependence rather than
+        memorizing a single ignition time.
+      cantera_phi_range=(0.7, 1.3): lean/stoichiometric/rich combustion gives
+        qualitatively different product distributions (CO2 vs CO, H2O vs H2).
+
+    param_ranges are extracted at T=1000K but x0 is recomputed per-sample using
+    the sampled T and phi — the rate constants don't change (fixed ground truth),
+    only the initial concentrations and thus the trajectory shape.
     """
     gas = ct.Solution('datasets/methane/aramco_30.yaml')
-    
-    # 1000K gives ~1-10s ignition delay — dynamics spread across observation window.
-    # 1500K ignites in microseconds (no visible dynamics at t_span=5s).
     T_INIT = 1000.0
     COMPOSITION = 'CH4:1.0, O2:2.0, N2:7.52'
     gas.TPX = T_INIT, ct.one_atm, COMPOSITION
-    
+
     real_k_params = gas.forward_rate_constants.tolist()
     param_ranges = [(v, v) for v in real_k_params]
+    x0_default = gas.concentrations.tolist()  # fallback if no T/phi range used
 
-    # 2. Grab the TRUE, physically balanced initial concentrations (kmol/m^3)
-    # This automatically gives us the ~0.008 kmol/m^3 total concentration
-    x0_default = gas.concentrations.tolist()
-
-    # 3. Scale down the boluses to match the physical reality!
-    # These inject small bursts relative to the ~0.008 kmol/m^3 total density
+    # Bolus amounts in kmol/m³ — ~5-20% of initial species concentration
+    # These are applied before mole-fraction conversion so units are consistent.
     bolus_ranges = {
         "CH4": (0.0001, 0.0005),
         "O2":  (0.0002, 0.0010),
@@ -77,8 +85,11 @@ def _aramco_30_config() -> ModelConfig:
         bolus_count_range=(2, 8),
         simulator="cantera",
         cantera_T=T_INIT,
+        cantera_T_range=(950, 1050),
+        cantera_phi_range=(0.7, 1.3),
         cantera_composition=COMPOSITION,
-        default_tail=3.5,  # boluses only in first 1.5s — before ignition at ~1.6s
+        cantera_use_mole_fractions=True,  # store X ∈ [0,1] instead of kmol/m³
+        default_tail=3.5,
     )
 
 def _mof_synthesis_config() -> ModelConfig:
@@ -348,7 +359,20 @@ def generate_training_dataset(
                 )
             elif mcfg.simulator == "cantera":
                 gas_obj = ct.Solution('datasets/methane/aramco_30.yaml')
-                gas_obj.TPX = mcfg.cantera_T, ct.one_atm, mcfg.cantera_composition
+
+                # Sample temperature and equivalence ratio per trajectory
+                T_sample = float(rng.uniform(*mcfg.cantera_T_range)) if mcfg.cantera_T_range else mcfg.cantera_T
+                if mcfg.cantera_phi_range is not None:
+                    phi = float(rng.uniform(*mcfg.cantera_phi_range))
+                    # phi=1 is stoichiometric CH4+2O2; scale O2 and N2 by 1/phi
+                    o2 = 2.0 / phi
+                    composition = f'CH4:1.0, O2:{o2:.4f}, N2:{3.76*o2:.4f}'
+                else:
+                    composition = mcfg.cantera_composition
+                gas_obj.TPX = T_sample, ct.one_atm, composition
+                # x0 must match the sampled state, not the config default
+                x0_full = gas_obj.concentrations.copy()
+
                 t_solver, x_solver = simulate_cantera_with_bolus(
                     gas_object=gas_obj,
                     y0=x0_full,
@@ -378,6 +402,12 @@ def generate_training_dataset(
 
         x_solver = np.asarray(x_solver, dtype=np.float32)
         t_solver = np.asarray(t_solver, dtype=np.float32)
+
+        # Convert kmol/m³ → mole fractions for cantera outputs so values are in [0,1]
+        # This makes log1p normalization behave correctly during training.
+        if mcfg.cantera_use_mole_fractions:
+            c_total = x_solver.sum(axis=1, keepdims=True).clip(min=1e-30)
+            x_solver = x_solver / c_total
 
         if np.any(np.isnan(x_solver)) or np.any(x_solver < -100):
             n_failed += 1
