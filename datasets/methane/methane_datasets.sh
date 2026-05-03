@@ -60,3 +60,25 @@ python datasets/methane/slice_obs.py \
 #     --control-indices 13,3,47,5 \
 #     --obs-indices 13,3,14,15,5,4,35 \
 #     --output-file datasets/gri30_obs7_test.npz
+
+# ARAMCO!!
+
+# This one was too easy
+python last-layer-ode/create_dataset.py                                                                                          
+    --model aramco_30
+    --t-span 5 \ 
+    --n-steps 200— \
+    --n-samples 1000 \ 
+    --control-indices 15,5,1,7 \
+    --obs-indices 15,5,7,12,13,3,4,6,8,11,10,16,28,1 \
+    --output-file datasets/aramco_kovacs14_hard.npz
+
+# This one has temperature changing per sample
+python last-layer-ode/create_dataset.py \
+    --model aramco_30 \
+    --t-span 5 \
+    --n-steps 200 \
+    --n-samples 1000 \
+    --control-indices 15,5,1,7 \
+    --obs-indices 15,5,7,12,13,3,4,6,8,11,10,16,28,1 \
+    --output-file datasets/aramco_kovacs14_hard.npz
