@@ -233,15 +233,18 @@ def submit_batch(
     return result.stdout.strip().split()[-1]
 
 
-def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env: str = DEFAULT_ENV) -> str:
+def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env: str = DEFAULT_ENV, endpoint_r2: bool = False) -> str:
     dep = ":".join(job_ids)
+    export = f"ALL,STUDY={study},ENV={env}"
+    if endpoint_r2:
+        export += ",ENDPOINT_R2=1"
     args = [
         "sbatch",
         f"--job-name={study}_compare",
         f"--dependency=afterany:{dep}",
         f"--time={time}",
         f"--output=slurm_outputs/{study}/%A_%x.out",
-        f"--export=ALL,STUDY={study},ENV={env}",
+        f"--export={export}",
         "slurm_jobs/compare.job",
     ]
 
@@ -291,7 +294,11 @@ def main() -> None:
 
     if not args.no_compare:
         print()
-        cjid = submit_compare(job_ids, study, spec.get("compare_time", "01:00:00"), args.dry_run, env=sweep_env)
+        # endpoint_r2 may live at top level or under fixed:
+        has_endpoint_r2 = bool(
+            spec.get("endpoint_r2") or spec.get("fixed", {}).get("endpoint_r2")
+        )
+        cjid = submit_compare(job_ids, study, spec.get("compare_time", "01:00:00"), args.dry_run, env=sweep_env, endpoint_r2=has_endpoint_r2)
         print(f"Compare    : job {cjid}")
 
     print()

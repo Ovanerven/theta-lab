@@ -27,6 +27,41 @@ from metrics.nrmse import load_or_compute
 OBS_SPECIES = {"mm", "pm"}  # only observed species in the TXTL dataset
 
 
+def _load_or_compute_endpoint_r2(
+    exp_dir: Path,
+    device,
+    protein_sp: str,
+    mrna_sp: str,
+    split: str,
+    recompute: bool,
+) -> tuple[float, float]:
+    """Read <exp_dir>/r2_cache.csv if present and matches species, else roll
+    out the model and compute R² on (protein final, mRNA max). Returns
+    (r2_protein_final, r2_mrna_max) — NaN if computation fails or species
+    aren't in the run's obs_names."""
+    cache = exp_dir / "r2_cache.csv"
+    if cache.exists() and not recompute:
+        with open(cache) as f:
+            reader = csv.DictReader(f)
+            row = next(reader, None)
+        if row and "r2_protein_final" in row and "r2_mrna_max" in row:
+            try:
+                return float(row["r2_protein_final"]), float(row["r2_mrna_max"])
+            except ValueError:
+                pass
+
+    from metrics.endpoint_r2 import collect_endpoints, save_r2_cache, r2  # local import: heavy deps
+    try:
+        result = collect_endpoints(exp_dir, device, split, protein_sp, mrna_sp)
+    except Exception as e:
+        print(f"  [endpoint-r2] skip {exp_dir.name}: {e}")
+        return float("nan"), float("nan")
+    r2_p = r2(result["true_protein_final"], result["pred_protein_final"])
+    r2_m = r2(result["true_mrna_max"],      result["pred_mrna_max"])
+    save_r2_cache(exp_dir, result, r2_p, r2_m)
+    return r2_p, r2_m
+
+
 def _aggregate(rows: list[dict], stat: str = "median") -> list[dict]:
     """One row per run: mean of mm/pm medians/means as the sort key.
 
@@ -67,6 +102,9 @@ def print_table(runs: list[dict]) -> None:
     header = f"{'run':<{col_w}}  {'NRMSE':>8}"
     for s in all_species:
         header += f"  {s[:sp_w]:>{sp_w}}"
+    has_r2 = any("r2_pm_final" in r for r in runs)
+    if has_r2:
+        header += f"  {'R²(pm_final)':>14}  {'R²(mm_max)':>12}"
     print(header)
     print("-" * len(header))
 
@@ -75,6 +113,9 @@ def print_table(runs: list[dict]) -> None:
         for s in all_species:
             val = r["species"].get(s)
             line += f"  {val:>{sp_w}.4f}" if val is not None else f"  {'N/A':>{sp_w}}"
+        if has_r2:
+            r2p, r2m = r.get("r2_pm_final", float("nan")), r.get("r2_mm_max", float("nan"))
+            line += f"  {r2p:>14.4f}  {r2m:>12.4f}"
         print(line)
 
 
@@ -92,17 +133,25 @@ def save_csv(runs: list[dict], path: Path, stat: str = "median") -> None:
             if s not in all_species:
                 all_species.append(s)
 
+    has_r2 = any("r2_pm_final" in r for r in runs)
+    extra_cols = ["r2_pm_final", "r2_mm_max"] if has_r2 else []
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["run", "nrmse"] + all_species)
+        writer.writerow(["run", "nrmse"] + all_species + extra_cols)
         for r in runs:
             name = re.sub(r"^\d{8}_\d{6}_", "", r["run"])
-            writer.writerow(
+            row = (
                 [name, f"{r['primary']:.6f}"]
                 + [f"{r['species'].get(s, ''):.6f}" if r["species"].get(s) is not None else ""
                    for s in all_species]
             )
+            if has_r2:
+                for k in ("r2_pm_final", "r2_mm_max"):
+                    v = r.get(k)
+                    row.append(f"{v:.6f}" if v is not None and not np.isnan(v) else "")
+            writer.writerow(row)
     print(f"Saved CSV to {path} ({stat})")
 
 
@@ -143,6 +192,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None,
                         help="Override dataset path for all runs (e.g. a small eval set). "
                              "Automatically skips cache.")
+    parser.add_argument("--endpoint-r2", action="store_true",
+                        help="Also compute R² on (protein final, mRNA max) per run "
+                             "and add r2_pm_final/r2_mm_max columns. TXTL-only — "
+                             "requires species 'mm' and 'pm' in obs_names.")
+    parser.add_argument("--protein", default="pm", help="Protein species (with --endpoint-r2)")
+    parser.add_argument("--mrna",    default="mm", help="mRNA species (with --endpoint-r2)")
+    parser.add_argument("--r2-split", choices=["test", "train", "all"], default="test",
+                        help="Split for endpoint R² rollout (default: test)")
     args = parser.parse_args()
 
     root = Path(args.root)
@@ -151,6 +208,25 @@ if __name__ == "__main__":
                            dataset_override=args.dataset)
     runs_median = _aggregate(rows, stat="median")
     runs_mean = _aggregate(rows, stat="mean")
+
+    if args.endpoint_r2:
+        # Compute endpoint R² once per run dir, attach to BOTH median and mean
+        # aggregations (the R² values themselves don't depend on aggregation).
+        from plot_diagnostics import device_auto
+        device = device_auto()
+        run_dirs = sorted(d for d in root.iterdir()
+                          if d.is_dir() and (d / "model.pt").exists())
+        r2_by_name = {}
+        for d in run_dirs:
+            r2_p, r2_m = _load_or_compute_endpoint_r2(
+                d, device, args.protein, args.mrna, args.r2_split, args.recompute
+            )
+            r2_by_name[d.name] = (r2_p, r2_m)
+        for runs in (runs_median, runs_mean):
+            for r in runs:
+                if r["run"] in r2_by_name:
+                    r["r2_pm_final"], r["r2_mm_max"] = r2_by_name[r["run"]]
+
     print_table(runs_median)
 
     if args.csv:

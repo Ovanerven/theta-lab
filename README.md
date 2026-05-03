@@ -87,3 +87,16 @@ python last-layer-ode/analysis/plot_per_step_theta_fit.py --export-dir results/t
 | `models/` | Model implementations: `ode_rnn`, `ode_transformer`, `ode_mlp`, `ode_rnn_2020`, `neural_ode`. |
 | `scaffolds.py` | Scaffold (mechanistic ODE structure) registry. |
 | `jumps.py` | Control-to-state jump mappings. |
+
+
+
+
+ck2yaml --input=AramcoMech3.0.MECH --thermo=ARAMCOMECH30.THERM --output=aramco_red.yaml --permissive
+
+
+use the new test set:
+
+ In your training config (YAML/CLI flag), set:
+  fixed_test_idx_path: results/oracle_rollout_scoring/test_idx_104_maturation.npy
+  test_n: 104       # informational only — gets overridden
+  val_n: 100        # drawn from the remaining 591 samples

@@ -92,6 +92,8 @@ class OdeSampleTheta(nn.Module):
         y_seq: Optional[torch.Tensor] = None,
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        u_transform: str = "none",
+        y_transform: str = "none",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         device, dtype = y0.device, y0.dtype

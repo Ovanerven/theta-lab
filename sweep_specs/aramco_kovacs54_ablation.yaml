@@ -1,0 +1,35 @@
+# Scaffold vs neural-ODE ablation on AramcoMech 3.0 / Kovacs 54-reaction dataset.
+#
+# Question: does the Kovacs mechanistic scaffold outperform a black-box neural ODE
+# on the 14-species Aramco combustion system?
+#
+# Runs:
+#   A3 — black-box GRU neural ODE (no scaffold, dy/dt from GRU)
+#   A4 — black-box MLP neural ODE (no scaffold, no history)
+#   A5 — ode_rnn with kovacs_54 scaffold, unbounded theta (softplus)
+#   A6 — ode_rnn with kovacs_54 scaffold, bounded theta (our method)
+
+study: aramco_kovacs54_hard_n500_pulsed
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/methane/gru_aramco_kovacs54.yaml
+
+fixed:
+  # dataset_path: datasets/aramco_kovacs14_fixed.npz
+  # dataset_path: datasets/aramco_kovacs14_hard_n500_molfrac.npz
+  dataset_path: datasets/aramco_pulsed_n500_molfrac.npz
+  obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+  epochs: 100
+  obs_normalization: zscore
+
+runs:
+  # A3 — black-box GRU (dy/dt from GRU hidden state, no mechanistic structure)
+  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru}
+  # A4 — black-box MLP (no hidden state, no scaffold)
+  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp}
+  # A5 — Kovacs scaffold + GRU, unbounded theta (softplus only)
+  - {model_class: ode_rnn, scaffold: kovacs_54, exp_name: A5_kovacs54_unbounded, theta_bounded: false}
+  # A6 — Kovacs scaffold + GRU, bounded theta (full method)
+  - {model_class: ode_rnn, scaffold: kovacs_54, exp_name: A6_kovacs54_bounded}

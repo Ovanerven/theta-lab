@@ -355,6 +355,9 @@ class TrainConfig:
     cosine_decay: bool = False  # cosine decay from lr to lr*cosine_decay_min after warmup
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
+    # If set, load test indices from this .npy file (overrides random/stratified
+    # test selection). Train/val are then drawn from the remaining samples.
+    fixed_test_idx_path: str | None = None
     train_n: int = 0   # cap on train samples (0 = use all remaining after val/test)
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
     val_frac: float = 0.0
@@ -417,6 +420,10 @@ class TrainConfig:
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
     obs_idx: list[int] | None = None
+
+    # If set, restrict GRU encoder input to these species indices (must match obs_idx
+    # for a strictly partial-observation experiment). None = all P species (default).
+    gru_y_cols: list[int] | None = None
 
     wandb_enabled: bool = False
     wandb_project: str = "theta-lab"
@@ -598,17 +605,32 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
     n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
-    train_idx, val_idx, test_idx = _make_split_indices(
-        N=N,
-        y_seq=ds.y_seq,
-        lengths=ds.lengths if ds.variable_length else None,
-        n_val=n_val,
-        n_test=n_test,
-        split_seed=int(cfg.split_seed),
-        stratified_split=bool(cfg.stratified_split),
-        stratify_bins=int(cfg.stratify_bins),
-        stratify_targets=cfg.stratify_targets,
-    )
+    if cfg.fixed_test_idx_path:
+        fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
+        if fixed_test.max() >= N or fixed_test.min() < 0:
+            raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
+        remaining = np.setdiff1d(np.arange(N, dtype=np.int64), fixed_test)
+        rng = np.random.default_rng(int(cfg.split_seed))
+        rng.shuffle(remaining)
+        if n_val > len(remaining):
+            raise ValueError(f"val_n={n_val} exceeds remaining {len(remaining)}")
+        val_idx = remaining[:n_val]
+        train_idx = remaining[n_val:]
+        test_idx = fixed_test
+        print(f"Split: fixed test from {cfg.fixed_test_idx_path} "
+              f"(n_test={len(test_idx)}, n_val={len(val_idx)}, n_train={len(train_idx)})")
+    else:
+        train_idx, val_idx, test_idx = _make_split_indices(
+            N=N,
+            y_seq=ds.y_seq,
+            lengths=ds.lengths if ds.variable_length else None,
+            n_val=n_val,
+            n_test=n_test,
+            split_seed=int(cfg.split_seed),
+            stratified_split=bool(cfg.stratified_split),
+            stratify_bins=int(cfg.stratify_bins),
+            stratify_targets=cfg.stratify_targets,
+        )
 
     if cfg.stratified_split:
         print(
@@ -708,6 +730,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
+        gru_y_cols=cfg.gru_y_cols,
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.

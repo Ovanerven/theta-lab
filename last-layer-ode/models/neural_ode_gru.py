@@ -86,6 +86,13 @@ class NeuralOdeGRU(nn.Module):
 
         h = torch.zeros(self.gru.num_layers, B, self.gru.hidden_size, device=device, dtype=dtype)
 
+        # Pre-compute transformed u for GRU features (raw u still used for ODE jumps).
+        u_gru = u_seq
+        if u_transform in ("minmax", "minmax_sqrt"):
+            u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+            u_gru = u_gru.clamp_min(0.0).sqrt()
+
         use_partial = obs_idx.numel() > 0
 
         if u_transform in ("cumsum", "cumsum_sqrt"):

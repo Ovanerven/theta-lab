@@ -100,6 +100,13 @@ class NeuralODE(nn.Module):
         th_out   = torch.zeros(B, K, 1,      device=y0.device, dtype=y0.dtype)
         beta_out = torch.zeros(B, K, self.P, device=y0.device, dtype=y0.dtype)
 
+        # Pre-compute transformed u for MLP features (raw u still used for ODE jumps).
+        u_feat = u_seq
+        if u_transform in ("minmax", "minmax_sqrt"):
+            u_feat = u_feat / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+            u_feat = u_feat.clamp_min(0.0).sqrt()
+
         use_partial = obs_idx.numel() > 0
         has_y_seq   = y_seq is not None
 
