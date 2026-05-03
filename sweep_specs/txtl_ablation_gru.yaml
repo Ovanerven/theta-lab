@@ -21,9 +21,9 @@ time: "04:30:00"
 partition: gpu_a100
 no_plot: false
 train_script: last-layer-ode/train_R.py
+base_config: configs/archs/gru.yaml
 
 fixed:
-  base_config: configs/archs/gru_optimal.yaml
   dataset_path: datasets/real_ivtt_raw_no_outliers.npz
   scaffold: txtl_resource_and_maturation_dna
   obs_idx: [3, 5]             # mm=3, pm=5 in 7-state [R,O,m,mm,p,pm,DNA]
@@ -34,6 +34,7 @@ fixed:
   theta_hi: 1.0
   val_n: 104
   test_n: 104
+  fixed_test_idx_path: results/oracle_rollout_scoring/test_idx_104_resource_maturation.npy
   split_seed: 42
   seed: 1
   lift_dim: 32

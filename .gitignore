@@ -35,4 +35,4 @@ experiments
 
 hints.txt
 
-datasets/aramco_pulsed_n500_molfrac_preview
+datasets/aramco_pulsed_n500_molfrac.npz

@@ -11,14 +11,18 @@
 
 study: aramco_kovacs54_pulsed_n500
 runs_per_job: 1
-time: "02:00:00"
+time: "04:00:00"
 partition: gpu_h100
 no_plot: false
 base_config: configs/methane/gru_aramco_kovacs54.yaml
 
 fixed:
+  # dataset_path: datasets/aramco_kovacs14_fixed.npz
+  # dataset_path: datasets/aramco_kovacs14_hard_n500_molfrac.npz
   dataset_path: datasets/aramco_pulsed_n500_molfrac.npz
   obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+  epochs: 100
+  obs_normalization: zscore
 
 runs:
   # A3 — black-box GRU (dy/dt from GRU hidden state, no mechanistic structure)
