@@ -355,6 +355,7 @@ class TrainConfig:
     cosine_decay: bool = False  # cosine decay from lr to lr*cosine_decay_min after warmup
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
+    train_n: int = 0   # cap on train samples (0 = use all remaining after val/test)
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
     val_frac: float = 0.0
     seed: int = 42        # controls model init + training stochasticity only
@@ -615,6 +616,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             f" | bins={int(cfg.stratify_bins)}"
             f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
         )
+
+    if int(cfg.train_n) > 0 and int(cfg.train_n) < len(train_idx):
+        train_idx = train_idx[: int(cfg.train_n)]
+        print(f"Data-scarce: capped train to train_n={int(cfg.train_n)}")
 
     # persist split so plotting always uses the correct test indices
     np.savez(exp_dir / "split.npz",
