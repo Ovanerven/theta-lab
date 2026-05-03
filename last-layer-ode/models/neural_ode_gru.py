@@ -29,6 +29,8 @@ class NeuralOdeGRU(nn.Module):
         lift_dim: int = 32,
         num_layers: int = 1,
         dropout: float = 0.0,
+        u_minmax_max: Optional[torch.Tensor] = None,
+        u_minmax_cols: Optional[list] = None,
         **kwargs,
     ):
         super().__init__()
@@ -54,6 +56,15 @@ class NeuralOdeGRU(nn.Module):
 
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
+        u_max_full = torch.ones(self.U, dtype=torch.float32)
+        if u_minmax_max is not None and u_minmax_cols is not None:
+            cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
+            u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
+            self._has_u_minmax = True
+        else:
+            self._has_u_minmax = False
+        self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
+
     def forward(
         self,
         y0: torch.Tensor,                      # (B, P)
@@ -63,6 +74,8 @@ class NeuralOdeGRU(nn.Module):
         y_seq: Optional[torch.Tensor] = None,  # (B, K, P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        u_transform: str = "none",
+        y_transform: str = "none",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         device, dtype = y0.device, y0.dtype
@@ -75,9 +88,23 @@ class NeuralOdeGRU(nn.Module):
 
         use_partial = obs_idx.numel() > 0
 
+        if u_transform in ("cumsum", "cumsum_sqrt"):
+            u_gru = u_seq.cumsum(dim=1)
+        else:
+            u_gru = u_seq
+        if u_transform in ("minmax", "minmax_sqrt"):
+            if not self._has_u_minmax:
+                raise ValueError(
+                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
+                )
+            u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+            u_gru = u_gru.clamp_min(0.0).sqrt()
+
         y_prev = y0
         for k in range(K):
-            u_k  = u_seq[:, k, :]
+            u_k     = u_seq[:, k, :]   # raw — used for the bolus jump
+            u_gru_k = u_gru[:, k, :]   # transformed — used for GRU feature
             dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
@@ -89,7 +116,16 @@ class NeuralOdeGRU(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            feat = torch.cat([u_k, y_in], dim=-1)
+            if y_transform == "sqrt":
+                y_in_feat = y_in.clamp_min(0.0).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                y_in_feat = y_in.clamp_min(0.0).sqrt().clamp_min(1.0)
+            elif y_transform == "log1p":
+                y_in_feat = torch.log1p(y_in.clamp_min(0.0))
+            else:
+                y_in_feat = y_in
+
+            feat = torch.cat([u_gru_k, y_in_feat], dim=-1)
             x    = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
             dydt = self.head(z.squeeze(1))  # (B, P)

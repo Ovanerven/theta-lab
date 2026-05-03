@@ -1,6 +1,6 @@
 from models.ode_rnn import OdeRNN
 from models.ode_rnn_analytical import AnalyticalOdeRNN
-from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN, TXTLAnalyticalBleachOdeRNN
+from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN, TXTLAnalyticalBleachOdeRNN, TXTLApproxOdeRNN
 from models.ode_rnn_2020 import OdeRNN2020
 from models.neural_ode import NeuralODE
 from models.ode_transformer import OdeTransformer
@@ -30,6 +30,7 @@ MODELS: dict = {
     "lstm_rnn":           OdeLSTM,
     "ode_rnn_analytical": AnalyticalOdeRNN,
     "ode_rnn_txtl":       TXTLAnalyticalOdeRNN,
+    "ode_rnn_txtl_approx": TXTLApproxOdeRNN,
     "ode_rnn_txtl_bleach": TXTLAnalyticalBleachOdeRNN,
     "ode_rnn_2020":       OdeRNN2020,
     "neural_ode":         NeuralODE,

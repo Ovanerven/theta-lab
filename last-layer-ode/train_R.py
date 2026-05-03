@@ -1279,6 +1279,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     dt_tensor = torch.from_numpy(ds.dt).to(device)
     grouped_model = cfg.model_class == "ode_transformer_grouped"
+    fixed_theta_model = cfg.model_class == "ode_fixed_theta"
 
     # ---- obs_normalization stats: fit on train split, applied in loss only ----
     obs_norm_method = str(cfg.obs_normalization)
@@ -1454,9 +1455,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             model_kwargs = {
                 "teacher_forcing": teacher_forcing,
                 "tf_every": int(cfg.tf_every),
-                "u_transform": str(cfg.u_transform),
-                "y_transform": str(cfg.y_transform),
             }
+            if not fixed_theta_model:
+                model_kwargs["u_transform"] = str(cfg.u_transform)
+                model_kwargs["y_transform"] = str(cfg.y_transform)
             if grouped_model and batch_lengths is not None:
                 model_kwargs["lengths"] = batch_lengths
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -1635,9 +1637,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     model_kwargs = {
                         "y_seq": None,
                         "teacher_forcing": False,
-                        "u_transform": str(cfg.u_transform),
-                        "y_transform": str(cfg.y_transform),
                     }
+                    if not fixed_theta_model:
+                        model_kwargs["u_transform"] = str(cfg.u_transform)
+                        model_kwargs["y_transform"] = str(cfg.y_transform)
                     if grouped_model and batch_lengths is not None:
                         model_kwargs["lengths"] = batch_lengths
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -1832,9 +1835,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 model_kwargs = {
                     "y_seq": None,
                     "teacher_forcing": False,
-                    "u_transform": str(cfg.u_transform),
-                    "y_transform": str(cfg.y_transform),
                 }
+                if not fixed_theta_model:
+                    model_kwargs["u_transform"] = str(cfg.u_transform)
+                    model_kwargs["y_transform"] = str(cfg.y_transform)
                 if grouped_model and batch_lengths is not None:
                     model_kwargs["lengths"] = batch_lengths
                 pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
