@@ -263,84 +263,83 @@ def simulate_ivp_with_bolus(
     return np.array(times_out, dtype=float), np.vstack(states_out)
 
 def simulate_cantera_with_bolus(
-    gas_object: ct.Solution, 
-    y0: np.ndarray, 
-    t_start: float, 
-    t_end: float, 
-    bolus_gen, 
-    species_names: list
+    gas_object: ct.Solution,
+    y0: np.ndarray,
+    t_start: float,
+    t_end: float,
+    bolus_gen,
+    species_names: list,
+    t_record: np.ndarray = None,
 ):
     """
-    Simulates a stiff chemical mechanism using Cantera's native ReactorNet.
-    Hardened to prevent CVODES t+h=t stalling during bolus injections.
+    Simulate a stiff chemical mechanism using Cantera's ReactorNet.
+
+    t_record : 1-D array of times at which to record the state (must be sorted,
+               within [t_start, t_end]).  If None, records only segment
+               endpoints (bolus times + t_end).  Pass the observation grid from
+               create_dataset.py so interpolation is exact.
     """
-    # 1. Initialize State
     gas_object.concentrations = y0
-    
-    # 2. Setup Reactor (Using Constant Pressure to prevent explosion stalls)
-    # IdealGasConstPressureReactor is much more stable for bolus injections
-    # than a standard IdealGasReactor (constant volume).
+
     reactor = ct.IdealGasConstPressureReactor(gas_object)
     sim = ct.ReactorNet([reactor])
-    
-    # Relax tolerances slightly to help step through extreme stiffness
     sim.rtol = 1.0e-4
     sim.atol = 1.0e-12
 
     t_history = [t_start]
-    y_history = [gas_object.concentrations]
-    
+    y_history = [gas_object.concentrations.copy()]
+
     current_t = t_start
 
-    # 3. Process Bolus Events
     events = list(bolus_gen) if bolus_gen else []
     events_by_time = collections.defaultdict(list)
     for t_ev, ch_ev, amt_ev in events:
         events_by_time[t_ev].append((ch_ev, amt_ev))
-    
     sorted_event_times = sorted(events_by_time.keys())
 
-    # 4. Integrate
-    for t_ev in sorted_event_times:
-        if t_ev <= current_t or t_ev > t_end:
-            continue
-            
-        # Advance to just before the bolus
-        sim.advance(t_ev)
-        
-        t_history.append(sim.time)
-        y_history.append(gas_object.concentrations)
-        
-        # --- THE CRITICAL FIX: SAFE BOLUS INJECTION ---
-        T_current = gas_object.T
-        P_current = gas_object.P
-        current_concs = gas_object.concentrations
-        
-        for ch_ev, amt_ev in events_by_time[t_ev]:
-            idx = species_names.index(ch_ev)
-            current_concs[idx] += amt_ev 
-            
-            # Absolute safeguard against negative concentrations
-            if current_concs[idx] < 0:
-                current_concs[idx] = 1e-15
-                
-        # Force Cantera to mathematically reconcile the new mass
-        # while holding Temperature and Pressure constant.
-        gas_object.TPY = T_current, P_current, current_concs
-        
-        # Sync the reactor to accept the newly equilibrated gas
-        reactor.syncState() 
-        # ----------------------------------------------
-        
-        t_history.append(sim.time)
-        y_history.append(gas_object.concentrations)
-        current_t = t_ev
+    # All times we need to stop at: bolus times + t_end
+    stop_times = [t for t in sorted_event_times if t_start < t <= t_end] + [t_end]
 
-    # 5. Finish simulation
-    if current_t < t_end:
-        sim.advance(t_end)
+    # Dense record times within each segment (from t_record grid)
+    if t_record is not None:
+        t_record = np.asarray(t_record, dtype=float)
+
+    def _advance_segment(t_from: float, t_to: float):
+        """Advance sim from t_from to t_to, recording at every t_record point inside."""
+        if t_record is not None:
+            # Find observation times strictly inside this segment
+            mask = (t_record > t_from) & (t_record < t_to)
+            inner = t_record[mask]
+        else:
+            inner = np.array([])
+
+        for t_obs_i in inner:
+            sim.advance(float(t_obs_i))
+            t_history.append(sim.time)
+            y_history.append(gas_object.concentrations.copy())
+
+        sim.advance(t_to)
         t_history.append(sim.time)
-        y_history.append(gas_object.concentrations)
+        y_history.append(gas_object.concentrations.copy())
+
+    for t_stop in stop_times:
+        if t_stop <= current_t:
+            continue
+
+        _advance_segment(current_t, t_stop)
+        current_t = t_stop
+
+        if t_stop < t_end and t_stop in events_by_time:
+            T_cur = gas_object.T
+            P_cur = gas_object.P
+            concs = gas_object.concentrations.copy()
+            for ch_ev, amt_ev in events_by_time[t_stop]:
+                idx = species_names.index(ch_ev)
+                concs[idx] = max(0.0, concs[idx] + amt_ev)
+            gas_object.TPY = T_cur, P_cur, concs
+            reactor.syncState()
+            t_history.append(sim.time)
+            y_history.append(gas_object.concentrations.copy())
 
     return np.array(t_history), np.array(y_history)
 

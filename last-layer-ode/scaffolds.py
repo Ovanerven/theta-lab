@@ -1367,6 +1367,163 @@ class GlobalOneStep(MechanisticScaffold):
 
         r = k * (CH4_p ** a) * (O2_p ** b)
         return torch.stack((-r, -2.0 * r, r), dim=-1)
+    
+class Kovacs54Scaffold(MechanisticScaffold):
+    """
+    Kovacs virtual-species 14-state methane mechanism (54 reactions).
+    30 virtual fuel-breakdown reactions + 24 core H2/CO reactions (HCO removed).
+
+    States (14): CH4, O2, H2O, CO, CO2, H2, H, O, OH, HO2, H2O2, CH3(R), CH2O(IO), N2
+    Parameters θ (54): one learned rate constant per reaction.
+
+    Dataset obs-indices: 15,5,7,12,13,3,4,6,8,11,10,16,28,1  (AramcoMech 3.0)
+    """
+    def __init__(self):
+        super().__init__(P=14, theta_dim=54)
+        self.state_names = [
+            'CH4', 'O2', 'H2O', 'CO', 'CO2', 'H2', 'H', 'O',
+            'OH', 'HO2', 'H2O2', 'CH3', 'CH2O', 'N2'
+        ]
+
+    def forward(self, y, k):
+        """
+        y: Tensor of shape (batch, 14)
+        k: Tensor of shape (batch, 54)
+        """
+        # 1. Unpack states (ReLU ensures no negative concentrations)
+        y = torch.relu(y) 
+        
+        FUEL = y[:, 0]
+        O2   = y[:, 1]
+        H2O  = y[:, 2]
+        CO   = y[:, 3]
+        CO2  = y[:, 4]
+        H2   = y[:, 5]
+        H    = y[:, 6]
+        O    = y[:, 7]
+        OH   = y[:, 8]
+        HO2  = y[:, 9]
+        H2O2 = y[:, 10]
+        R    = y[:, 11] 
+        IO   = y[:, 12] 
+        N2   = y[:, 13]
+
+        # 2. Third-body efficiency pool (Simplified sum)
+        M = FUEL + O2 + H2O + CO + CO2 + H2 + H + O + OH + HO2 + H2O2 + R + IO + N2
+
+        # 3. Unpack Rates
+        k_vals = [k[:, i] for i in range(self.theta_dim)]
+
+        # =====================================================================
+        # 30 VIRTUAL REACTIONS 
+        # =====================================================================
+        r1  = k_vals[0]  * FUEL * H       
+        r2  = k_vals[1]  * FUEL * OH      
+        r3  = k_vals[2]  * FUEL * O       
+        r4  = k_vals[3]  * FUEL * HO2     
+        r5  = k_vals[4]  * FUEL * OH      
+        r6  = k_vals[5]  * FUEL * O       
+        r7  = k_vals[6]  * FUEL * HO2     
+        r8  = k_vals[7]  * FUEL * OH      
+        r9  = k_vals[8]  * FUEL * O       
+        r10 = k_vals[9]  * FUEL * HO2     
+        r11 = k_vals[10] * R * OH         
+        r12 = k_vals[11] * R * O          
+        r13 = k_vals[12] * R * HO2        
+        r14 = k_vals[13] * R * O2         
+        r15 = k_vals[14] * R * OH         
+        r16 = k_vals[15] * R * O          
+        r17 = k_vals[16] * R * HO2        
+        r18 = k_vals[17] * R * H * M      
+        r19 = k_vals[18] * IO * OH        
+        r20 = k_vals[19] * IO * O         
+        r21 = k_vals[20] * IO * HO2       
+        r22 = k_vals[21] * IO * HO2       
+        r23 = k_vals[22] * IO * O2        
+        r24 = k_vals[23] * IO * OH        
+        r25 = k_vals[24] * IO * O         
+        r26 = k_vals[25] * IO * HO2       
+        r27 = k_vals[26] * IO * HO2       
+        r28 = k_vals[27] * IO * H * H     
+        r29 = k_vals[28] * IO * R         
+        r30 = k_vals[29] * CO * H * H * M 
+
+        # =====================================================================
+        # 24 CORE H2/CO REACTIONS (HCO safely removed)
+        # =====================================================================
+        r31 = k_vals[30] * H * O2         
+        r32 = k_vals[31] * O * H2         
+        r33 = k_vals[32] * OH * H2        
+        r34 = k_vals[33] * O * H2O        
+        r35 = k_vals[34] * H * H * M      
+        r36 = k_vals[35] * O * O * M      
+        r37 = k_vals[36] * O * H * M      
+        r38 = k_vals[37] * H * OH * M     
+        r39 = k_vals[38] * H * O2 * M     
+        r40 = k_vals[39] * HO2 * H        
+        r41 = k_vals[40] * HO2 * H        
+        r42 = k_vals[41] * HO2 * H        
+        r43 = k_vals[42] * HO2 * O        
+        r44 = k_vals[43] * HO2 * OH       
+        r45 = k_vals[44] * HO2 * HO2      
+        r46 = k_vals[45] * H2O2 * M       
+        r47 = k_vals[46] * H2O2 * H       
+        r48 = k_vals[47] * H2O2 * H       
+        r49 = k_vals[48] * H2O2 * O       
+        r50 = k_vals[49] * H2O2 * OH      
+        r51 = k_vals[50] * CO * O * M     
+        r52 = k_vals[51] * CO * O2        
+        r53 = k_vals[52] * CO * OH        
+        r54 = k_vals[53] * CO * HO2       
+
+        # =====================================================================
+        # 4. Construct the Species Derivatives (dy/dt)
+        # =====================================================================
+        
+        d_FUEL = -r1 - r2 - r3 - r4 - r5 - r6 - r7 - r8 - r9 - r10 + r18 + r28 + r29
+        
+        d_R    = r1 + r2 + r3 + r4 - r11 - r12 - r13 - r14 - r15 - r16 - r17 - r18 - r29
+        
+        d_IO   = r5 + r6 + r7 + r11 + r12 + r13 + r14 - r19 - r20 - r21 - r22 - r23 \
+                 - r24 - r25 - r26 - r27 - r28 - r29 + r30
+                 
+        # HCO reactions (r55-r57) are fully removed from CO and others
+        d_CO   = r8 + r9 + r10 + r15 + r16 + r17 + r19 + r20 + r21 + r22 + r23 \
+                 + r29 - r30 - r51 - r52 - r53 - r54 
+                 
+        d_CO2  = r24 + r25 + r26 + r27 + r51 + r52 + r53 + r54
+        
+        d_H2   = r1 + r5 + r6 + r7 + 2*r8 + 2*r9 + 2*r10 + r11 + 2*r15 + r16 + r17 \
+                 + r24 + r25 + r26 - r32 - r33 + r35 + r41 + r47
+                 
+        d_H    = -r1 + r5 + r8 + r12 + r16 - r18 + r19 + r20 + r21 + r27 - 2*r28 \
+                 + r29 - 2*r30 - r31 + r32 + r33 - 2*r35 - r37 - r38 - r39 - r40 \
+                 - r41 - r42 - r47 - r48 + r53 
+                 
+        d_O    = -r3 - r6 - r9 - r12 - r16 - r20 - r25 + r28 + r31 - r32 - r34 \
+                 - 2*r36 - r37 + r42 - r43 + r44 - r49 - r51 + r52
+                 
+        d_OH   = -r2 + r3 - r5 - r8 - r11 + r14 - r15 + r17 - r19 + r20 + r22 \
+                 - r24 + r26 + r31 + r32 - r33 + 2*r34 + r37 - r38 + 2*r40 \
+                 + r43 - r44 + 2*r46 + r48 + r49 - r50 - r53 + r54 
+                 
+        d_O2   = -r14 - r23 - r31 + r36 - r39 + r41 + r43 + r44 + r45 - r52 
+                 
+        d_H2O  = r2 + r13 + r22 + r27 + r33 - r34 + r38 + r42 + r44 + r48 + r50 
+        
+        d_HO2  = -r4 - r7 - r10 - r13 - r17 - r21 - r22 - r26 - r27 + r39 - r40 \
+                 - r41 - r42 - r43 - r44 - 2*r45 + r47 + r49 + r50 - r54 
+                 
+        d_H2O2 = r4 + r21 + r23 + r45 - r46 - r47 - r48 - r49 - r50
+        
+        d_N2   = torch.zeros_like(FUEL) 
+
+        dy_dt = torch.stack([
+            d_FUEL, d_O2, d_H2O, d_CO, d_CO2, d_H2, d_H, d_O, 
+            d_OH, d_HO2, d_H2O2, d_R, d_IO, d_N2
+        ], dim=-1)
+
+        return dy_dt
 
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
@@ -1389,5 +1546,6 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "methane_obs5": Methane5State_Global_Scaffold(),
     "westbrook_dryer_2step": WestbrookDryer2Step(),
     "global_one_step": GlobalOneStep(),
+    "kovacs_54":  Kovacs54Scaffold(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
 }
