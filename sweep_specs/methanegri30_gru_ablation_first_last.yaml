@@ -1,0 +1,27 @@
+# GRI30 ablation: only first (CH4, idx 0) and last (H2O, idx 4) species observed.
+# Both obs_idx and gru_y_cols are set to [0, 4] so the GRU encoder input is also
+# restricted — a strict partial-observation test.
+#
+# Tests whether the physics scaffold (ode_rnn) outperforms a black-box GRU (neural_ode_gru)
+# when the model sees only inlet fuel and final combustion product.
+
+study: gri30_first_last_obs
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  base_config: configs/methane/gru_methane_gri30.yaml
+  dataset_path: datasets/gri30_obs5_real_rates.npz
+  scaffold: methane_obs5
+  obs_idx: [0, 4]
+  gru_y_cols: [0, 4]
+
+runs:
+  # A3 — black-box GRU (dy/dt, Euler, no scaffold)
+  - {model_class: neural_ode_gru,   exp_name: A3_neural_ode_gru}
+  # A5 — our method without gamma bounds (softplus, unbounded)
+  - {model_class: ode_rnn,          exp_name: A5_unbounded, theta_bounded: false}
+  # A6 — + gamma bounds → our method (baseline)
+  - {model_class: ode_rnn,          exp_name: A6_baseline}

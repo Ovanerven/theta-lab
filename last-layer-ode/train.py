@@ -418,6 +418,10 @@ class TrainConfig:
     # If null/None, supervises all observed species (default behaviour).
     obs_idx: list[int] | None = None
 
+    # If set, restrict GRU encoder input to these species indices (must match obs_idx
+    # for a strictly partial-observation experiment). None = all P species (default).
+    gru_y_cols: list[int] | None = None
+
     wandb_enabled: bool = False
     wandb_project: str = "theta-lab"
     wandb_entity: str | None = None
@@ -708,6 +712,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
+        gru_y_cols=cfg.gru_y_cols,
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
