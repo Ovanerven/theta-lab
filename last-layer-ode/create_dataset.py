@@ -43,21 +43,22 @@ class ModelConfig:
     cantera_composition: str = 'CH4:1.0, O2:2.0, N2:7.52'
     cantera_use_mole_fractions: bool = False  # convert concentrations → mole fractions before storing
     default_tail: Optional[float] = None  # if set, overrides CLI --tail for this model
+    cantera_pulsed_mode: bool = False  # start from hot equilibrium, inject CH4 boluses
+    cantera_pulsed_Y: Optional[List[float]] = None  # pre-computed equilibrium mass fractions (phi=0.4)
 
 def _aramco_30_config() -> ModelConfig:
     """
-    AramcoMech 3.0 configuration using Cantera to fetch real kinetics.
+    AramcoMech 3.0 pulsed-combustion configuration.
 
-    Hardness levers:
-      cantera_T_range=(950, 1050): ignition delay varies ~0.5-5s across samples,
-        forcing the model to learn rate-constant temperature dependence rather than
-        memorizing a single ignition time.
-      cantera_phi_range=(0.7, 1.3): lean/stoichiometric/rich combustion gives
-        qualitatively different product distributions (CO2 vs CO, H2O vs H2).
+    Hot-start scenario: simulations begin from the lean equilibrium state
+    (phi=0.4, original T=1000K → T_eq≈1878K) cooled to T_sample ∈ [1050, 1200]K.
+    CH4 boluses are then injected into this hot, O2-rich background, each triggering
+    a mini-ignition that drives the CH3→CH2O→CO radical chain.  This gives
+    continuous signal in intermediate species (CH3, CH2O, HO2) throughout the
+    trajectory, not just during a single brief ignition spike.
 
-    param_ranges are extracted at T=1000K but x0 is recomputed per-sample using
-    the sampled T and phi — the rate constants don't change (fixed ground truth),
-    only the initial concentrations and thus the trajectory shape.
+    Y_PULSED_EQUIL: mass fractions from phi=0.4, T_init=1000K burned to equilibrium.
+    Precomputed so dataset generation incurs no extra 5s simulation at import time.
     """
     gas = ct.Solution('datasets/methane/aramco_30.yaml')
     T_INIT = 1000.0
@@ -66,30 +67,39 @@ def _aramco_30_config() -> ModelConfig:
 
     real_k_params = gas.forward_rate_constants.tolist()
     param_ranges = [(v, v) for v in real_k_params]
-    x0_default = gas.concentrations.tolist()  # fallback if no T/phi range used
+    x0_default = gas.concentrations.tolist()
 
-    # Bolus amounts in kmol/m³ — ~5-20% of initial species concentration
-    # These are applied before mole-fraction conversion so units are consistent.
-    bolus_ranges = {
-        "CH4": (0.0001, 0.0005),
-        "O2":  (0.0002, 0.0010),
-        "N2":  (0.0005, 0.0020),
-        "H2O": (0.0001, 0.0005),
+    # Lean equilibrium mass fractions (phi=0.4, T_eq≈1878K) — precomputed once.
+    # Main species: N2=0.749, O2=0.136, CO2=0.063, H2O=0.051, OH=5.8e-4
+    Y_PULSED_EQUIL = {
+        'N2': 7.49489182e-01, 'O2': 1.36331396e-01, 'CO2': 6.25485654e-02,
+        'H2O': 5.09508374e-02, 'OH': 5.77473185e-04, 'CO': 5.10405611e-05,
+        'O': 4.83901277e-05, 'H2': 1.77239310e-06, 'HO2': 1.17801196e-06,
+        'H': 1.19010253e-07, 'H2O2': 4.08126466e-08,
     }
+    # Build full-length Y array aligned to species order
+    all_species = list(gas.species_names)
+    Y_full = [Y_PULSED_EQUIL.get(s, 0.0) for s in all_species]
+
+    # CH4 bolus amounts (kmol/m³) calibrated so each bolus is 2–10% of available O2
+    # at T≈1100K, keeping the system reactive without depleting O2 entirely.
+    bolus_ranges = {"CH4": (5e-6, 2e-5)}
 
     return ModelConfig(
         param_ranges=param_ranges,
         x0_default=x0_default,
         bolus_ranges=bolus_ranges,
-        bolus_default=(0.0001, 0.0005),
-        bolus_count_range=(2, 8),
+        bolus_default=(0.0, 0.0),   # non-CH4 channels get zero boluses
+        bolus_count_range=(4, 8),
         simulator="cantera",
         cantera_T=T_INIT,
-        cantera_T_range=(950, 1050),
-        cantera_phi_range=(0.7, 1.3),
+        cantera_T_range=(1050, 1200),  # cooling temperature range for hot start
+        cantera_phi_range=None,        # phi fixed at lean equil; no per-sample cold ignition
         cantera_composition=COMPOSITION,
-        cantera_use_mole_fractions=True,  # store X ∈ [0,1] instead of kmol/m³
-        default_tail=3.5,
+        cantera_use_mole_fractions=True,
+        default_tail=0.5,
+        cantera_pulsed_mode=True,
+        cantera_pulsed_Y=Y_full,
     )
 
 def _mof_synthesis_config() -> ModelConfig:
@@ -360,18 +370,33 @@ def generate_training_dataset(
             elif mcfg.simulator == "cantera":
                 gas_obj = ct.Solution('datasets/methane/aramco_30.yaml')
 
-                # Sample temperature and equivalence ratio per trajectory
                 T_sample = float(rng.uniform(*mcfg.cantera_T_range)) if mcfg.cantera_T_range else mcfg.cantera_T
-                if mcfg.cantera_phi_range is not None:
-                    phi = float(rng.uniform(*mcfg.cantera_phi_range))
-                    # phi=1 is stoichiometric CH4+2O2; scale O2 and N2 by 1/phi
-                    o2 = 2.0 / phi
-                    composition = f'CH4:1.0, O2:{o2:.4f}, N2:{3.76*o2:.4f}'
+
+                if mcfg.cantera_pulsed_mode and mcfg.cantera_pulsed_Y is not None:
+                    # Pulsed hot-start: begin from lean equilibrium, cooled to T_sample.
+                    # Regenerate events as CH4-only boluses (overrides pre-sampled events).
+                    gas_obj.TPY = T_sample, ct.one_atm, np.array(mcfg.cantera_pulsed_Y, dtype=np.float64)
+                    x0_full = gas_obj.concentrations.copy()
+                    n_p = int(rng.integers(*mcfg.bolus_count_range))
+                    eff_tail = mcfg.default_tail if mcfg.default_tail is not None else tail
+                    t_event_p = np.sort(rng.uniform(0.0, max(0.0, t_span - eff_tail), n_p)).astype(np.float32)
+                    lo_ch4, hi_ch4 = mcfg.bolus_ranges.get('CH4', mcfg.bolus_default) if mcfg.bolus_ranges else mcfg.bolus_default
+                    amt_event_p = rng.uniform(lo_ch4, hi_ch4, n_p).astype(np.float32)
+                    ch4_ctrl = int(np.where(control_names == 'CH4')[0][0]) if 'CH4' in control_names else 0
+                    ch_event_p = np.full(n_p, ch4_ctrl, dtype=np.int64)
+                    # Replace outer event arrays so u_seq binning is consistent
+                    t_event, ch_event, amt_event = t_event_p, ch_event_p, amt_event_p
+                    events = [(float(t), 'CH4', float(a)) for t, a in zip(t_event_p, amt_event_p)]
                 else:
-                    composition = mcfg.cantera_composition
-                gas_obj.TPX = T_sample, ct.one_atm, composition
-                # x0 must match the sampled state, not the config default
-                x0_full = gas_obj.concentrations.copy()
+                    # Standard cold-ignition path
+                    if mcfg.cantera_phi_range is not None:
+                        phi = float(rng.uniform(*mcfg.cantera_phi_range))
+                        o2 = 2.0 / phi
+                        composition = f'CH4:1.0, O2:{o2:.4f}, N2:{3.76*o2:.4f}'
+                    else:
+                        composition = mcfg.cantera_composition
+                    gas_obj.TPX = T_sample, ct.one_atm, composition
+                    x0_full = gas_obj.concentrations.copy()
 
                 t_solver, x_solver = simulate_cantera_with_bolus(
                     gas_object=gas_obj,
@@ -417,6 +442,7 @@ def generate_training_dataset(
             continue
 
         x_grid = interp1d(t_solver, x_solver, axis=0, kind="linear", fill_value="extrapolate")(t_obs).astype(np.float32)
+        x_grid = np.clip(x_grid, 0.0, None)  # remove numerical noise negatives
 
         y_grid = x_grid[:, obs_indices]
         y0[i] = y_grid[0]
