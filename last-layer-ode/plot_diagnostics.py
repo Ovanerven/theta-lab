@@ -123,6 +123,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
     if cfg.get("gru_y_obs_only", False):
         obs_idx_cfg = cfg.get("obs_idx")
         gru_y_cols = list(obs_idx_cfg) if obs_idx_cfg is not None else list(range(scaffold.P))
+    elif cfg.get("gru_y_cols") is not None:
+        # Explicit gru_y_cols from train.py's TrainConfig — must be honored at
+        # rebuild time or lift.0.weight shape will not match the checkpoint.
+        gru_y_cols = list(cfg["gru_y_cols"])
 
     # Allow plotting any checkpoint (including in-progress runs).
     # Priority: explicit ckpt_path > model.pt (final best) > model_last.pt > newest checkpoints/ckpt_ep*.pt.

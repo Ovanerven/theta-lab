@@ -90,6 +90,7 @@ def fit_batched(
     n_substeps: int = 4,
     loss_species: list[str] | None = None,
     no_rollout: bool = False,
+    drop_states: list[str] | None = None,
     device: torch.device = torch.device("cpu"),
 ) -> dict:
     """
@@ -110,6 +111,44 @@ def fit_batched(
 
     d = np.load(dataset_path, allow_pickle=True)
 
+    # Optionally project the dataset down to a smaller scaffold by dropping
+    # observed states that the scaffold doesn't model (e.g. drop "O" to use
+    # txtl_maturation_dna with the 7-state real_ivtt dataset).
+    obs_indices_full = d["obs_indices"].astype(np.int64)         # (P_data,)
+    control_indices  = d["control_indices"].astype(np.int64)     # (U,)
+    obs_names_full   = (
+        [str(s) for s in d["obs_names"]] if "obs_names" in d.files else None
+    )
+    keep_pos = np.arange(len(obs_indices_full))                  # default: keep all
+    if drop_states:
+        if obs_names_full is None:
+            raise ValueError("--drop-states requires obs_names in the dataset.")
+        unknown = [s for s in drop_states if s not in obs_names_full]
+        if unknown:
+            raise ValueError(
+                f"--drop-states {unknown} not in dataset obs_names {obs_names_full}"
+            )
+        keep_pos = np.array(
+            [i for i, n in enumerate(obs_names_full) if n not in drop_states],
+            dtype=np.int64,
+        )
+        kept_names = [obs_names_full[i] for i in keep_pos]
+        print(f"  Dropping states {drop_states}; keeping {kept_names} (P={len(keep_pos)})")
+        if len(keep_pos) != P:
+            raise ValueError(
+                f"After dropping {drop_states}, dataset has P={len(keep_pos)} states "
+                f"but scaffold '{scaffold_name}' expects P={P}. "
+                f"Kept order: {kept_names}; scaffold order: {sc.state_names}"
+            )
+        if list(kept_names) != list(sc.state_names):
+            raise ValueError(
+                f"State order mismatch after drop. "
+                f"Kept order: {kept_names}; scaffold order: {sc.state_names}. "
+                f"The two must match position-for-position."
+            )
+
+    obs_indices_new = obs_indices_full[keep_pos]                 # (P,)
+
     # Build per-parameter bounds
     if sc.theta_lo_vec is not None and sc.theta_hi_vec is not None:
         lo_t = torch.tensor(sc.theta_lo_vec, dtype=torch.float32, device=device)
@@ -124,15 +163,15 @@ def fit_batched(
 
     # Stack selected samples: (N, K+1, P) and (N, K, U)
     N = len(sample_indices)
-    y0_np  = d["y0"][sample_indices].astype(np.float32)     # (N, P)
-    y_np   = d["y_seq"][sample_indices].astype(np.float32)  # (N, K, P)
-    u_np   = d["u_seq"][sample_indices].astype(np.float32)  # (N, K, U)
+    y0_np  = d["y0"][sample_indices][:, keep_pos].astype(np.float32)        # (N, P)
+    y_np   = d["y_seq"][sample_indices][:, :, keep_pos].astype(np.float32)  # (N, K, P)
+    u_np   = d["u_seq"][sample_indices].astype(np.float32)                  # (N, K, U)
 
     y_true_np = np.concatenate([y0_np[:, None, :], y_np], axis=1)  # (N, K+1, P)
 
     jump = make_u_to_y_jump(
-        torch.from_numpy(d["control_indices"].astype(np.int64)),
-        torch.from_numpy(d["obs_indices"].astype(np.int64)),
+        torch.from_numpy(control_indices),
+        torch.from_numpy(obs_indices_new),
         device=device,
     )
 
@@ -432,6 +471,12 @@ def main():
                         help="Comma-separated species for NRMSE table (default: same as --loss-species).")
     parser.add_argument("--no-rollout",  action="store_true",
                         help="Skip rollout (one-step oracle only, much faster).")
+    parser.add_argument("--drop-states", type=str, default=None,
+                        help="Comma-separated dataset state names to drop before "
+                             "fitting (e.g. 'O' to project the 7-state real_ivtt "
+                             "dataset onto txtl_maturation_dna's 6-state layout). "
+                             "The remaining state order must match the scaffold's "
+                             "state_names.")
     parser.add_argument("--out",         default="results/theta_fit_batched",
                         help="Output directory.")
     parser.add_argument("--plot",        action="store_true",
@@ -456,6 +501,10 @@ def main():
         [s.strip() for s in args.loss_species.split(",") if s.strip()]
         if args.loss_species else None
     )
+    drop_states = (
+        [s.strip() for s in args.drop_states.split(",") if s.strip()]
+        if args.drop_states else None
+    )
     eval_species = (
         [s.strip() for s in args.eval_species.split(",") if s.strip()]
         if args.eval_species else loss_species
@@ -472,6 +521,7 @@ def main():
         n_substeps     = args.n_substeps,
         loss_species   = loss_species,
         no_rollout     = args.no_rollout,
+        drop_states    = drop_states,
         device         = device,
     )
 
