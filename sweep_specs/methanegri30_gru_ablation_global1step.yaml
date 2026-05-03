@@ -1,0 +1,25 @@
+# Ablation sweep mirroring methanegri30_gru_ablation.yaml, but on the
+# Global one-step scaffold (3 observed species: CH4, O2, CO2).
+# Dataset is sliced from the 5-obs GRI30 source, so trajectories match.
+
+study: global_one_step
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  base_config: configs/methane/gru_methane_gri30.yaml
+  dataset_path: datasets/gri30_obs3_global1step.npz
+  scaffold: global_one_step
+  obs_idx: [0, 1, 2]
+
+runs:
+  # A3 — black-box GRU (dy/dt, Euler, no scaffold)
+  - {model_class: neural_ode_gru,   exp_name: A3_neural_ode_gru}
+  # A4 — black-box MLP (dy/dt, no history)
+  - {model_class: neural_ode_mlp,   exp_name: A4_neural_ode_mlp}
+  # A5 — our method without gamma bounds (softplus, unbounded)
+  - {model_class: ode_rnn,          exp_name: A5_unbounded, theta_bounded: false}
+  # A6 — + gamma bounds → our baseline
+  - {model_class: ode_rnn,          exp_name: A6_baseline}

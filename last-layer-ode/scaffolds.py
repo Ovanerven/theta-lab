@@ -1237,6 +1237,136 @@ class methaneRevWGS_fixed(MechanisticScaffold):
         dNO  =  2.0 * r4
 
         return torch.stack((dCH4, dO2, dCO, dCO2, dH2O, dOH, dNO), dim=-1)
+    
+    import torch
+
+class Methane5State_Global_Scaffold(MechanisticScaffold):
+    """
+    Ultra-simplified 5-State Macroscopic Scaffold.
+    Relies on the GRU's hidden state to implicitly model the radical pool 
+    (auto-ignition delay) rather than explicitly tracking OH.
+    
+    States (5): CH4, O2, CO, CO2, H2O
+    Parameters (4):
+      0: k_methane_ox : Global CH4 -> CO forward rate
+      1: n_o2         : O2 reaction order
+      2: k_co_f       : Global CO -> CO2 forward rate
+      3: k_co_r       : Global CO2 -> CO reverse rate
+    """
+    def __init__(self):
+        super().__init__(P=5, theta_dim=4)
+        self.state_names = ["CH4", "O2", "CO", "CO2", "H2O"]
+        
+        # Kept bounds wide since global mechanisms need massive rate 
+        # spikes to compensate for missing intermediate steps.
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5]
+        self.theta_hi_vec = [50.0, 2.0, 50.0, 50.0]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        CH4, O2, CO, CO2, H2O = y.unbind(dim=-1)
+        k_methane, n_o2, k_co_f, k_co_r = theta.unbind(dim=-1)
+
+        # Clamp states to prevent negative concentrations and NaN powers
+        eps = 1e-8
+        CH4_p = torch.clamp_min(CH4, eps)
+        O2_p  = torch.clamp_min(O2,  eps)
+        CO_p  = torch.clamp_min(CO,  eps)
+        CO2_p = torch.clamp_min(CO2, eps)
+
+        # Clamp parameters to bounds
+        k_methane = torch.clamp_min(k_methane, 0.0)
+        n_o2      = torch.clamp(n_o2, min=0.1, max=2.0)
+        k_co_f    = torch.clamp_min(k_co_f, 0.0)
+        k_co_r    = torch.clamp_min(k_co_r, 0.0)
+
+        # 1. Global Partial Oxidation: CH4 + 1.5 O2 -> CO + 2 H2O
+        # The GRU must learn to keep k_methane near 0 until ignition time
+        r1 = k_methane * CH4_p * (O2_p ** n_o2)
+        
+        # 2. Global Reversible CO Burnout: CO + 0.5 O2 <-> CO2
+        # Forward rate depends on O2.
+        r2_f = k_co_f * CO_p * (O2_p ** 0.5) 
+        
+        # Reverse rate proxy. We still use the (CO / CO+eps) trick to prevent 
+        # spontaneous CO2 decay when no fuel/intermediates are present.
+        r2_r = k_co_r * CO2_p * (CO_p / (CO_p + eps))
+
+        # Apply stoichiometry
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - 0.5 * r2_f + 0.5 * r2_r
+        dCO  =  r1 - r2_f + r2_r
+        dCO2 =  r2_f - r2_r
+        dH2O =  2.0 * r1
+
+        return torch.stack((dCH4, dO2, dCO, dCO2, dH2O), dim=-1)
+
+class WestbrookDryer2Step(MechanisticScaffold):
+    """
+    Classical 2-step reduced mechanism (Westbrook & Dryer, 1981).
+    States: CH4, O2, CO, CO2   (H2O recovered by H-atom balance externally)
+
+    R1:  CH4 + 1.5 O2 -> CO + 2 H2O      (irreversible)
+    R2:  CO  + 0.5 O2 <-> CO2            (reversible — captures CO/CO2 equilibrium)
+
+    No radical states, no OH gating. Ignition transient is delegated entirely
+    to theta(t) from the GRU, which is precisely what your framework is good at.
+    """
+    def __init__(self):
+        super().__init__(P=4, theta_dim=5)
+        self.state_names = ["CH4", "O2", "CO", "CO2"]
+        # [k1, n_o2_1, k2_f, k2_r, n_o2_2]
+        self.theta_lo_vec = [1e-5, 0.1, 1e-5, 1e-5, 0.1]
+        self.theta_hi_vec = [50.0, 2.0, 50.0, 50.0, 2.0]
+
+    def forward(self, y, theta):
+        CH4, O2, CO, CO2 = y.unbind(dim=-1)
+        k1, n1, k2f, k2r, n2 = theta.unbind(dim=-1)
+
+        eps = 1e-8
+        CH4_p, O2_p, CO_p, CO2_p = [torch.clamp_min(s, eps) for s in (CH4, O2, CO, CO2)]
+        n1 = torch.clamp(n1, 0.1, 2.0)
+        n2 = torch.clamp(n2, 0.1, 2.0)
+        k1, k2f, k2r = [torch.clamp_min(k, 0.0) for k in (k1, k2f, k2r)]
+
+        r1 = k1  * CH4_p * (O2_p ** n1)
+        r2 = k2f * CO_p  * (O2_p ** n2) - k2r * CO2_p
+
+        dCH4 = -r1
+        dO2  = -1.5 * r1 - 0.5 * r2
+        dCO  =  r1 - r2
+        dCO2 =  r2
+        return torch.stack((dCH4, dO2, dCO, dCO2), dim=-1)
+
+
+class GlobalOneStep(MechanisticScaffold):
+    """
+    Single global reaction:   CH4 + 2 O2 -> CO2 + 2 H2O
+    States: CH4, O2, CO2.     H2O via H-balance, CO is treated as algebraically zero
+    (i.e. the scaffold does not resolve CO/CO2 equilibrium — that lives in theta(t)).
+
+    All transient richness is in theta(t) = (k, a, b) — a fractional-order Arrhenius
+    proxy where the GRU is free to drive k from ~0 (induction) to large (ignition)
+    to small (depletion).
+    """
+    def __init__(self):
+        super().__init__(P=3, theta_dim=3)
+        self.state_names = ["CH4", "O2", "CO2"]
+        self.theta_lo_vec = [1e-5, 0.1, 0.1]
+        self.theta_hi_vec = [50.0, 2.0, 2.0]
+
+    def forward(self, y, theta):
+        CH4, O2, CO2 = y.unbind(dim=-1)
+        k, a, b = theta.unbind(dim=-1)
+
+        eps = 1e-8
+        CH4_p = torch.clamp_min(CH4, eps)
+        O2_p  = torch.clamp_min(O2,  eps)
+        a = torch.clamp(a, 0.1, 2.0)
+        b = torch.clamp(b, 0.1, 2.0)
+        k = torch.clamp_min(k, 0.0)
+
+        r = k * (CH4_p ** a) * (O2_p ** b)
+        return torch.stack((-r, -2.0 * r, r), dim=-1)
 
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
@@ -1256,5 +1386,8 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "methane_revWGS_ohgate_no": MethaneRevWGS_OHGate4Step_NO_Scaffold(),
     "methane_hydrogen_balance": methaneHydrogenBalance_Scaffold(),
     "methane_revWGS_fixed": methaneRevWGS_fixed(),
+    "methane_obs5": Methane5State_Global_Scaffold(),
+    "westbrook_dryer_2step": WestbrookDryer2Step(),
+    "global_one_step": GlobalOneStep(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
 }

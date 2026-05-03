@@ -39,6 +39,21 @@ python last-layer-ode/create_dataset.py --model smooke_reduced_model \
     --obs-indices 0,2,9,14,8,5,11 \
     --output-file datasets/smooke_obs7.npz
 
+# --- Sliced subsets of the 5-obs GRI30 dataset (no re-simulation) ---
+# Source 5-obs ordering: [CH4, O2, CO, CO2, H2O]  (GRI30 idx 13,3,14,15,5)
+#
+# westbrook_dryer_2step states: [CH4, O2, CO, CO2]   -> keep cols 0,1,2,3
+# global_one_step       states: [CH4, O2, CO2]       -> keep cols 0,1,3
+python datasets/methane/slice_obs.py \
+    --source datasets/gri30_obs5_real_rates.npz \
+    --keep-cols 0,1,2,3 \
+    --output datasets/gri30_obs4_westbrookdryer.npz
+
+python datasets/methane/slice_obs.py \
+    --source datasets/gri30_obs5_real_rates.npz \
+    --keep-cols 0,1,3 \
+    --output datasets/gri30_obs3_global1step.npz
+
 # --- Quick smoke test (N=5) ---
 # python last-layer-ode/create_dataset.py --model gri30_full \
 #     --t-span 5 --n-steps 200 --n-samples 5 \

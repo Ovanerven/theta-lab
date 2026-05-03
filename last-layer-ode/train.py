@@ -355,6 +355,7 @@ class TrainConfig:
     cosine_decay: bool = False  # cosine decay from lr to lr*cosine_decay_min after warmup
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
+    train_n: int = 0   # cap on train samples (0 = use all remaining after val/test)
     # legacy: val_frac still accepted but val_n/test_n take precedence when > 0
     val_frac: float = 0.0
     seed: int = 42        # controls model init + training stochasticity only
@@ -416,6 +417,10 @@ class TrainConfig:
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
     obs_idx: list[int] | None = None
+
+    # If set, restrict GRU encoder input to these species indices (must match obs_idx
+    # for a strictly partial-observation experiment). None = all P species (default).
+    gru_y_cols: list[int] | None = None
 
     wandb_enabled: bool = False
     wandb_project: str = "theta-lab"
@@ -616,6 +621,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
         )
 
+    if int(cfg.train_n) > 0 and int(cfg.train_n) < len(train_idx):
+        train_idx = train_idx[: int(cfg.train_n)]
+        print(f"Data-scarce: capped train to train_n={int(cfg.train_n)}")
+
     # persist split so plotting always uses the correct test indices
     np.savez(exp_dir / "split.npz",
              train_idx=train_idx, val_idx=val_idx, test_idx=test_idx)
@@ -703,6 +712,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
+        gru_y_cols=cfg.gru_y_cols,
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.

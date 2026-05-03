@@ -15,7 +15,7 @@
 # All runs use train_R.py so that u_transform / y_transform / obs_idx are
 # handled centrally — no per-model changes needed.
 
-study: txtl_ablation_gru
+study: txtl_ablation_gru_final
 runs_per_job: 1
 time: "04:30:00"
 partition: gpu_a100

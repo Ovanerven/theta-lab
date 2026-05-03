@@ -45,6 +45,8 @@ def _aggregate(rows: list[dict], stat: str = "median") -> list[dict]:
     result = []
     for run, d in by_run.items():
         obs_vals = [v for s, v in d["species"].items() if s in OBS_SPECIES]
+        if not obs_vals:
+            obs_vals = [v for v in d["species"].values() if v is not None and not np.isnan(v)]
         d["primary"] = float(np.mean(obs_vals)) if obs_vals else float("nan")
         result.append(d)
     return sorted(result, key=lambda r: r["primary"])
