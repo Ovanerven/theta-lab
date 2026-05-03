@@ -87,3 +87,8 @@ python last-layer-ode/analysis/plot_per_step_theta_fit.py --export-dir results/t
 | `models/` | Model implementations: `ode_rnn`, `ode_transformer`, `ode_mlp`, `ode_rnn_2020`, `neural_ode`. |
 | `scaffolds.py` | Scaffold (mechanistic ODE structure) registry. |
 | `jumps.py` | Control-to-state jump mappings. |
+
+
+
+
+ck2yaml --input=AramcoMech3.0.MECH --thermo=ARAMCOMECH30.THERM --output=aramco_red.yaml --permissive

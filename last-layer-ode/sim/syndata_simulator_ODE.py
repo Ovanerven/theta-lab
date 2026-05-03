@@ -8,6 +8,10 @@ Created on Tue Dec 23 17:39:36 2025
 from typing import Iterable, Iterator, List, Tuple, Dict
 import random
 import numpy as np
+import cantera as ct
+import collections
+from scipy.interpolate import interp1d
+
 
 # -------------------------------
 # Bolus event functions
@@ -257,6 +261,88 @@ def simulate_ivp_with_bolus(
                     y[species_index[bspec]] += bamt
 
     return np.array(times_out, dtype=float), np.vstack(states_out)
+
+def simulate_cantera_with_bolus(
+    gas_object: ct.Solution, 
+    y0: np.ndarray, 
+    t_start: float, 
+    t_end: float, 
+    bolus_gen, 
+    species_names: list
+):
+    """
+    Simulates a stiff chemical mechanism using Cantera's native ReactorNet.
+    Hardened to prevent CVODES t+h=t stalling during bolus injections.
+    """
+    # 1. Initialize State
+    gas_object.concentrations = y0
+    
+    # 2. Setup Reactor (Using Constant Pressure to prevent explosion stalls)
+    # IdealGasConstPressureReactor is much more stable for bolus injections
+    # than a standard IdealGasReactor (constant volume).
+    reactor = ct.IdealGasConstPressureReactor(gas_object)
+    sim = ct.ReactorNet([reactor])
+    
+    # Relax tolerances slightly to help step through extreme stiffness
+    sim.rtol = 1.0e-4
+    sim.atol = 1.0e-12
+
+    t_history = [t_start]
+    y_history = [gas_object.concentrations]
+    
+    current_t = t_start
+
+    # 3. Process Bolus Events
+    events = list(bolus_gen) if bolus_gen else []
+    events_by_time = collections.defaultdict(list)
+    for t_ev, ch_ev, amt_ev in events:
+        events_by_time[t_ev].append((ch_ev, amt_ev))
+    
+    sorted_event_times = sorted(events_by_time.keys())
+
+    # 4. Integrate
+    for t_ev in sorted_event_times:
+        if t_ev <= current_t or t_ev > t_end:
+            continue
+            
+        # Advance to just before the bolus
+        sim.advance(t_ev)
+        
+        t_history.append(sim.time)
+        y_history.append(gas_object.concentrations)
+        
+        # --- THE CRITICAL FIX: SAFE BOLUS INJECTION ---
+        T_current = gas_object.T
+        P_current = gas_object.P
+        current_concs = gas_object.concentrations
+        
+        for ch_ev, amt_ev in events_by_time[t_ev]:
+            idx = species_names.index(ch_ev)
+            current_concs[idx] += amt_ev 
+            
+            # Absolute safeguard against negative concentrations
+            if current_concs[idx] < 0:
+                current_concs[idx] = 1e-15
+                
+        # Force Cantera to mathematically reconcile the new mass
+        # while holding Temperature and Pressure constant.
+        gas_object.TPY = T_current, P_current, current_concs
+        
+        # Sync the reactor to accept the newly equilibrated gas
+        reactor.syncState() 
+        # ----------------------------------------------
+        
+        t_history.append(sim.time)
+        y_history.append(gas_object.concentrations)
+        current_t = t_ev
+
+    # 5. Finish simulation
+    if current_t < t_end:
+        sim.advance(t_end)
+        t_history.append(sim.time)
+        y_history.append(gas_object.concentrations)
+
+    return np.array(t_history), np.array(y_history)
 
 
 ###############################################################################
