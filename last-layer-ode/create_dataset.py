@@ -37,6 +37,9 @@ class ModelConfig:
     bolus_default: Tuple[float, float] = (0.5, 3.0)
     bolus_count_range: Tuple[int, int] = (2, 50)
     simulator: str = "rk4"
+    cantera_T: float = 1500.0
+    cantera_composition: str = 'CH4:1.0, O2:2.0, N2:7.52'
+    default_tail: Optional[float] = None  # if set, overrides CLI --tail for this model
 
 def _aramco_30_config() -> ModelConfig:
     """
@@ -44,8 +47,11 @@ def _aramco_30_config() -> ModelConfig:
     """
     gas = ct.Solution('datasets/methane/aramco_30.yaml')
     
-    # 1. Set the physical state! (1500K, 1 atm, stoichiometric)
-    gas.TPX = 1500.0, ct.one_atm, 'CH4:1.0, O2:2.0, N2:7.52'
+    # 1000K gives ~1-10s ignition delay — dynamics spread across observation window.
+    # 1500K ignites in microseconds (no visible dynamics at t_span=5s).
+    T_INIT = 1000.0
+    COMPOSITION = 'CH4:1.0, O2:2.0, N2:7.52'
+    gas.TPX = T_INIT, ct.one_atm, COMPOSITION
     
     real_k_params = gas.forward_rate_constants.tolist()
     param_ranges = [(v, v) for v in real_k_params]
@@ -67,9 +73,12 @@ def _aramco_30_config() -> ModelConfig:
         param_ranges=param_ranges,
         x0_default=x0_default,
         bolus_ranges=bolus_ranges,
-        bolus_default=(0.0001, 0.0005), # Scaled down global default
+        bolus_default=(0.0001, 0.0005),
         bolus_count_range=(2, 8),
-        simulator="cantera", # Stick to Cantera ReactorNet for speed!
+        simulator="cantera",
+        cantera_T=T_INIT,
+        cantera_composition=COMPOSITION,
+        default_tail=3.5,  # boluses only in first 1.5s — before ignition at ~1.6s
     )
 
 def _mof_synthesis_config() -> ModelConfig:
@@ -310,54 +319,62 @@ def generate_training_dataset(
         bolus_lo, bolus_hi = mcfg.bolus_count_range
         n_bolus = int(rng.integers(bolus_lo, bolus_hi))
 
+        effective_tail = mcfg.default_tail if mcfg.default_tail is not None else tail
         if mcfg.bolus_ranges is not None:
             t_event, ch_event, amt_event = _generate_random_events_per_channel(
-                rng=rng, n_bolus=n_bolus, t_start=0.0, t_end=max(0.0, t_span - tail),
+                rng=rng, n_bolus=n_bolus, t_start=0.0, t_end=max(0.0, t_span - effective_tail),
                 n_channels=d_in, control_names=control_names,
                 bolus_ranges=mcfg.bolus_ranges, bolus_default=mcfg.bolus_default,
             )
         else:
             t_event, ch_event, amt_event = _generate_random_events_idx(
-                rng=rng, n_bolus=n_bolus, t_start=0.0, t_end=max(0.0, t_span - tail),
+                rng=rng, n_bolus=n_bolus, t_start=0.0, t_end=max(0.0, t_span - effective_tail),
                 amount_range=mcfg.bolus_default, n_channels=d_in,
             )
 
         events = [(float(t), str(control_names[int(ch)]), float(a)) for t, ch, a in zip(t_event, ch_event, amt_event)]
         x0_full = x0_template.copy()
 
-        if mcfg.simulator == "ivp":
-            t_solver, x_solver = simulate_ivp_with_bolus(
-                model_fn,
-                k=k_for_sim,
-                y0=x0_full,
-                t_start=0.0,
-                t_end=t_span,
-                bolus_gen=single_event_generator(events),
-                species_names=names_full,
-            )
-        elif mcfg.simulator == "cantera":
-            gas_obj = ct.Solution('datasets/methane/aramco_30.yaml')
-            gas_obj.TPX = 1500.0, ct.one_atm, 'CH4:1.0, O2:2.0, N2:7.52' 
-            
-            t_solver, x_solver = simulate_cantera_with_bolus(
-                gas_object=gas_obj,
-                y0=x0_full,
-                t_start=0.0,
-                t_end=t_span,
-                bolus_gen=single_event_generator(events),
-                species_names=names_full,
-            )
-        else:
-            t_solver, x_solver = simulate_chain_with_bolus(
-                model_fn,
-                k=k_for_sim,
-                y0=x0_full,
-                t_start=0.0,
-                t_end=t_span,
-                dt=0.01,
-                bolus_gen=single_event_generator(events),
-                species_names=names_full,
-            )
+        try:
+            if mcfg.simulator == "ivp":
+                t_solver, x_solver = simulate_ivp_with_bolus(
+                    model_fn,
+                    k=k_for_sim,
+                    y0=x0_full,
+                    t_start=0.0,
+                    t_end=t_span,
+                    bolus_gen=single_event_generator(events),
+                    species_names=names_full,
+                )
+            elif mcfg.simulator == "cantera":
+                gas_obj = ct.Solution('datasets/methane/aramco_30.yaml')
+                gas_obj.TPX = mcfg.cantera_T, ct.one_atm, mcfg.cantera_composition
+                t_solver, x_solver = simulate_cantera_with_bolus(
+                    gas_object=gas_obj,
+                    y0=x0_full,
+                    t_start=0.0,
+                    t_end=t_span,
+                    bolus_gen=single_event_generator(events),
+                    species_names=names_full,
+                    t_record=t_obs,
+                )
+            else:
+                t_solver, x_solver = simulate_chain_with_bolus(
+                    model_fn,
+                    k=k_for_sim,
+                    y0=x0_full,
+                    t_start=0.0,
+                    t_end=t_span,
+                    dt=0.01,
+                    bolus_gen=single_event_generator(events),
+                    species_names=names_full,
+                )
+        except Exception:
+            n_failed += 1
+            y0[i] = 0.0
+            y_seq[i] = 0.0
+            u_seq[i] = 0.0
+            continue
 
         x_solver = np.asarray(x_solver, dtype=np.float32)
         t_solver = np.asarray(t_solver, dtype=np.float32)
