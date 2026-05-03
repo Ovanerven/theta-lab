@@ -30,5 +30,5 @@ theta_hi: 100.0
 n_substeps: 1
 
 ckpt_every: 10
-jit_scripting: false
+jit_scripting: true
 model_class: ode_rnn

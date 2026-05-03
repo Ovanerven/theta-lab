@@ -10,9 +10,9 @@ runs_per_job: 1
 time: "01:00:00"
 partition: gpu_h100
 no_plot: false
+base_config: configs/methane/gru_methane_gri30.yaml
 
 fixed:
-  base_config: configs/methane/gru_methane_gri30.yaml
   dataset_path: datasets/gri30_obs5_real_rates.npz
   scaffold: methane_obs5
   obs_idx: [0, 4]
