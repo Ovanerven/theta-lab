@@ -19,7 +19,7 @@ N_STEPS=400
 SEED=42
 
 # N values to generate
-NS=(1000 100 10 3)
+NS=(1000)
 
 # Oracle22 controls (same for all reduced datasets — trajectory is from oracle22):
 #   Glc + ATP/ADP/NAD/NADH + 6 inhibitor pools
