@@ -1,0 +1,186 @@
+# Scaffold comparison: resource+maturation vs maturation-only.
+#
+# Root cause confirmed by oracle rollout (results/oracle_rollout_scoring/summary.csv):
+#   maturation scaffold     → R²_endpoint_pm = +0.803 (oracle / perfect theta)
+#   resource+maturation     → R²_endpoint_pm = -0.043
+#
+# WHY: O is not measured. In y_seq, every column except mm and pm is all zeros.
+# y0 hard-codes R=1, O=1 as initial conditions but there is no O trajectory in
+# the data. The resource+maturation scaffold gates pm on O (dpm = O*kmt*p), so
+# lam_O is completely unidentifiable — even an oracle cannot recover O's dynamics.
+# This is a structural identifiability failure, not a training problem.
+#
+# Arms:
+#   A* — best training recipe (b5+bottle) with resource+maturation scaffold (control)
+#         dataset: real_ivtt_raw_no_outliers.npz (7-state), obs_idx=[3,5]
+#   B* — same recipe with maturation-only scaffold
+#         dataset: real_ivtt_mat_dna.npz (6-state, no O), obs_idx=[2,4]
+#   C* — supervisor-pure recipe (no aux losses, gamma head) × both scaffolds
+#
+# Each arm run with 2 seeds to confirm stability.
+# Same oracle test set (maturation) used for both so the R² is comparable.
+
+study: txtl_scaffold_comparison
+runs_per_job: 1
+time: "06:00:00"
+partition: gpu_h100
+no_plot: false
+train_script: last-layer-ode/train_R.py
+base_config: configs/archs/gru.yaml
+
+fixed:
+  # model_class is set per-run: resource+maturation uses ode_rnn_txtl_approx (Bob's approx),
+  # maturation-only uses ode_rnn_txtl_mat_approx (same approx, O frozen, no lam_O).
+  val_n: 104
+  test_n: 104
+  fixed_test_idx_path: results/oracle_rollout_scoring/test_idx_104_maturation.npy
+
+  stratified_split: true
+  stratify_bins: 5
+
+  u_transform: minmax_sqrt
+  y_transform: sqrt_clamp1
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+  detach_y_prev: true
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  auto_scale_aux_losses: true
+  lambda_pm_tail: 0.5
+  pm_tail_frac: 0.5
+  lambda_r_terminal: 1.0e-05
+  r_terminal_frac: 0.05
+  lambda_o_terminal: 0.0
+  lambda_endpoint: 1.0
+  endpoint_mrna_obs_idx: 0
+  endpoint_protein_obs_idx: 1
+
+  batch_size: 200
+  epochs: 400
+  lr: 0.001
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  grad_clip: 1.0
+  lift_dim: 32
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  head_bias_init: 2.0
+  head_weight_gain: 3.0
+  head_bottle: true
+  theta_head_transform: log_gamma
+  lift_skip: false
+
+  early_stop_patience: 999999
+  endpoint_r2: true
+  jit_scripting: true
+
+runs:
+  # ── A: best recipe + resource+maturation scaffold (current baseline) ──
+  - exp_name: A0_resource_mat_s1
+    model_class: ode_rnn_txtl_approx
+    scaffold: txtl_resource_and_maturation_dna
+    theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── B: same recipe + maturation-only scaffold (O decoupled from dpm) ──
+  # Uses ode_rnn_txtl_mat_approx: same Bob's approx as resource+mat but O frozen, no lam_O.
+  - exp_name: B0_maturation_only_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── C: supervisor-pure recipe (no aux losses, gamma head) × both scaffolds ──
+  # Isolates whether the scaffold advantage holds under the supervisor's own recipe.
+  - exp_name: C0_resource_mat_super_s1
+    model_class: ode_rnn_txtl_approx
+    scaffold: txtl_resource_and_maturation_dna
+    theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+    loss_type: mse
+    obs_normalization: none
+    auto_scale_aux_losses: false
+    lambda_endpoint: 0.0
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 0.0
+    lambda_o_terminal: 0.0
+    lr: 0.0018
+    dropout: 0.2
+    theta_head_transform: gamma
+    lift_skip: true
+    head_bias_init: 0.0
+    head_weight_gain: 1.0
+    tf_drop_epoch: 999999
+
+  - exp_name: C1_maturation_only_super_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+    loss_type: mse
+    obs_normalization: none
+    auto_scale_aux_losses: false
+    lambda_endpoint: 0.0
+    lambda_pm_tail: 0.0
+    lambda_r_terminal: 0.0
+    lambda_o_terminal: 0.0
+    lr: 0.0018
+    dropout: 0.2
+    theta_head_transform: gamma
+    lift_skip: true
+    head_bias_init: 0.0
+    head_weight_gain: 1.0
+    tf_drop_epoch: 999999
+
+  # ── D: y0_theta_init ablation — MLP(y0) logit bias + GRU ──
+  # Tests whether a per-sample theta prior from y0 helps the GRU escape the
+  # population-mean collapse observed in earlier sweeps.
+  - exp_name: D0_maturation_y0init_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    y0_theta_init: true
+    seed: 1
+    split_seed: 42
+
+  - exp_name: D1_resource_mat_y0init_s1
+    model_class: ode_rnn_txtl_approx
+    scaffold: txtl_resource_and_maturation_dna
+    theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    y0_theta_init: true
+    seed: 1
+    split_seed: 42

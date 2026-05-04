@@ -81,6 +81,10 @@ class OdeRNN(nn.Module):
                                             # Restricting to obs_idx prevents the GRU from being
                                             # confused by unobservable latent states.
         head_bias_init: float = 0.0,        # init all head biases to this value (<0 starts theta near lo)
+        head_bias_init_vec: Optional[list] = None,  # per-theta-component bias init vector of length theta_dim;
+                                                    # when provided, overrides `head_bias_init` on the theta slice
+                                                    # of head.bias. Computed offline from per-step fit medians,
+                                                    # inverse-transformed through the active theta_head_transform.
         head_weight_gain: float = 1.0,      # Xavier gain for head weights (>1 amplifies per-experiment variation)
         detach_y_prev: bool = True,         # if False, allow gradients to flow through y_prev in GRU
         u_minmax_max: Optional[torch.Tensor] = None,  # per-channel max for "minmax" / "minmax_sqrt" u_transform
@@ -93,6 +97,8 @@ class OdeRNN(nn.Module):
         gru_variant: str = "nn_gru",                  # "nn_gru" (default) | "stacked_cell" (supervisor's stacked GRUCell + dropout-on-last)
         gru_init: str = "default",                    # "default" (PyTorch defaults) | "supervisor" (orthogonal_ W_hh + xavier_ W_ih + zeros)
         head_init: str = "default",                   # "default" (PyTorch defaults; respect head_bias_init/head_weight_gain) | "supervisor" (xavier_ + zeros, unconditional)
+        y0_theta_init: bool = False,                  # if True, add an MLP(y0) logit bias so the GRU starts from a
+                                                      # per-sample theta prior rather than from the population mean
         **kwargs,
     ):
         super().__init__()
@@ -123,6 +129,7 @@ class OdeRNN(nn.Module):
         self.gru_variant = str(gru_variant)
         self.gru_init = str(gru_init)
         self.head_init = str(head_init)
+        self.y0_theta_init = bool(y0_theta_init)
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -187,6 +194,14 @@ class OdeRNN(nn.Module):
                 nn.init.constant_(self.head.bias, float(head_bias_init))
             if head_weight_gain != 1.0:
                 nn.init.xavier_uniform_(self.head.weight, gain=float(head_weight_gain))
+            if head_bias_init_vec is not None:
+                vec = torch.as_tensor(list(head_bias_init_vec), dtype=self.head.bias.dtype)
+                if vec.numel() != self.theta_dim:
+                    raise ValueError(
+                        f"head_bias_init_vec has length {vec.numel()}, expected theta_dim={self.theta_dim}"
+                    )
+                with torch.no_grad():
+                    self.head.bias[:self.theta_dim].copy_(vec)
 
         # GRU init: "supervisor" forces orthogonal_(W_hh) + xavier_uniform_(W_ih) + zeros(biases)
         # on whichever variant is in use. nn.GRU stores params under names like
@@ -207,6 +222,21 @@ class OdeRNN(nn.Module):
                         nn.init.orthogonal_(p)
                     elif "bias" in name:
                         nn.init.zeros_(p)
+
+        # y0 MLP: encodes the initial observation y0 into a per-sample logit bias added
+        # to the GRU head output at every timestep.  Zero-initialized output layer so the
+        # model starts as a standard GRU (no regression to the population mean at init).
+        # Input uses the same y-column subset the GRU sees (gru_y_cols if set, else all P).
+        if self.y0_theta_init:
+            self.y0_mlp = nn.Sequential(
+                nn.Linear(gru_y_dim, lift_dim),
+                nn.SiLU(),
+                nn.Linear(lift_dim, self.theta_dim),
+            )
+            nn.init.zeros_(self.y0_mlp[-1].weight)
+            nn.init.zeros_(self.y0_mlp[-1].bias)
+        else:
+            self.y0_mlp = None
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
@@ -268,6 +298,19 @@ class OdeRNN(nn.Module):
         if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
             u_gru = u_gru.clamp_min(0.0).sqrt()
 
+        # Per-sample logit bias from y0 MLP (None when y0_theta_init=False).
+        if self.y0_mlp is not None:
+            y0_feat = y0[:, self.gru_y_cols] if self.gru_y_cols is not None else y0
+            if y_transform == "sqrt":
+                y0_feat = y0_feat.clamp_min(0.0).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                y0_feat = y0_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+            elif y_transform == "log1p":
+                y0_feat = torch.log1p(y0_feat.clamp_min(0.0))
+            raw_y0_bias: Optional[torch.Tensor] = self.y0_mlp(y0_feat)  # (B, theta_dim)
+        else:
+            raw_y0_bias = None
+
         y_prev = y0
         for k in range(K):
             u_k     = u_seq[:, k, :]   # raw delta — used only for ODE jumps
@@ -300,6 +343,10 @@ class OdeRNN(nn.Module):
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
             raw = self.head(self.head_bottle(z.squeeze(1)))
+            if raw_y0_bias is not None:
+                raw = raw + raw_y0_bias if not self.use_basal else torch.cat(
+                    [raw[:, :self.theta_dim] + raw_y0_bias, raw[:, self.theta_dim:]], dim=-1
+                )
 
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]

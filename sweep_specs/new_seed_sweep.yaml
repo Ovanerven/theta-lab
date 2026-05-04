@@ -1,0 +1,39 @@
+# Compare exact analytical integrator vs Bob's approximate integrator.
+#
+# The only difference between the two arms is model_class:
+#   ode_rnn_txtl        — closed-form exact solution (your original)
+#   ode_rnn_txtl_approx — Bob's approximate step (uses R_curr as constant,
+#                         pseudo-equilibrium m_inf, lumped M = m+mm for p)
+#
+# Both use u_transform=sqrt (Bob's scale), split_seed=56 (Bob's seed),
+# and the sp12-aligned training recipe (lr=2.3e-3, wd=8e-4, hidden=400,
+# theta_state_reg with R-mask, lambda_r_terminal=1.0).
+#
+# Grid (2 × 3 = 6 runs):
+#   model_class   ode_rnn_txtl | ode_rnn_txtl_approx
+#   seed          1 | 2 | 3
+#
+# If ode_rnn_txtl_approx consistently beats ode_rnn_txtl, the integrator
+# mismatch hypothesis is confirmed as the primary failure mode.
+
+study: sweep_seed
+runs_per_job: 1
+time: "05:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/sweep_seed56_sqrt.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  u_transform: sqrt
+  split_seed: 56
+  val_n: 104
+  test_n: 104
+  endpoint_r2: true
+  model_class: ode_rnn_txtl_approx
+
+grid:
+  seed: [29, 100, 42, 78, 35]
+
+exp_name: "s{seed}"

@@ -52,14 +52,17 @@ class NeuralODE(nn.Module):
         if u_minmax_max is not None and u_minmax_cols is not None:
             cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
             u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
+            self._has_u_minmax = True
+        else:
+            self._has_u_minmax = False
         self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
-    def _apply_y_transform(self, y: torch.Tensor, y_transform: str) -> torch.Tensor:
+    def _y_feat(self, y: torch.Tensor, y_transform: str) -> torch.Tensor:
         if y_transform == "sqrt":
             return y.clamp_min(0.0).sqrt()
-        elif y_transform == "sqrt_clamp1":
+        if y_transform == "sqrt_clamp1":
             return y.clamp_min(0.0).sqrt().clamp_min(1.0)
-        elif y_transform == "log1p":
+        if y_transform == "log1p":
             return torch.log1p(y.clamp_min(0.0))
         return y
 
@@ -67,16 +70,16 @@ class NeuralODE(nn.Module):
         self,
         y: torch.Tensor,
         dt: torch.Tensor,
-        u_feat: torch.Tensor,   # already transformed u for MLP input
-        y_transform: str,
+        u_k: torch.Tensor,
+        y_transform: str = "none",
     ) -> torch.Tensor:
         n_sub = self.n_substeps
         hdt = dt.unsqueeze(1) / float(n_sub)
         for _ in range(n_sub):
-            k1 = self.mlp(torch.cat([self._apply_y_transform(y,                   y_transform), u_feat], dim=-1))
-            k2 = self.mlp(torch.cat([self._apply_y_transform(y + 0.5 * hdt * k1, y_transform), u_feat], dim=-1))
-            k3 = self.mlp(torch.cat([self._apply_y_transform(y + 0.5 * hdt * k2, y_transform), u_feat], dim=-1))
-            k4 = self.mlp(torch.cat([self._apply_y_transform(y +       hdt * k3,  y_transform), u_feat], dim=-1))
+            k1 = self.mlp(torch.cat([self._y_feat(y,                   y_transform), u_k], dim=-1))
+            k2 = self.mlp(torch.cat([self._y_feat(y + 0.5 * hdt * k1, y_transform), u_k], dim=-1))
+            k3 = self.mlp(torch.cat([self._y_feat(y + 0.5 * hdt * k2, y_transform), u_k], dim=-1))
+            k4 = self.mlp(torch.cat([self._y_feat(y +       hdt * k3, y_transform), u_k], dim=-1))
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
         return torch.clamp_min(y, 0.0)
 
@@ -107,11 +110,24 @@ class NeuralODE(nn.Module):
         use_partial = obs_idx.numel() > 0
         has_y_seq   = y_seq is not None
 
+        if u_transform in ("cumsum", "cumsum_sqrt"):
+            u_mlp = u_seq.cumsum(dim=1)
+        else:
+            u_mlp = u_seq
+        if u_transform in ("minmax", "minmax_sqrt"):
+            if not self._has_u_minmax:
+                raise ValueError(
+                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
+                )
+            u_mlp = u_mlp / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+            u_mlp = u_mlp.clamp_min(0.0).sqrt()
+
         y_prev = y0
         for k in range(K):
-            u_k      = u_seq[:, k, :]    # raw delta — used for ODE jumps
-            u_feat_k = u_feat[:, k, :]   # transformed — used for MLP features
-            dt_k     = dt_seq[:, k]
+            u_k     = u_seq[:, k, :]   # raw — used for the bolus jump
+            u_mlp_k = u_mlp[:, k, :]   # transformed — used as MLP feature
+            dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
 
@@ -124,7 +140,7 @@ class NeuralODE(nn.Module):
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()  # type: ignore[index]
 
             y = y_in + (u_k @ self.u_to_y_jump)
-            y = self._rk4_substeps(y, dt_k, u_feat_k, y_transform)
+            y = self._rk4_substeps(y, dt_k, u_mlp_k, y_transform)
 
             y_out[:, k, :] = y
             y_prev = y

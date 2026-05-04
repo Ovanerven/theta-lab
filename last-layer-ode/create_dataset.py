@@ -7,12 +7,52 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy.interpolate import interp1d
 import cantera as ct
+import torch
 
 from sim.benchmark_models import FullModel
 from sim.MOF_model import MOF_Synthesis
 from sim.Single_enzyme import SingleEnzyme
 from sim.explicit_methane_models import GRI30_FullModel, Kazakov_MiddleModel, Smooke_ReducedModel, Aramco_FullModel
 from sim.syndata_simulator_ODE import simulate_chain_with_bolus, simulate_ivp_with_bolus, single_event_generator, simulate_cantera_with_bolus
+
+# Lazy singleton — avoids instantiating the scaffold at import time.
+_glycolysis_oracle22_scaffold = None
+
+def _get_glycolysis_oracle():
+    global _glycolysis_oracle22_scaffold
+    if _glycolysis_oracle22_scaffold is None:
+        from sim.glycolysis import GlycolysisOracle22Scaffold
+        _glycolysis_oracle22_scaffold = GlycolysisOracle22Scaffold()
+    return _glycolysis_oracle22_scaffold
+
+
+def GlycolysisOracle22(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False):
+    """
+    22-state inhibited glycolysis oracle (scipy-compatible interface).
+
+    States (22): Glc, G6P, F6P, FBP, GAP, DHAP, BPG13, PG3, PG2, PEP, Pyr, Lac,
+                 ATP, ADP, NAD, NADH, I_HK, I_PFK, I_GAPDH, I_PGK, I_ENO, I_PK
+    Parameters (33): k_hk … K_I_j, k_I_j_decay (see GlycolysisOracle22Scaffold)
+
+    Observed species: Glc (0), Pyr (10), ATP (12), NADH (15)
+    Recommended: --obs-indices 0,10,12,15 --control-indices 0,16,17,18,19,20,21
+                 --t-span 20 --n-steps 400
+    """
+    if dim:
+        names = [
+            "Glc", "G6P", "F6P", "FBP", "GAP", "DHAP",
+            "BPG13", "PG3", "PG2", "PEP", "Pyr", "Lac",
+            "ATP", "ADP", "NAD", "NADH",
+            "I_HK", "I_PFK", "I_GAPDH", "I_PGK", "I_ENO", "I_PK",
+        ]
+        return 22, 33, names
+    scaffold = _get_glycolysis_oracle()
+    y_t = torch.from_numpy(np.asarray(y, dtype=np.float32)).unsqueeze(0)
+    k_t = torch.from_numpy(np.asarray(k, dtype=np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        dy = scaffold(y_t, k_t).squeeze(0).numpy()
+    return dy.astype(np.float64)
+
 
 SIM_MODELS = {
     "full13":               FullModel,
@@ -22,6 +62,7 @@ SIM_MODELS = {
     "kazakov_middle":       Kazakov_MiddleModel,
     "smooke_reduced_model": Smooke_ReducedModel,
     "aramco_30":            Aramco_FullModel,   # Natively routes to your explicit Python equations
+    "glycolysis_oracle22":  GlycolysisOracle22,
 }
 
 # ============================================================
@@ -43,6 +84,67 @@ class ModelConfig:
     cantera_composition: str = 'CH4:1.0, O2:2.0, N2:7.52'
     cantera_use_mole_fractions: bool = False  # convert concentrations → mole fractions before storing
     default_tail: Optional[float] = None  # if set, overrides CLI --tail for this model
+
+def _glycolysis_oracle22_config() -> ModelConfig:
+    """
+    Fixed-oracle glycolysis config.  The 33 parameters are set to a single
+    ground-truth vector (lo == hi), so every trajectory shares the same kinetics
+    and only the bolus pattern differs.
+
+    Control channels (7): Glc (0), I_HK (16), I_PFK (17), I_GAPDH (18),
+                          I_PGK (19), I_ENO (20), I_PK (21)
+    Observed (4):         Glc, Pyr, ATP, NADH → indices [0, 10, 12, 15]
+
+    Suggested CLI flags:
+      --obs-indices 0,10,12,15  --control-indices 0,16,17,18,19,20,21
+      --t-span 20  --n-steps 400
+    """
+    true_params = [
+        # k_hk, k_pgi_f, k_pgi_r, k_pfk, k_ald_f, k_ald_r
+        0.5,  2.0,  1.0,  0.5,  0.5,  0.1,
+        # k_tpi_f, k_tpi_r, k_gapdh, k_pgk, k_pgm_f, k_pgm_r
+        5.0,  2.0,  1.0,  2.0,  2.0,  1.0,
+        # k_eno, k_pk, k_ldh, k_pyr_sink, k_atpase, k_nadh_ox
+        1.0,  2.0,  0.5,  0.1,  0.2,  0.3,
+        # k_leak_hex, k_leak_tri, k_leak_lower
+        0.02, 0.02, 0.01,
+        # K_I_HK, K_I_PFK, K_I_GAPDH, K_I_PGK, K_I_ENO, K_I_PK
+        1.0,  1.0,  1.0,  1.0,  1.0,  1.0,
+        # k_I_HK_decay, k_I_PFK_decay, k_I_GAPDH_decay, k_I_PGK_decay, k_I_ENO_decay, k_I_PK_decay
+        0.2,  0.2,  0.2,  0.2,  0.2,  0.2,
+    ]
+    param_ranges = [(v, v) for v in true_params]
+
+    x0_default = [
+        5.0,              # Glc
+        0.1, 0.05, 0.02,  # G6P, F6P, FBP
+        0.01, 0.01,       # GAP, DHAP
+        0.0, 0.0, 0.0, 0.0,  # BPG13, PG3, PG2, PEP
+        0.0, 0.0,         # Pyr, Lac
+        2.0, 0.5,         # ATP, ADP
+        1.0, 0.1,         # NAD, NADH
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # inhibitor pools start at zero
+    ]
+
+    bolus_ranges = {
+        "Glc":    (0.5, 3.0),
+        "I_HK":   (0.1, 2.0),
+        "I_PFK":  (0.1, 2.0),
+        "I_GAPDH": (0.1, 2.0),
+        "I_PGK":  (0.1, 2.0),
+        "I_ENO":  (0.1, 2.0),
+        "I_PK":   (0.1, 2.0),
+    }
+
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 2.0),
+        bolus_count_range=(3, 15),
+        simulator="ivp",
+    )
+
 
 def _aramco_30_config() -> ModelConfig:
     """
@@ -161,7 +263,8 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "gri30_full":           _gri30_full_config(),
     "kazakov_middle":       _kazakov_middle_config(),
     "smooke_reduced_model": _smooke_reduced_config(),
-    "aramco_30":            _aramco_30_config(),   
+    "aramco_30":            _aramco_30_config(),
+    "glycolysis_oracle22":  _glycolysis_oracle22_config(),
 }
 
 # ============================================================
@@ -447,7 +550,7 @@ def generate_training_dataset(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="full13",
-                        choices=list(SIM_MODELS.keys()),
+                        choices=sorted(SIM_MODELS.keys()),
                         help="Simulation model to use for data generation.")
     parser.add_argument("--n-samples", type=int, default=1000)
     parser.add_argument("--t-span", type=float, default=300.0)

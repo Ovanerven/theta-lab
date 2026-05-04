@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import math
 
+from sim.glycolysis import (
+    GlycolysisOracle22Scaffold,
+    GlycolysisReduced12Scaffold,
+    GlycolysisReduced8Scaffold,
+    GlycolysisReduced4Scaffold,
+)
+
 class MechanisticScaffold(nn.Module):
     def __init__(self, P: int, theta_dim: int):
         super().__init__()
@@ -668,6 +675,49 @@ class TXTLResourceandMaturationDNAScaffold(MechanisticScaffold):
         dmm  = kmatm * m_p - kdm * mm_p
         dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
         dpm  = O_p * kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
+
+
+class TXTLMaturationOnly7Scaffold(MechanisticScaffold):
+    """
+    7-state TXTL scaffold (same layout as TXTLResourceandMaturationDNAScaffold)
+    but with O decoupled from dpm — i.e., pure mRNA-maturation kinetics only.
+
+    This is the ablation counterpart of txtl_resource_and_maturation_dna: same
+    obs_idx=[3,5], same dataset layout, same theta bounds except lam_O is
+    dropped (theta_dim=6 vs 7).  The only mechanistic difference is:
+        dpm = kmt * p      (resource scaffold has dpm = O * kmt * p)
+    O is retained as a dummy state (dO = 0) so the dataset's 7-column y_seq
+    can be used directly without any dataset changes.
+
+    States (7): R, O (dummy), m, mm, p, pm, DNA
+    Parameters θ (6): lam, VTXmax, kdm, VTLmax, kmt, kmatm
+    Observed indices: [3, 5]  (mm, pm) — identical to resource variant
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=6)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dR   = -lam * R_p
+        dO   = torch.zeros_like(O)
+        dm   = R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  = kmt * p_p
         dDNA = torch.zeros_like(DNA)
 
         return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
@@ -1649,4 +1699,10 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "kovacs_54":  Kovacs54Scaffold(),
     "kovacs_7": KovacsMethaneSRPScaffold(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
+    "txtl_maturation_only_dna": TXTLMaturationOnly7Scaffold(),
+    # Glycolysis scaffolds (oracle + 3 reduced models)
+    "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
+    "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
+    "glycolysis_reduced8":  GlycolysisReduced8Scaffold(),
+    "glycolysis_reduced4":  GlycolysisReduced4Scaffold(),
 }

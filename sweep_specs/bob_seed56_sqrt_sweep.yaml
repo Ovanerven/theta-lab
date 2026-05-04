@@ -1,0 +1,43 @@
+# Disambiguate why training collapses to mean while Bob's checkpoint
+# (loaded with raw u + sqrt) hits R²≈0.5–0.7 on the same dataset.
+#
+# Grid (2 × 2 × 3 = 12 runs):
+#   u_transform   sqrt | minmax_sqrt
+#                 sqrt matches Bob's torch.sqrt(u_k) on raw values;
+#                 minmax_sqrt is the sp12 default (raw u / u_max, then sqrt
+#                 — values ~50× smaller than what Bob's GRU was trained on).
+#   split_seed    56 | 12
+#                 56 is Bob's published-plot seed; 12 is the sp12 baseline.
+#                 Tells us whether the data split itself is doing the work.
+#   seed          1 | 2 | 3
+#                 Three training seeds per cell to separate signal from
+#                 variance-collapse jitter (the primary failure mode in
+#                 memory note: txtl_r2_diagnosis).
+#
+# All other fields inherit from base_config (sweep_seed56_sqrt.yaml),
+# which is sp12 with u_transform/split_seed adjusted — but the grid
+# overrides those two anyway, so the base just provides the rest of the
+# sp12-aligned recipe (lr=0.0023, wd=0.0008, hidden=400, layers=2,
+# theta_state_reg with R-mask, lambda_r_terminal=1.0, etc.).
+
+study: bob_seed56_sqrt_sweep
+runs_per_job: 1
+time: "05:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/sweep_seed56_sqrt.yaml
+
+fixed:
+  dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_txtl
+  val_n: 104
+  test_n: 104
+  endpoint_r2: true
+
+grid:
+  u_transform: [sqrt, minmax_sqrt]
+  split_seed:  [56, 12]
+  seed:        [1, 2, 3]
+
+exp_name: "u-{u_transform}_sp{split_seed}_s{seed}"
