@@ -545,13 +545,17 @@ class GlycolysisReduced4Scaffold(MechanisticScaffold):
         super().__init__(P=4, theta_dim=7)
         self.state_names = ["Glc", "Pyr", "ATP", "NADH"]
 
+        # All bounds positive: ATP and NADH are net *produced* from glucose
+        # breakdown (2 ATP, 2 NADH per glucose), so k_atp_eff and k_nadh_eff
+        # are sign-fixed positive. (Earlier signed bounds broke `log_gamma`,
+        # which requires lo and hi to share sign.)
         self.theta_lo_vec = [
             1e-5,   # k_glc_use
             1e-5,   # k_pyr_prod
             1e-5,   # k_pyr_sink
-            -10.0,  # k_atp_eff
+            1e-5,   # k_atp_eff
             1e-5,   # k_atp_loss
-            -10.0,  # k_nadh_eff
+            1e-5,   # k_nadh_eff
             1e-5,   # k_nadh_loss
         ]
 

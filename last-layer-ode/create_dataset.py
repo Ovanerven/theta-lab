@@ -129,6 +129,12 @@ SIM_MODELS = {
     "glycolysis_reduced12": GlycolysisReduced12,
     "glycolysis_reduced8":  GlycolysisReduced8,
     "glycolysis_reduced4":  GlycolysisReduced4,
+    # Oracle22-driven reduced datasets (the *correct* setup for reduced scaffolds):
+    # these route to the 22-state oracle simulator; the dataset save step then
+    # applies a lumping projection M (P_lumped, 22) defined in MODEL_CONFIGS.
+    "glycolysis_oracle_to_reduced12": GlycolysisOracle22,
+    "glycolysis_oracle_to_reduced8":  GlycolysisOracle22,
+    "glycolysis_oracle_to_reduced4":  GlycolysisOracle22,
 }
 
 # ============================================================
@@ -152,6 +158,14 @@ class ModelConfig:
     default_tail: Optional[float] = None  # if set, overrides CLI --tail for this model
     cantera_pulsed_mode: bool = False  # start from hot equilibrium, inject CH4 boluses
     cantera_pulsed_Y: Optional[List[float]] = None  # pre-computed equilibrium mass fractions (phi=0.4)
+    # Lumping projection: simulate in the FULL state space (n_states_full), then
+    # save y_seq = (M @ x_full).T  where M has shape (P_lumped, n_states_full).
+    # When set, `obs_indices` is used only to wire control→state jumps via
+    # `make_u_to_y_jump` (treat each entry as the "primary" oracle index of the
+    # corresponding lumped state — boluses on that primary index map directly
+    # to the lumped channel during training).
+    lumping_matrix: Optional[np.ndarray] = None
+    lumping_state_names: Optional[List[str]] = None
 
 def _glycolysis_oracle22_config() -> ModelConfig:
     """
@@ -299,6 +313,88 @@ def _glycolysis_reduced4_config() -> ModelConfig:
     )
 
 
+# ---------------------------------------------------------------------------
+# Oracle-driven reduced datasets: simulate from the 22-state oracle, then
+# project to the reduced-state observable via a fixed lumping matrix.  This
+# is the *correct* setup for evaluating reduced scaffolds: data has full
+# kinetic structure; scaffold is asked to compensate for the missing states
+# and simplified rate laws.
+# ---------------------------------------------------------------------------
+
+# oracle22 state ordering (indices):
+#   0 Glc   1 G6P   2 F6P   3 FBP   4 GAP   5 DHAP   6 BPG13   7 PG3   8 PG2
+#   9 PEP   10 Pyr  11 Lac  12 ATP  13 ADP  14 NAD   15 NADH   16-21 I_*
+
+def _oracle_lumping_for_reduced12() -> Tuple[np.ndarray, List[str], List[int]]:
+    """reduced12 states: [Glc, HexP, TriP, BPG13, PG3, PEP, Pyr, Lac, ATP, ADP, NAD, NADH]
+    HexP = G6P+F6P+FBP, TriP = GAP+DHAP, PG3 = PG3+PG2 (lumped)."""
+    M = np.zeros((12, 22), dtype=np.float32)
+    M[0,  0] = 1.0                                     # Glc
+    M[1,  1] = M[1, 2] = M[1, 3] = 1.0                 # HexP ← G6P+F6P+FBP
+    M[2,  4] = M[2, 5] = 1.0                           # TriP ← GAP+DHAP
+    M[3,  6] = 1.0                                     # BPG13
+    M[4,  7] = M[4, 8] = 1.0                           # PG3 ← PG3+PG2
+    M[5,  9] = 1.0                                     # PEP
+    M[6, 10] = 1.0                                     # Pyr
+    M[7, 11] = 1.0                                     # Lac
+    M[8, 12] = 1.0                                     # ATP
+    M[9, 13] = 1.0                                     # ADP
+    M[10, 14] = 1.0                                    # NAD
+    M[11, 15] = 1.0                                    # NADH
+    names = ["Glc", "HexP", "TriP", "BPG13", "PG3", "PEP",
+             "Pyr", "Lac", "ATP", "ADP", "NAD", "NADH"]
+    primary = [0, 1, 4, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+    return M, names, primary
+
+
+def _oracle_lumping_for_reduced8() -> Tuple[np.ndarray, List[str], List[int]]:
+    """reduced8 states: [Glc, SugarP, PEP, Pyr, Lac, ATP, NAD, NADH]
+    SugarP = G6P+F6P+FBP+GAP+DHAP+BPG13+PG3+PG2 (all phosphorylated intermediates)."""
+    M = np.zeros((8, 22), dtype=np.float32)
+    M[0, 0] = 1.0                                      # Glc
+    for k in range(1, 9):                              # SugarP ← idx 1..8
+        M[1, k] = 1.0
+    M[2,  9] = 1.0                                     # PEP
+    M[3, 10] = 1.0                                     # Pyr
+    M[4, 11] = 1.0                                     # Lac
+    M[5, 12] = 1.0                                     # ATP
+    M[6, 14] = 1.0                                     # NAD
+    M[7, 15] = 1.0                                     # NADH
+    names = ["Glc", "SugarP", "PEP", "Pyr", "Lac", "ATP", "NAD", "NADH"]
+    primary = [0, 1, 9, 10, 11, 12, 14, 15]
+    return M, names, primary
+
+
+def _oracle_lumping_for_reduced4() -> Tuple[np.ndarray, List[str], List[int]]:
+    """reduced4 states: [Glc, Pyr, ATP, NADH] — a strict subset of oracle22."""
+    M = np.zeros((4, 22), dtype=np.float32)
+    M[0,  0] = 1.0                                     # Glc
+    M[1, 10] = 1.0                                     # Pyr
+    M[2, 12] = 1.0                                     # ATP
+    M[3, 15] = 1.0                                     # NADH
+    names = ["Glc", "Pyr", "ATP", "NADH"]
+    primary = [0, 10, 12, 15]
+    return M, names, primary
+
+
+def _glycolysis_oracle_to_reduced_config(
+    lumping_fn,
+) -> ModelConfig:
+    """Wrap oracle22's config (params/x0/boluses) with a lumping projection."""
+    base = _glycolysis_oracle22_config()
+    M, names, _primary = lumping_fn()
+    return ModelConfig(
+        param_ranges=base.param_ranges,
+        x0_default=base.x0_default,
+        bolus_ranges=base.bolus_ranges,
+        bolus_default=base.bolus_default,
+        bolus_count_range=base.bolus_count_range,
+        simulator=base.simulator,
+        lumping_matrix=M,
+        lumping_state_names=names,
+    )
+
+
 def _aramco_30_config() -> ModelConfig:
     """
     AramcoMech 3.0 pulsed-combustion configuration.
@@ -429,6 +525,9 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "glycolysis_reduced12": _glycolysis_reduced12_config(),
     "glycolysis_reduced8":  _glycolysis_reduced8_config(),
     "glycolysis_reduced4":  _glycolysis_reduced4_config(),
+    "glycolysis_oracle_to_reduced12": _glycolysis_oracle_to_reduced_config(_oracle_lumping_for_reduced12),
+    "glycolysis_oracle_to_reduced8":  _glycolysis_oracle_to_reduced_config(_oracle_lumping_for_reduced8),
+    "glycolysis_oracle_to_reduced4":  _glycolysis_oracle_to_reduced_config(_oracle_lumping_for_reduced4),
 }
 
 # ============================================================
@@ -540,9 +639,22 @@ def generate_training_dataset(
     mcfg = MODEL_CONFIGS.get(model_name, ModelConfig())
 
     if obs_indices is None:
-        obs_indices = [0, 3, 6, 9, 12]  
+        obs_indices = [0, 3, 6, 9, 12]
     obs_indices = np.asarray(obs_indices, dtype=np.int64)
     p_obs = int(obs_indices.shape[0])
+
+    # Lumping projection (oracle22-driven reduced datasets): if the model config
+    # supplies a lumping matrix, the saved y_seq is M @ x_full rather than a
+    # plain index slice. obs_indices stays as the "primary" oracle indices and
+    # is used only for control→state jump wiring.
+    lumping_matrix = mcfg.lumping_matrix
+    if lumping_matrix is not None:
+        lumping_matrix = np.asarray(lumping_matrix, dtype=np.float32)
+        if lumping_matrix.shape != (p_obs, n_states_full):
+            raise ValueError(
+                f"lumping_matrix shape {lumping_matrix.shape} must be "
+                f"(p_obs={p_obs}, n_states_full={n_states_full})"
+            )
 
     if control_indices is None:
         control_indices = list(range(n_states_full))
@@ -564,7 +676,15 @@ def generate_training_dataset(
 
     control_indices = np.asarray(control_indices, dtype=np.int64)
     control_names = np.asarray([names_full[int(idx)] for idx in control_indices], dtype="<U16")
-    obs_names = np.asarray([names_full[int(idx)] for idx in obs_indices], dtype="<U16")
+    if mcfg.lumping_state_names is not None:
+        if len(mcfg.lumping_state_names) != p_obs:
+            raise ValueError(
+                f"lumping_state_names has {len(mcfg.lumping_state_names)} entries; "
+                f"expected p_obs={p_obs}"
+            )
+        obs_names = np.asarray(mcfg.lumping_state_names, dtype="<U16")
+    else:
+        obs_names = np.asarray([names_full[int(idx)] for idx in obs_indices], dtype="<U16")
 
     print(f"Generating {n_samples} samples | K={K}, p_obs={p_obs}, d_in={d_in}")
     print(f"Model config: {model_name} | param_ranges={'custom' if mcfg.param_ranges else 'default'}")
@@ -701,7 +821,11 @@ def generate_training_dataset(
         x_grid = interp1d(t_solver, x_solver, axis=0, kind="linear", fill_value="extrapolate")(t_obs).astype(np.float32)
         x_grid = np.clip(x_grid, 0.0, None)  # remove numerical noise negatives
 
-        y_grid = x_grid[:, obs_indices]
+        if lumping_matrix is not None:
+            # Project full state into lumped state via M (P_lumped, n_states_full).
+            y_grid = (x_grid @ lumping_matrix.T).astype(np.float32)
+        else:
+            y_grid = x_grid[:, obs_indices]
         y0[i] = y_grid[0]
         y_seq[i] = y_grid[1:]
 
