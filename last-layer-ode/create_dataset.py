@@ -17,6 +17,9 @@ from sim.syndata_simulator_ODE import simulate_chain_with_bolus, simulate_ivp_wi
 
 # Lazy singleton — avoids instantiating the scaffold at import time.
 _glycolysis_oracle22_scaffold = None
+_glycolysis_reduced12_scaffold = None
+_glycolysis_reduced8_scaffold = None
+_glycolysis_reduced4_scaffold = None
 
 def _get_glycolysis_oracle():
     global _glycolysis_oracle22_scaffold
@@ -24,6 +27,30 @@ def _get_glycolysis_oracle():
         from sim.glycolysis import GlycolysisOracle22Scaffold
         _glycolysis_oracle22_scaffold = GlycolysisOracle22Scaffold()
     return _glycolysis_oracle22_scaffold
+
+
+def _get_glycolysis_reduced12():
+    global _glycolysis_reduced12_scaffold
+    if _glycolysis_reduced12_scaffold is None:
+        from sim.glycolysis import GlycolysisReduced12Scaffold
+        _glycolysis_reduced12_scaffold = GlycolysisReduced12Scaffold()
+    return _glycolysis_reduced12_scaffold
+
+
+def _get_glycolysis_reduced8():
+    global _glycolysis_reduced8_scaffold
+    if _glycolysis_reduced8_scaffold is None:
+        from sim.glycolysis import GlycolysisReduced8Scaffold
+        _glycolysis_reduced8_scaffold = GlycolysisReduced8Scaffold()
+    return _glycolysis_reduced8_scaffold
+
+
+def _get_glycolysis_reduced4():
+    global _glycolysis_reduced4_scaffold
+    if _glycolysis_reduced4_scaffold is None:
+        from sim.glycolysis import GlycolysisReduced4Scaffold
+        _glycolysis_reduced4_scaffold = GlycolysisReduced4Scaffold()
+    return _glycolysis_reduced4_scaffold
 
 
 def GlycolysisOracle22(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False):
@@ -54,6 +81,42 @@ def GlycolysisOracle22(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False
     return dy.astype(np.float64)
 
 
+def GlycolysisReduced12(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False):
+    """12-state glycolysis reduced simulator (scipy-compatible interface)."""
+    scaffold = _get_glycolysis_reduced12()
+    if dim:
+        return scaffold.P, scaffold.theta_dim, list(scaffold.state_names)
+    y_t = torch.from_numpy(np.asarray(y, dtype=np.float32)).unsqueeze(0)
+    k_t = torch.from_numpy(np.asarray(k, dtype=np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        dy = scaffold(y_t, k_t).squeeze(0).numpy()
+    return dy.astype(np.float64)
+
+
+def GlycolysisReduced8(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False):
+    """8-state glycolysis reduced simulator (scipy-compatible interface)."""
+    scaffold = _get_glycolysis_reduced8()
+    if dim:
+        return scaffold.P, scaffold.theta_dim, list(scaffold.state_names)
+    y_t = torch.from_numpy(np.asarray(y, dtype=np.float32)).unsqueeze(0)
+    k_t = torch.from_numpy(np.asarray(k, dtype=np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        dy = scaffold(y_t, k_t).squeeze(0).numpy()
+    return dy.astype(np.float64)
+
+
+def GlycolysisReduced4(t: float, y: np.ndarray, k: np.ndarray, dim: bool = False):
+    """4-state glycolysis reduced simulator (scipy-compatible interface)."""
+    scaffold = _get_glycolysis_reduced4()
+    if dim:
+        return scaffold.P, scaffold.theta_dim, list(scaffold.state_names)
+    y_t = torch.from_numpy(np.asarray(y, dtype=np.float32)).unsqueeze(0)
+    k_t = torch.from_numpy(np.asarray(k, dtype=np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        dy = scaffold(y_t, k_t).squeeze(0).numpy()
+    return dy.astype(np.float64)
+
+
 SIM_MODELS = {
     "full13":               FullModel,
     "mof_synthesis":        MOF_Synthesis,
@@ -63,6 +126,9 @@ SIM_MODELS = {
     "smooke_reduced_model": Smooke_ReducedModel,
     "aramco_30":            Aramco_FullModel,   # Natively routes to your explicit Python equations
     "glycolysis_oracle22":  GlycolysisOracle22,
+    "glycolysis_reduced12": GlycolysisReduced12,
+    "glycolysis_reduced8":  GlycolysisReduced8,
+    "glycolysis_reduced4":  GlycolysisReduced4,
 }
 
 # ============================================================
@@ -136,6 +202,91 @@ def _glycolysis_oracle22_config() -> ModelConfig:
         "I_PK":   (0.1, 2.0),
     }
 
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 2.0),
+        bolus_count_range=(3, 15),
+        simulator="ivp",
+    )
+
+
+def _fixed_params_from_bounds(theta_lo_vec: list[float], theta_hi_vec: list[float]) -> list[float]:
+    if len(theta_lo_vec) != len(theta_hi_vec):
+        raise ValueError("theta_lo_vec and theta_hi_vec must have same length")
+    return [0.5 * (float(lo) + float(hi)) for lo, hi in zip(theta_lo_vec, theta_hi_vec)]
+
+
+def _glycolysis_reduced12_config() -> ModelConfig:
+    scaffold = _get_glycolysis_reduced12()
+    true_params = _fixed_params_from_bounds(scaffold.theta_lo_vec, scaffold.theta_hi_vec)
+    param_ranges = [(v, v) for v in true_params]
+    # States: Glc, HexP, TriP, BPG13, PG3, PEP, Pyr, Lac, ATP, ADP, NAD, NADH
+    x0_default = [
+        5.0,   # Glc
+        0.1,   # HexP
+        0.05,  # TriP
+        0.0,   # BPG13
+        0.0,   # PG3
+        0.0,   # PEP
+        0.0,   # Pyr
+        0.0,   # Lac
+        2.0,   # ATP
+        0.5,   # ADP
+        1.0,   # NAD
+        0.1,   # NADH
+    ]
+    bolus_ranges = {
+        "Glc": (0.5, 3.0),
+        "ATP": (0.1, 2.0),
+        "ADP": (0.1, 2.0),
+        "NAD": (0.1, 2.0),
+        "NADH": (0.1, 2.0),
+    }
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 2.0),
+        bolus_count_range=(3, 15),
+        simulator="ivp",
+    )
+
+
+def _glycolysis_reduced8_config() -> ModelConfig:
+    scaffold = _get_glycolysis_reduced8()
+    true_params = _fixed_params_from_bounds(scaffold.theta_lo_vec, scaffold.theta_hi_vec)
+    param_ranges = [(v, v) for v in true_params]
+    # States: Glc, SugarP, PEP, Pyr, Lac, ATP, NAD, NADH
+    x0_default = [5.0, 0.1, 0.0, 0.0, 0.0, 2.0, 1.0, 0.1]
+    bolus_ranges = {
+        "Glc": (0.5, 3.0),
+        "ATP": (0.1, 2.0),
+        "NAD": (0.1, 2.0),
+        "NADH": (0.1, 2.0),
+    }
+    return ModelConfig(
+        param_ranges=param_ranges,
+        x0_default=x0_default,
+        bolus_ranges=bolus_ranges,
+        bolus_default=(0.1, 2.0),
+        bolus_count_range=(3, 15),
+        simulator="ivp",
+    )
+
+
+def _glycolysis_reduced4_config() -> ModelConfig:
+    scaffold = _get_glycolysis_reduced4()
+    true_params = _fixed_params_from_bounds(scaffold.theta_lo_vec, scaffold.theta_hi_vec)
+    param_ranges = [(v, v) for v in true_params]
+    # States: Glc, Pyr, ATP, NADH
+    x0_default = [5.0, 0.0, 2.0, 0.1]
+    bolus_ranges = {
+        "Glc": (0.5, 3.0),
+        "ATP": (0.1, 2.0),
+        "NADH": (0.1, 2.0),
+    }
     return ModelConfig(
         param_ranges=param_ranges,
         x0_default=x0_default,
@@ -265,6 +416,9 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "smooke_reduced_model": _smooke_reduced_config(),
     "aramco_30":            _aramco_30_config(),
     "glycolysis_oracle22":  _glycolysis_oracle22_config(),
+    "glycolysis_reduced12": _glycolysis_reduced12_config(),
+    "glycolysis_reduced8":  _glycolysis_reduced8_config(),
+    "glycolysis_reduced4":  _glycolysis_reduced4_config(),
 }
 
 # ============================================================

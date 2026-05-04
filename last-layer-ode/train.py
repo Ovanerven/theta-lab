@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional
 import math
+import random
 from pathlib import Path
 import re
 import time
@@ -131,6 +132,118 @@ def loss_fn(
         se = se * mask.unsqueeze(-1)
         return se.sum() / (mask.sum() * se.shape[-1])
     return se.mean()
+
+
+def loss_fn_bob_exact(
+    *,
+    pred_full: torch.Tensor,
+    theta: torch.Tensor,
+    y_seq_full: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    mm_state_idx: int = 3,
+    pm_state_idx: int = 5,
+) -> torch.Tensor:
+    """Replicate bob_model/neural_spline.py:NeuralSpline.train_val() loss.
+
+    Assumes last-layer-ode 7-state layout where mm is at index 3 and pm at 5.
+    Uses Bob's fixed loss_weight vector and masking/weighting scheme.
+    """
+    B, K, _ = y_seq_full.shape
+    device = y_seq_full.device
+    dtype = y_seq_full.dtype
+
+    if lengths is None:
+        lengths = torch.full((B,), K, device=device, dtype=torch.long)
+
+    y_mm = y_seq_full[:, :, mm_state_idx:mm_state_idx + 1]
+    y_pm = y_seq_full[:, :, pm_state_idx:pm_state_idx + 1]
+    p_zero = torch.zeros_like(y_mm)
+    y_seq_3 = torch.cat([y_mm, p_zero, y_pm], dim=-1)  # (B,K,3)
+
+    pred_mm = pred_full[:, :, mm_state_idx:mm_state_idx + 1]
+    pred_pm = pred_full[:, :, pm_state_idx:pm_state_idx + 1]
+    pred_3 = torch.cat([pred_mm, torch.zeros_like(pred_mm), pred_pm], dim=-1)  # (B,K,3)
+
+    y_clamped = y_seq_3.clamp_min(1.0)
+    pred_clamped = pred_3.clamp_min(1.0)
+    log_y = torch.log1p(y_clamped)
+    log_pred = torch.log1p(pred_clamped)
+
+    # theta layout from BobGRUVerbatim: [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO]
+    VTX_max = theta[..., 0:1]
+    kdm = theta[..., 1:2]
+    VTL_max = theta[..., 2:3]
+    kmt = theta[..., 3:4]
+    kmtm = theta[..., 4:5]
+    R = theta[..., 5:6]
+
+    mean_st = y_seq_3.mean(dim=-1, keepdim=True)
+    VTX_raw = VTX_max / 0.125
+    kdm_raw = kdm / 0.01
+    VTL_raw = VTL_max / 0.075
+    kmt_raw = kmt / 0.00035
+    kmtm_raw = kmtm / 0.0035
+    R_raw = R / 1.0
+
+    VTX_state = (VTX_raw * R_raw * mean_st).clamp_min(0.0)
+    kdm_state = (kdm_raw * mean_st).clamp_min(0.0)
+    VTL_state = (VTL_raw * R_raw * mean_st).clamp_min(0.0)
+    kmt_state = (kmt_raw * mean_st).clamp_min(0.0)
+    kmtm_state = (kmtm_raw * mean_st).clamp_min(0.0)
+    R_state = (R_raw * mean_st).clamp_min(0.0)
+
+    log_VTX = torch.log1p(VTX_state)
+    log_kdm = torch.log1p(kdm_state)
+    log_VTL = torch.log1p(VTL_state)
+    log_kmt = torch.log1p(kmt_state)
+    log_kmtkm = torch.log1p(kmtm_state)
+    log_R = torch.log1p(R_state)
+
+    log_pred_all = torch.cat([log_pred, log_VTX, log_kdm, log_VTL, log_kmt, log_kmtkm, log_R], dim=-1)  # (B,K,9)
+    log_zero = torch.zeros_like(log_VTX)
+    log_y_all = torch.cat([log_y, log_zero, log_zero, log_zero, log_zero, log_zero, log_zero], dim=-1)  # (B,K,9)
+
+    t_grid = torch.arange(K, device=device)
+    valid_mask = (t_grid[None, :] < lengths[:, None]).unsqueeze(-1)  # (B,K,1)
+    cut_idx = (lengths.to(torch.float32) * 0.95).to(torch.long)
+    tail_mask = (t_grid[None, :] >= cut_idx[:, None]) & valid_mask.squeeze(-1)  # (B,K)
+
+    # time weighting for p* (pm): second half gets weight N
+    N = 3
+    half_idx = lengths // 2
+    is_second_half = (t_grid[None, :] >= half_idx[:, None]).unsqueeze(-1)  # (B,K,1)
+    w_time = torch.where(
+        is_second_half,
+        torch.full_like(valid_mask, float(N), dtype=log_y_all.dtype),
+        torch.ones_like(valid_mask, dtype=log_y_all.dtype),
+    ) * valid_mask.to(torch.float32)
+
+    w = torch.zeros_like(log_y_all, dtype=dtype)
+    w[..., 0] = valid_mask.squeeze(-1)                     # mRNA
+    w[..., 1] = tail_mask.to(dtype)                        # p (ignored by loss_weight but kept verbatim)
+    w[..., 2] = (w_time * valid_mask).squeeze(-1)          # p*
+    w[..., 3] = tail_mask.to(dtype)                        # VTX
+    w[..., 4] = tail_mask.to(dtype)                        # kdm
+    w[..., 5] = tail_mask.to(dtype)                        # VTL
+    w[..., 6] = tail_mask.to(dtype)                        # kmt
+    w[..., 7] = tail_mask.to(dtype)                        # kmtm
+    w[..., 8] = tail_mask.to(dtype)                        # R proxy
+
+    last_indices = (lengths - 1).clamp_min(0)
+    batch_idx = torch.arange(B, device=device)
+    y_last = log_y_all[batch_idx, last_indices, 2]
+    pred_last = log_pred_all[batch_idx, last_indices, 2]
+    extra_mse_chan = ((pred_last - y_last) ** 2).mean(0, keepdim=True)  # (1,)
+
+    err2 = (log_pred_all - log_y_all).pow(2) * w
+    mse_chan = err2.sum((0, 1)) / w.sum((0, 1)).clamp_min(1)
+    mse_chan = torch.cat([mse_chan, extra_mse_chan])  # (10,)
+
+    loss_weight = torch.tensor([1.25, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1], device=device, dtype=mse_chan.dtype)
+    weighted = loss_weight * mse_chan
+    mask = loss_weight.ne(0)
+    den = mask.sum().clamp_min(1).to(weighted.dtype)
+    return weighted[mask].sum() / den
 
 
 def loss_fn_per_species(
@@ -398,6 +511,14 @@ class TrainConfig:
     forget_bias_init: Optional[float] = None  # None = PyTorch default; 1.0 = Gers/Jozefowicz positive shift
     legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
 
+    # bob_model compatibility
+    use_bob_loss: bool = False  # when True and model_class==bob_gru_verbatim, use Bob's exact loss
+
+    use_bob_split: bool = False
+    bob_split_seed: int = 57
+    bob_test_frac: float = 0.125
+    bob_val_frac: float = 0.125
+
     use_basal: bool = False
     beta_regularization: bool = False
     lambda_beta: float = 1.0
@@ -625,9 +746,29 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     N = len(ds)
 
-    n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
-    n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
-    if cfg.fixed_test_idx_path:
+    if cfg.use_bob_split:
+        idx = list(range(N))
+        rng = random.Random(int(cfg.bob_split_seed))
+        rng.shuffle(idx)
+        n_test = int(N * float(cfg.bob_test_frac))
+        test_idx = np.asarray(idx[:n_test], dtype=np.int64)
+        rest = idx[n_test:]
+        n_val = int(len(rest) * float(cfg.bob_val_frac))
+        val_idx = np.asarray(rest[:n_val], dtype=np.int64)
+        train_idx = np.asarray(rest[n_val:], dtype=np.int64)
+        print(
+            f"Split: bob_model"
+            f" | seed={int(cfg.bob_split_seed)}"
+            f" | test_frac={float(cfg.bob_test_frac)}"
+            f" | val_frac={float(cfg.bob_val_frac)}"
+            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
+        )
+
+    else:
+        n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
+        n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
+
+    if (not cfg.use_bob_split) and cfg.fixed_test_idx_path:
         fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
         if fixed_test.max() >= N or fixed_test.min() < 0:
             raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
@@ -641,7 +782,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         test_idx = fixed_test
         print(f"Split: fixed test from {cfg.fixed_test_idx_path} "
               f"(n_test={len(test_idx)}, n_val={len(val_idx)}, n_train={len(train_idx)})")
-    else:
+    elif not cfg.use_bob_split:
         train_idx, val_idx, test_idx = _make_split_indices(
             N=N,
             y_seq=ds.y_seq,
@@ -719,12 +860,14 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     P_obs = int(y0_ex.shape[0])
     U = int(u_ex.shape[-1])
 
-    if cfg.scaffold not in SCAFFOLDS:
-        raise ValueError(f"Unknown scaffold '{cfg.scaffold}'. Available: {list(SCAFFOLDS.keys())}")
-    scaffold = SCAFFOLDS[cfg.scaffold]
+    scaffold = None
+    if cfg.model_class != "bob_gru_verbatim":
+        if cfg.scaffold not in SCAFFOLDS:
+            raise ValueError(f"Unknown scaffold '{cfg.scaffold}'. Available: {list(SCAFFOLDS.keys())}")
+        scaffold = SCAFFOLDS[cfg.scaffold]
 
-    if scaffold.P != P_obs:
-        raise ValueError(f"Scaffold {cfg.scaffold} expects P={scaffold.P}, but dataset has P_obs={P_obs}.")
+        if scaffold.P != P_obs:
+            raise ValueError(f"Scaffold {cfg.scaffold} expects P={scaffold.P}, but dataset has P_obs={P_obs}.")
 
     u_to_y_jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)  # (U,P_obs)
 
@@ -888,15 +1031,21 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq,
                     **model_kwargs,
                 )
-            pred = pred[:, :, obs_idx]
-            y_seq = y_seq[:, :, obs_idx]
-
-            if cfg.supervise_endpoints_only:
-                pred_l  = torch.stack([pred[:, 0, :],  pred[:, -1, :]],  dim=1)
-                y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
-                loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
+            if cfg.use_bob_loss and cfg.model_class == "bob_gru_verbatim":
+                loss = loss_fn_bob_exact(pred_full=pred, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
+                # keep these for any logging/diagnostics below
+                pred = pred[:, :, obs_idx]
+                y_seq = y_seq[:, :, obs_idx]
             else:
-                loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+                pred = pred[:, :, obs_idx]
+                y_seq = y_seq[:, :, obs_idx]
+
+                if cfg.supervise_endpoints_only:
+                    pred_l  = torch.stack([pred[:, 0, :],  pred[:, -1, :]],  dim=1)
+                    y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
+                    loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
+                else:
+                    loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -944,6 +1093,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     dt_seq = dt_seq.to(device)
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
+
+                    if cfg.use_bob_loss and cfg.model_class == "bob_gru_verbatim":
+                        model_kwargs = {"teacher_forcing": False, "tf_every": int(cfg.tf_every)}
+                        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
+                            pred_full, theta, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq, **model_kwargs)
+                        loss = loss_fn_bob_exact(pred_full=pred_full, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
+                        va_total += float(loss.item())
+                        va_batches += 1
+                        continue
 
                     model_kwargs = {"y_seq": None, "teacher_forcing": False}
                     if grouped_model and batch_lengths is not None:
