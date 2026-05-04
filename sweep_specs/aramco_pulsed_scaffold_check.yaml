@@ -1,0 +1,120 @@
+# Scaffold-fitness check on the pulsed AramcoMech dataset.
+#
+# Purpose: figure out *why* ode_rnn scaffolds underperform black-box neural
+# ODEs on this dataset. Compares both supervision regimes on the same model
+# grid:
+#   - endpoints-only  (only y(0) and y(T_final) supervised)
+#   - full timestep supervision
+#
+# If scaffolds beat NeuralODEs under full supervision but lose under
+# endpoints-only, the bottleneck is the sparse signal (scaffold rigidity hurts
+# when the loss can't constrain intermediate dynamics). If they lose in both,
+# the prior itself is misspecified for this dataset.
+#
+# Scaffolds: kovacs_54 on full 14 species, kovacs_7 on partial 7 species
+# subset.  ReLU on y inside Kovacs54.forward has been removed and the
+# Gibbs-Duhem mole-fraction correction (dx_i = R_i - x_i * sum R_j) is now
+# active in both scaffolds.
+#
+# Runs (12 total):
+#   D-series (full supervision)
+#     D1 — neural_ode_gru, 14 species
+#     D2 — neural_ode_gru,  7 species
+#     D3 — ode_rnn kovacs_54, 14 species
+#     D4 — ode_rnn kovacs_7,   7 species
+#     D5 — neural_ode_mlp, 14 species
+#     D6 — neural_ode_mlp,  7 species
+#   E-series (endpoints-only)
+#     E1..E6 — same as D1..D6 but with supervise_endpoints_only: true
+
+study: aramco_pulsed_scaffold_check
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/methane/gru_aramco_kovacs54.yaml
+
+fixed:
+  dataset_path: datasets/aramco_pulsed_n500_molfrac.npz
+  epochs: 100
+  obs_normalization: zscore
+  n_substeps: 4
+
+runs:
+  # =================================================================
+  # D-series: full timestep supervision
+  # =================================================================
+  - exp_name: D1_neural_ode_gru_full14
+    model_class: neural_ode_gru
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: D3_ode_rnn_kovacs54_full14
+    model_class: ode_rnn
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: D5_neural_ode_mlp_full14
+    model_class: neural_ode_mlp
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: D2_neural_ode_gru_partial7
+    model_class: neural_ode_gru
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: D4_ode_rnn_kovacs7_partial7
+    model_class: ode_rnn
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: D6_neural_ode_mlp_partial7
+    model_class: neural_ode_mlp
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  # =================================================================
+  # E-series: endpoints-only supervision
+  # =================================================================
+  - exp_name: E1_neural_ode_gru_full14_endpts
+    model_class: neural_ode_gru
+    scaffold: kovacs_54
+    supervise_endpoints_only: true
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: E3_ode_rnn_kovacs54_full14_endpts
+    model_class: ode_rnn
+    scaffold: kovacs_54
+    supervise_endpoints_only: true
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: E5_neural_ode_mlp_full14_endpts
+    model_class: neural_ode_mlp
+    scaffold: kovacs_54
+    supervise_endpoints_only: true
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: E2_neural_ode_gru_partial7_endpts
+    model_class: neural_ode_gru
+    scaffold: kovacs_7
+    supervise_endpoints_only: true
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: E4_ode_rnn_kovacs7_partial7_endpts
+    model_class: ode_rnn
+    scaffold: kovacs_7
+    supervise_endpoints_only: true
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: E6_neural_ode_mlp_partial7_endpts
+    model_class: neural_ode_mlp
+    scaffold: kovacs_7
+    supervise_endpoints_only: true
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
