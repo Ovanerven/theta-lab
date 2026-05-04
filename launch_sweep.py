@@ -196,7 +196,8 @@ def make_preamble(env: str) -> str:
         "module purge && "
         "module load 2025 && "
         "module load Anaconda3/2025.06-1 && "
-        f"source activate {env}"
+        "source $(conda info --base)/etc/profile.d/conda.sh && "
+        f"conda activate {env}"
     )
 
 

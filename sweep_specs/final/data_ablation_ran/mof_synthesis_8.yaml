@@ -3,7 +3,7 @@
 # Splits: train=80% / val=10% / test=10% of N (clamped to ≥1 each).
 
 study: mof_synthesis_8_data_ablation
-runs_per_job: 4
+runs_per_job: 1
 time: "01:30:00"
 partition: gpu_a100
 no_plot: false
@@ -15,66 +15,66 @@ fixed:
 
 runs:
   # ── N=1000  (val_n=100, test_n=100) ──
-  # - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
-  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
-  # - {model_class: ode_rnn, exp_name: A5_unbounded_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, theta_bounded: false}
-  # - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, theta_bounded: false, obs_idx: [0, 7]}
-  # - {model_class: ode_rnn, exp_name: A6_baseline_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
-  # - {model_class: ode_rnn, exp_name: A7_l1reg_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, l1_regularization: true, lambda_reg: 0.1}
-  # - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
-  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
-  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
+  - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
+  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
+  - {model_class: ode_rnn, exp_name: A5_unbounded_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, theta_bounded: false}
+  - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, theta_bounded: false, obs_idx: [0, 7]}
+  - {model_class: ode_rnn, exp_name: A6_baseline_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
+  - {model_class: ode_rnn, exp_name: A7_l1reg_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, l1_regularization: true, lambda_reg: 0.1}
+  - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
+  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n1000, dataset_path: datasets/mof/mof_synthesis_8_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 7]}
 
   # ── N=100  (val_n=10, test_n=10) ──
-  - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, theta_bounded: false}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, theta_bounded: false, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A6_baseline_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, l1_regularization: true, lambda_reg: 0.1}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
+  # - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, theta_bounded: false}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, theta_bounded: false, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, l1_regularization: true, lambda_reg: 0.1}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n100, dataset_path: datasets/mof/mof_synthesis_8_n100.npz, val_n: 10, test_n: 10, obs_idx: [0, 7]}
 
-  # ── N=10  (val_n=1, test_n=1) ──
-  - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, theta_bounded: false}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, theta_bounded: false, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A6_baseline_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # # ── N=10  (val_n=1, test_n=1) ──
+  # - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, theta_bounded: false}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, theta_bounded: false, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n10, dataset_path: datasets/mof/mof_synthesis_8_n10.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
 
-  # ── N=3  (val_n=1, test_n=1) ──
-  - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, theta_bounded: false}
-  - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, theta_bounded: false, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A6_baseline_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1}
-  - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
-  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # # ── N=3  (val_n=1, test_n=1) ──
+  # - {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: ode_sample_theta, exp_name: A2_sample_theta_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_gru, exp_name: A3_neural_ode_gru_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_mlp, exp_name: A4_neural_ode_mlp_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, theta_bounded: false}
+  # - {model_class: ode_rnn, exp_name: A5_unbounded_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, theta_bounded: false, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: ode_rnn, exp_name: A6_baseline_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1}
+  # - {model_class: ode_rnn, exp_name: A7_l1reg_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, l1_regularization: true, lambda_reg: 0.1, obs_idx: [0, 7]}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1}
+  # - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n3, dataset_path: datasets/mof/mof_synthesis_8_n3.npz, val_n: 1, test_n: 1, obs_idx: [0, 7]}
 
