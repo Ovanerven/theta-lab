@@ -1,0 +1,193 @@
+# Combined diagnostic sweep building on txtl_scaffold_comparison_sweep results.
+#
+# Hypotheses tested (from per-step-fit diagnosis):
+#   1. C-recipe head (gamma transform, bias=0, gain=1) + y0_theta_init wins —
+#      currently no arm has BOTH (C and D were separate).
+#   2. Initialising head.bias from population-median fit-θ (inverse-gamma) puts
+#      the head in the right band on iter 0 instead of saturated at theta_hi.
+#   3. detach_y_prev=False allows θ-grad to flow through state (longer credit).
+#   4. head_bottle=False removes the shared low-dim bottleneck on θ components.
+#   5. Lambda_endpoint/pm_tail flatten the θ trajectory toward a constant per
+#      sample — disabled here so θ can track the time-shape of the fit.
+#   6. Soft θ-prior (MSE in log-θ vs smoothed `thetas_rollout`) nudges the GRU
+#      toward the band the per-step fitter found, without forcing 18× wiggles.
+#
+# Arms (mat-only scaffold dominates per prior comparison; one res+mat control):
+#   E0  base recipe (C+y0init+bias_vec, all aux off)
+#   E1  E0 + detach_y_prev=false
+#   E2  E0 + head_bottle=false
+#   E3  E0 + soft θ-prior λ=0.05
+#   E4  E0 + soft θ-prior λ=0.2
+#   E5  E0 + E1 + E2 + θ-prior λ=0.05      ("kitchen sink")
+#   F0  E0 with resource+maturation scaffold (control vs scaffold)
+
+study: txtl_scaffold_thetaprior
+runs_per_job: 1
+time: "06:00:00"
+partition: gpu_h100
+no_plot: false
+train_script: last-layer-ode/train_R.py
+base_config: configs/archs/gru.yaml
+
+fixed:
+  val_n: 104
+  test_n: 104
+  fixed_test_idx_path: results/oracle_rollout_scoring/test_idx_104_maturation.npy
+
+  stratified_split: true
+  stratify_bins: 5
+
+  u_transform: minmax_sqrt
+  y_transform: sqrt_clamp1
+  gru_y_obs_only: true
+  exclude_ode_cols_from_gru: true
+
+  loss_type: mse
+  obs_normalization: log1p_clip1
+  auto_scale_aux_losses: true
+
+  # Aux losses OFF — they push θ toward time-flat (see diagnosis).
+  lambda_endpoint: 0.0
+  lambda_pm_tail: 0.0
+  lambda_r_terminal: 0.0
+  lambda_o_terminal: 0.0
+
+  endpoint_mrna_obs_idx: 0
+  endpoint_protein_obs_idx: 1
+
+  batch_size: 200
+  epochs: 400
+  lr: 0.001
+  weight_decay: 0.001
+  hidden: 256
+  num_layers: 2
+  dropout: 0.1
+  grad_clip: 1.0
+  lift_dim: 32
+
+  teacher_forcing: true
+  tf_every: 100
+  tf_drop_epoch: 99999
+
+  # C-recipe head: linear-sigmoid `gamma` transform, neutral init.
+  theta_head_transform: gamma
+  head_bias_init: 0.0
+  head_weight_gain: 1.0
+  lift_skip: false
+  head_bottle: true   # default ON (E0/E1/E3/E4/F0); E2/E5 override to false
+  detach_y_prev: true # default ON; E1/E5 override to false
+
+  y0_theta_init: true
+
+  early_stop_patience: 999999
+  endpoint_r2: true
+  jit_scripting: true
+
+  # θ-prior smoothing/log defaults; activation per-arm via lambda_theta_prior.
+  theta_prior_smooth_window: 51
+  theta_prior_in_log: true
+
+runs:
+  # ── E0: base "C+D+median-bias" recipe, mat-only scaffold ──
+  - exp_name: E0_mat_base_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    # Inverse-gamma of population-median fit-θ over rollout fits:
+    #   [lam, VTXmax, kdm, VTLmax, kmt, kmatm]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── E1: + detach_y_prev=False (θ-grad through state) ──
+  - exp_name: E1_mat_no_detach_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    detach_y_prev: false
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── E2: + head_bottle=False (full hidden→theta) ──
+  - exp_name: E2_mat_no_bottle_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    head_bottle: false
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── E3: + soft θ-prior λ=0.05 ──
+  - exp_name: E3_mat_prior05_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    theta_prior_path: results/txtl_theta_fit_maturation_dna/results.npz
+    lambda_theta_prior: 0.05
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── E4: + soft θ-prior λ=0.2 (stronger nudge) ──
+  - exp_name: E4_mat_prior20_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    theta_prior_path: results/txtl_theta_fit_maturation_dna/results.npz
+    lambda_theta_prior: 0.2
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── E5: kitchen sink (no detach + no bottle + θ-prior) ──
+  - exp_name: E5_mat_kitchen_sink_s1
+    model_class: ode_rnn_txtl_mat_approx
+    scaffold: txtl_maturation_only_dna
+    theta_lo_vec: [1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    head_bias_init_vec: [-3.106, -4.417, -3.230, -4.020, -6.330, -2.518]
+    detach_y_prev: false
+    head_bottle: false
+    theta_prior_path: results/txtl_theta_fit_maturation_dna/results.npz
+    lambda_theta_prior: 0.05
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42
+
+  # ── F0: same base recipe, resource+maturation scaffold (control) ──
+  - exp_name: F0_resmat_base_s1
+    model_class: ode_rnn_txtl_approx
+    scaffold: txtl_resource_and_maturation_dna
+    theta_lo_vec: [1.0e-06, 1.0e-06, 1.0e-07, 1.0e-05, 1.0e-07, 1.0e-05, 5.0e-05]
+    theta_hi_vec: [5.0e-04, 5.0e-04, 1.2e-01, 1.0e-02, 8.0e-02, 3.5e-04, 3.5e-03]
+    # [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+    head_bias_init_vec: [-3.107, -3.113, -4.340, -3.212, -3.894, 0.413, -2.579]
+    dataset_path: datasets/real_ivtt_raw_no_outliers.npz
+    obs_idx: [3, 5]
+    stratify_targets: [3, 5]
+    seed: 1
+    split_seed: 42

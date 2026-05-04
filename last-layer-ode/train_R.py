@@ -80,37 +80,70 @@ class ODEDataset(Dataset):
             self.lengths = None
             self.variable_length = False
 
+        # Optional per-sample theta prior trajectory (set externally via
+        # `attach_theta_prior`). Shape (N, K, theta_dim). When set, the dataset
+        # yields a 4th tensor per item (the per-sample slice of the prior),
+        # which the train loop uses for the soft theta-prior loss.
+        self.theta_prior: np.ndarray | None = None
+
+    def attach_theta_prior(self, prior: np.ndarray) -> None:
+        if prior.shape[0] != self.y0.shape[0]:
+            raise ValueError(
+                f"theta_prior N={prior.shape[0]} does not match dataset N={self.y0.shape[0]}"
+            )
+        if prior.shape[1] != self.y_seq.shape[1]:
+            raise ValueError(
+                f"theta_prior K={prior.shape[1]} does not match dataset K={self.y_seq.shape[1]}"
+            )
+        self.theta_prior = prior.astype(np.float32)
+
     def __len__(self) -> int:
         return self.y0.shape[0]
 
     def __getitem__(self, i: int):
         if self.variable_length:
             L = int(self.lengths[i])
-            return (
+            base = (
                 torch.from_numpy(self.y0[i]),          # (P_obs,)
                 torch.from_numpy(self.u_seq[i, :L]),   # (L,U)
                 torch.from_numpy(self.y_seq[i, :L]),   # (L,P_obs)
             )
-        return (
+            if self.theta_prior is not None:
+                return base + (torch.from_numpy(self.theta_prior[i, :L]),)  # (L, theta_dim)
+            return base
+        base = (
             torch.from_numpy(self.y0[i]),  # (P_obs,)
             torch.from_numpy(self.u_seq[i]),  # (K,U)
             torch.from_numpy(self.y_seq[i]),  # (K,P_obs)
         )
+        if self.theta_prior is not None:
+            return base + (torch.from_numpy(self.theta_prior[i]),)  # (K, theta_dim)
+        return base
 
 
 def collate(batch):
+    if len(batch[0]) == 4:
+        y0, u, y, p = zip(*batch)
+        return torch.stack(y0), torch.stack(u), torch.stack(y), None, torch.stack(p)
     y0, u, y = zip(*batch)
-    return torch.stack(y0), torch.stack(u), torch.stack(y), None
+    return torch.stack(y0), torch.stack(u), torch.stack(y), None, None
 
 
 def collate_varlen(batch):
     """Pad each batch to its own max length; return lengths tensor."""
-    y0_list, u_list, y_list = zip(*batch)
+    has_prior = len(batch[0]) == 4
+    if has_prior:
+        y0_list, u_list, y_list, p_list = zip(*batch)
+    else:
+        y0_list, u_list, y_list = zip(*batch)
     lengths = torch.tensor([u.shape[0] for u in u_list], dtype=torch.long)
     y0 = torch.stack(y0_list)
     u_padded = torch.nn.utils.rnn.pad_sequence(u_list, batch_first=True)   # (B, K_batch, U)
     y_padded = torch.nn.utils.rnn.pad_sequence(y_list, batch_first=True)   # (B, K_batch, P)
-    return y0, u_padded, y_padded, lengths
+    if has_prior:
+        p_padded = torch.nn.utils.rnn.pad_sequence(p_list, batch_first=True)   # (B, K_batch, theta_dim)
+        return y0, u_padded, y_padded, lengths, p_padded
+    return y0, u_padded, y_padded, lengths, None
 
 
 def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> torch.Tensor:
@@ -742,6 +775,8 @@ class TrainConfig:
                                   # and provide no useful signal.
     exclude_ode_cols_from_gru: bool = False  # if True, exclude u cols that route to ODE states (e.g. DNA c)
     head_bias_init: float = 0.0   # init all head biases to this (<0 starts theta near lo; e.g. -5.0)
+    head_bias_init_vec: list[float] | None = None  # per-theta-component bias init vector (length theta_dim);
+                                                   # overrides scalar bias init for theta slice when provided.
     head_weight_gain: float = 1.0  # Xavier gain for head weights (>1 amplifies per-experiment variation)
     detach_y_prev: bool = True   # detach y_prev before feeding to GRU (matches supervisor reference).
                                  # If False, gradients flow through y_prev → GRU → theta across timesteps,
@@ -760,6 +795,7 @@ class TrainConfig:
     gru_variant: str = "nn_gru"     # "nn_gru" (default) | "stacked_cell" (supervisor: stacked GRUCell + dropout-on-last)
     gru_init: str = "default"       # "default" | "supervisor" (orthogonal_ W_hh + xavier_ W_ih + zeros)
     head_init: str = "default"      # "default" | "supervisor" (xavier_uniform + zeros, unconditional)
+    y0_theta_init: bool = False     # add an MLP(y0) logit bias to the GRU head output; per-sample theta prior
 
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
@@ -768,6 +804,16 @@ class TrainConfig:
     l2_regularization: bool = False   # smoothness: penalizes mean (theta[t] - theta[t-1])^2
 
     lambda_reg: float = 0.001
+
+    # Soft theta prior: nudge predicted theta_k toward a smoothed per-step fit.
+    # Targets are pre-smoothed (median filter, window theta_prior_smooth_window)
+    # along time so the GRU is given a band of feasible kinetics rather than
+    # the noisy free-fit theta_k(t). Loss is MSE in log-theta when in_log=True
+    # (default — matches the order-of-magnitude scale of kinetic params).
+    theta_prior_path: str | None = None
+    lambda_theta_prior: float = 0.0
+    theta_prior_smooth_window: int = 51   # rolling-median window in timesteps; 0/1 = no smoothing
+    theta_prior_in_log: bool = True       # MSE in log-theta (recommended for kinetic params)
 
     # Loss type: 'log_mse' (default, legacy), 'mse', 'rmse'.
     loss_type: str = "log_mse"
@@ -1046,6 +1092,53 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     ds = ODEDataset(cfg.dataset_path)
     N = len(ds)
 
+    # ---- Soft theta-prior (optional). Loads pre-computed per-step theta fits,
+    # smooths along time with a rolling median, and attaches to the dataset so
+    # each batch carries its prior trajectory. The training loop adds an MSE
+    # term in (log-)theta space between predicted and prior thetas.
+    if cfg.theta_prior_path is not None and float(cfg.lambda_theta_prior) > 0.0:
+        _pri = np.load(cfg.theta_prior_path, allow_pickle=True)
+        if "thetas_rollout" not in _pri:
+            raise ValueError(f"theta_prior_path {cfg.theta_prior_path} missing 'thetas_rollout'")
+        _th = _pri["thetas_rollout"].astype(np.float32)  # (N_fit, K, theta_dim)
+        if "sample_indices" in _pri:
+            _si = _pri["sample_indices"].astype(np.int64)
+            if not np.array_equal(_si, np.arange(_th.shape[0])):
+                # Reorder rows so row i corresponds to dataset index i.
+                _aligned = np.empty_like(_th)
+                _aligned[_si] = _th
+                _th = _aligned
+        if _th.shape[0] != N:
+            raise ValueError(f"theta_prior N={_th.shape[0]} != dataset N={N}")
+        # Replace non-finite entries (rare NaNs in failed fits) with per-param medians.
+        _flat = _th.reshape(-1, _th.shape[-1])
+        _bad = ~np.isfinite(_flat)
+        if _bad.any():
+            _med = np.nanmedian(np.where(_bad, np.nan, _flat), axis=0)
+            for j in range(_th.shape[-1]):
+                _flat[_bad[:, j], j] = _med[j]
+            _th = _flat.reshape(_th.shape)
+        # Time smoothing: rolling median over an odd window (cheap, robust).
+        _w = int(cfg.theta_prior_smooth_window)
+        if _w >= 3:
+            try:
+                from scipy.ndimage import median_filter
+                _th = median_filter(_th, size=(1, _w, 1), mode="nearest").astype(np.float32)
+            except ImportError:
+                # Fallback: simple moving-mean (less robust to outliers but no scipy dep).
+                import torch.nn.functional as _F
+                _t = torch.from_numpy(_th).permute(0, 2, 1).contiguous()  # (N, theta, K)
+                _kernel = torch.full((1, 1, _w), 1.0 / _w)
+                _padded = _F.pad(_t.reshape(-1, 1, _t.shape[-1]), (_w // 2, _w // 2), mode="replicate")
+                _t = _F.conv1d(_padded, _kernel).reshape(_t.shape)
+                _th = _t.permute(0, 2, 1).contiguous().numpy().astype(np.float32)
+        ds.attach_theta_prior(_th)
+        print(
+            f"theta_prior: loaded {cfg.theta_prior_path} "
+            f"shape={_th.shape}, smooth_window={_w}, "
+            f"lambda={cfg.lambda_theta_prior}, in_log={cfg.theta_prior_in_log}"
+        )
+
     n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
     n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
     if cfg.fixed_test_idx_path:
@@ -1109,7 +1202,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         )
 
     # infer dims
-    y0_ex, u_ex, _ = ds[0]
+    _ex0 = ds[0]
+    y0_ex, u_ex = _ex0[0], _ex0[1]
     P_obs = int(y0_ex.shape[0])
     U = int(u_ex.shape[-1])
 
@@ -1180,6 +1274,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         gru_u_cols=gru_u_cols,
         gru_y_cols=gru_y_cols,
         head_bias_init=float(cfg.head_bias_init),
+        head_bias_init_vec=(list(cfg.head_bias_init_vec) if cfg.head_bias_init_vec is not None else None),
         head_weight_gain=float(cfg.head_weight_gain),
         detach_y_prev=bool(cfg.detach_y_prev),
         u_minmax_max=(torch.tensor(ds.u_scale_max, dtype=torch.float32)
@@ -1196,6 +1291,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         gru_variant=str(cfg.gru_variant),
         gru_init=str(cfg.gru_init),
         head_init=str(cfg.head_init),
+        y0_theta_init=bool(cfg.y0_theta_init),
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -1297,7 +1393,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     dt_tensor = torch.from_numpy(ds.dt).to(device)
     grouped_model = cfg.model_class == "ode_transformer_grouped"
-    fixed_theta_model = cfg.model_class == "ode_fixed_theta"
+    fixed_theta_model = cfg.model_class in ("ode_fixed_theta", "ode_fixed_theta_nn")
 
     # ---- obs_normalization stats: fit on train split, applied in loss only ----
     obs_norm_method = str(cfg.obs_normalization)
@@ -1458,7 +1554,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         theta_std_first_batch: float | None = None
         theta_mean_first_batch: float | None = None
 
-        for y0, u_seq, y_seq, batch_lengths in train_loader:
+        for y0, u_seq, y_seq, batch_lengths, theta_prior_batch in train_loader:
             K_batch = u_seq.shape[1]
             dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
 
@@ -1607,6 +1703,28 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 reg_loss = torch.mean((theta[:,1:,:] - theta[:,:-1,:]).pow(2))
                 loss += cfg.lambda_reg * reg_loss
 
+            # Soft theta-prior loss: nudge predicted theta toward the smoothed
+            # per-step fit. Masked to valid timesteps only.
+            if (
+                theta_prior_batch is not None
+                and theta is not None
+                and float(cfg.lambda_theta_prior) > 0.0
+            ):
+                tp = theta_prior_batch.to(device=theta.device, dtype=theta.dtype)
+                tp = tp[:, : theta.shape[1], : theta.shape[-1]]
+                if bool(cfg.theta_prior_in_log):
+                    diff = torch.log(theta.clamp_min(1e-30)) - torch.log(tp.clamp_min(1e-30))
+                else:
+                    diff = theta - tp
+                if batch_lengths is not None:
+                    mask = _build_loss_mask(batch_lengths, theta.shape[1], theta.device)  # (B,K)
+                    diff = diff * mask.unsqueeze(-1)
+                    denom = mask.sum().clamp_min(1.0) * float(theta.shape[-1])
+                    prior_loss = diff.pow(2).sum() / denom
+                else:
+                    prior_loss = diff.pow(2).mean()
+                loss = loss + float(cfg.lambda_theta_prior) * _scaled_aux(prior_loss, "theta_prior")
+
             loss.backward()
 
             if cfg.grad_clip and float(cfg.grad_clip) > 0:
@@ -1640,7 +1758,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             r_count = 0
 
             with torch.no_grad():
-                for y0, u_seq, y_seq, batch_lengths in val_loader:
+                for y0, u_seq, y_seq, batch_lengths, _ in val_loader:
                     K_batch = u_seq.shape[1]
                     dt_seq = torch.from_numpy(ds.dt[:K_batch])
                     dt_seq = dt_seq[None, :].expand(y0.shape[0], -1)
@@ -1841,7 +1959,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_batches = 0
         sp_total = None
         with torch.no_grad():
-            for y0, u_seq, y_seq, batch_lengths in test_loader:
+            for y0, u_seq, y_seq, batch_lengths, _ in test_loader:
                 K_batch = u_seq.shape[1]
                 dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
                 y0 = y0.to(device)

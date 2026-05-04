@@ -332,6 +332,85 @@ def ivtt_step_approx(y0: torch.Tensor, theta: torch.Tensor, dt: torch.Tensor) ->
     return torch.stack([R_curr, O_curr, m_curr, mm_curr, p_curr, pm_curr, D0], dim=-1)
 
 
+def ivtt_maturation_step_approx(y0: torch.Tensor, theta: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+    """
+    Bob's approximate step adapted for TXTLMaturationOnly7Scaffold.
+
+    Identical to ivtt_step_approx except:
+      - theta has 6 params (no lam_O): [lam, VTXmax, kdm, VTLmax, kmt, kmatm]
+      - O is a frozen dummy state (dO=0): O_curr = O0
+      - pm uses dpm = kmt*p  (no O multiplier): pm += VTL_eff*int_M_total - delta_p
+
+    y0    : (B, 7) — [R, O, m, mm, p, pm, DNA]
+    theta : (B, 6) — [lam, VTXmax, kdm, VTLmax, kmt, kmatm]
+    dt    : (B,)
+    """
+    R0, O0, m0, mm0, p0, pm0, D0 = y0.clamp_min(0.0).unbind(-1)
+    lam, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(-1)
+    eps = 1e-9
+
+    R_curr = R0 * torch.exp(-lam * dt)
+    O_curr = O0  # dummy, dO=0
+
+    VTX_eff = R_curr * VTXmax
+    VTL_eff = R_curr * VTLmax
+
+    S     = VTX_eff * D0
+    alpha = (kdm + kmatm).clamp_min(eps)
+    m_inf = S / alpha
+    exp_a = torch.exp(-alpha * dt)
+    m_curr = torch.clamp_min(m_inf + (m0 - m_inf) * exp_a, 0.0)
+
+    exp_d  = torch.exp(-kdm   * dt)
+    exp_mr = torch.exp(-kmatm * dt)
+    mm_curr = torch.clamp_min(
+        mm0 * exp_d
+        + m_inf * (kmatm / (kdm + eps)) * (1.0 - exp_d)
+        + (m0 - m_inf) * exp_d * (1.0 - exp_mr),
+        0.0,
+    )
+
+    M_prev = m0 + mm0
+    M_inf  = S / (kdm + eps)
+    exp_M  = exp_d
+
+    eta   = torch.exp(-kmt * dt)
+    delta = kdm - kmt
+    same  = delta.abs() < 1e-6
+    int_M_eq  = M_inf * (1.0 - eta) / (kmt + eps) + (M_prev - M_inf) * dt * eta
+    int_M_gen = M_inf * (1.0 - eta) / (kmt + eps) + (M_prev - M_inf) * (eta - exp_M) / (delta + eps)
+    int_M_conv = torch.where(same, int_M_eq, int_M_gen)
+    p_curr = torch.clamp_min(p0 * eta + VTL_eff * int_M_conv, 0.0)
+
+    int_M_total = M_inf * dt + (M_prev - M_inf) / (kdm + eps) * (1.0 - exp_M)
+    pm_curr = torch.clamp_min(
+        pm0 + (VTL_eff * int_M_total - (p_curr - p0)),  # no O_curr factor — dpm = kmt*p
+        0.0,
+    )
+
+    return torch.stack([R_curr, O_curr, m_curr, mm_curr, p_curr, pm_curr, D0], dim=-1)
+
+
+class TXTLMaturationApproxOdeRNN(OdeRNN):
+    """
+    OdeRNN using Bob's approximate step adapted for TXTLMaturationOnly7Scaffold.
+
+    Same approximations as TXTLApproxOdeRNN but O is a frozen dummy (no lam_O
+    in theta) and pm does not depend on O.
+
+    Use with scaffold: txtl_maturation_only_dna
+    Config key:        ode_rnn_txtl_mat_approx
+    """
+
+    def _rk4_substeps(
+        self,
+        y: torch.Tensor,
+        dt: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        return ivtt_maturation_step_approx(y, theta, dt)
+
+
 class TXTLApproxOdeRNN(OdeRNN):
     """
     OdeRNN using Bob's approximate TXTL integrator instead of the exact analytical step.
