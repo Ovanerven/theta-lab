@@ -425,6 +425,18 @@ class TrainConfig:
     # for a strictly partial-observation experiment). None = all P species (default).
     gru_y_cols: list[int] | None = None
 
+    # If set, slice ds.y0 and ds.y_seq to these column indices after loading.
+    # Lets you use a dataset with more species than the scaffold expects by
+    # selecting the subset (in scaffold state order) before the P_obs check.
+    # Example: [0, 11, 12, 3, 4, 1, 2] picks the 7 kovacs_7 species from the
+    # 14-species pulsed dataset.
+    dataset_species_subset: list[int] | None = None
+
+    # When True, compute loss only at the first and last time step (start/end
+    # supervision). Useful to test whether models generalise from endpoint-only
+    # signal. Not supported for variable-length sequences.
+    supervise_endpoints_only: bool = False
+
     wandb_enabled: bool = False
     wandb_project: str = "theta-lab"
     wandb_entity: str | None = None
@@ -601,6 +613,16 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     wandb, wandb_run = init_wandb(cfg, cfg_dict, run_id=run_id, exp_dir=exp_dir)
 
     ds = ODEDataset(cfg.dataset_path)
+
+    if cfg.dataset_species_subset is not None:
+        idx = np.array(cfg.dataset_species_subset, dtype=np.int64)
+        ds.obs_names   = ds.obs_names[idx]   if ds.obs_names   is not None else None
+        ds.obs_indices = ds.obs_indices[idx]
+        ds.y0          = ds.y0[:, idx]
+        ds.y_seq       = ds.y_seq[:, :, idx]
+        names_str = list(ds.obs_names) if ds.obs_names is not None else idx.tolist()
+        print(f"Species subset: {names_str} ({len(idx)} of original species)")
+
     N = len(ds)
 
     n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
@@ -866,10 +888,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq,
                     **model_kwargs,
                 )
-            pred = pred[:, :, obs_idx] 
+            pred = pred[:, :, obs_idx]
             y_seq = y_seq[:, :, obs_idx]
 
-            loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+            if cfg.supervise_endpoints_only:
+                pred_l  = torch.stack([pred[:, 0, :],  pred[:, -1, :]],  dim=1)
+                y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
+                loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
+            else:
+                loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -925,7 +952,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
                     pred = pred[:, :, obs_idx]
                     y_seq = y_seq[:, :, obs_idx]
-                    loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+                    if cfg.supervise_endpoints_only:
+                        pred_l  = torch.stack([pred[:, 0, :],  pred[:, -1, :]],  dim=1)
+                        y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
+                        loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
+                    else:
+                        loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
                     va_total += float(loss.item())
 
                     sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()
