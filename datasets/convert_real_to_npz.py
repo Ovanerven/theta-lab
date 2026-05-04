@@ -1,24 +1,31 @@
-"""
-Convert parsed real IVTT data (parquet files) into the .npz format
-expected by last-layer-ode/train_R.py (ODEDataset).
+"""datasets/convert_real_to_npz.py
 
-This is the minimal supervisor-aligned pipeline:
-  - Reagent columns (everything except TIME and DNA) are MinMax-scaled
-    jointly across all experiments.
-  - `DNA c` is kept raw (no scaling) and collapsed into a single bolus
-    at t=0 equal to the cumulative total per experiment.
-  - Pipetting-error anomalies (pm > 7000 RFU) are dropped per Leonardo.
-  - y_seq observations: Broccoli (mm), mCherry/2 (pm).
-  - y0 = obs at t0; y_seq[k] = obs at t_{k+1}; u_seq[k] = u during [t_k, t_{k+1}).
+Convert parsed real IVTT data (parquet files) into the .npz format expected by
+`last-layer-ode/train.py` (ODEDataset).
+
+Pipeline:
+    - Controls (reagents): either MinMax-scaled jointly across all experiments OR
+        kept raw (see --reagent-scaling).
+    - `DNA c` is kept raw (no scaling) and either:
+            * collapsed into a single bolus at t=0 equal to the cumulative total
+                per experiment (supervisor-style), or
+            * kept as per-step deltas (bob_model-style)
+        (see --dna-mode).
+    - Pipetting-error anomalies (pm > 7000 RFU) can be dropped (see --outlier-mode).
+    - y_seq observations: Broccoli (mm), mCherry/2 (pm) — stored raw.
+    - y0 = obs at t0; y_seq[k] = obs at t_{k+1}; u_seq[k] = u during [t_k, t_{k+1}).
+        This alignment can be switched to bob_model-style y_seq[k]=obs at t_k
+        (see --obs-align).
 
 Usage:
-    python datasets/convert_real_to_npz.py
-    python datasets/convert_real_to_npz.py --layout mat_dna
-    python datasets/convert_real_to_npz.py --output datasets/foo.npz
+        python datasets/convert_real_to_npz.py
+        python datasets/convert_real_to_npz.py --layout mat_dna
+        python datasets/convert_real_to_npz.py --reagent-scaling none
+        python datasets/convert_real_to_npz.py --output datasets/foo.npz
 
 Layouts:
-  full    : P=7 [R, O, m, mm, p, pm, DNA] — for txtl_resource_and_maturation_dna scaffold
-  mat_dna : P=6 [R, m, mm, p, pm, DNA]    — for txtl_maturation_dna scaffold (no oxygen)
+    full    : P=7 [R, O, m, mm, p, pm, DNA] — for txtl_resource_and_maturation_dna scaffold
+    mat_dna : P=6 [R, m, mm, p, pm, DNA]    — for txtl_maturation_dna scaffold (no oxygen)
 """
 from __future__ import annotations
 
@@ -74,8 +81,41 @@ def main():
     parser = argparse.ArgumentParser(description="Convert real IVTT parquet data to .npz (MinMax + outlier filter).")
     parser.add_argument("--layout", type=str, default="full", choices=list(LAYOUTS.keys()))
     parser.add_argument("--data-dir", type=str, default="datasets/data_parsed_pruned")
+    parser.add_argument(
+        "--reagent-scaling",
+        type=str,
+        default="minmax",
+        choices=["minmax", "none"],
+        help="Scaling for reagent controls (DNA c is always raw): 'minmax' (default) or 'none' (raw).",
+    )
+    parser.add_argument(
+        "--dna-mode",
+        type=str,
+        default="bolus",
+        choices=["bolus", "raw"],
+        help="How to represent DNA c in u_seq: 'bolus' (t=0 total DNA, default) or 'raw' (per-step deltas; bob_model).",
+    )
+    parser.add_argument(
+        "--obs-align",
+        type=str,
+        default="next",
+        choices=["next", "current"],
+        help="Observation alignment for y_seq: 'next' => y_seq[k]=obs at t_{k+1} (default); 'current' => y_seq[k]=obs at t_k (bob_model).",
+    )
+    parser.add_argument(
+        "--outlier-mode",
+        type=str,
+        default="max",
+        choices=["max", "last", "none"],
+        help=(
+            "How to drop pipetting-error experiments based on pm (mCherry/divisor): "
+            "'max' drops if any timestep exceeds 7000 (default); "
+            "'last' drops if ONLY the final timestep exceeds 7000 (bob_model); "
+            "'none' disables dropping."
+        ),
+    )
     parser.add_argument("--output", type=str, default=None,
-                        help="Output .npz path. Defaults to datasets/real_ivtt_minmax_<layout>.npz")
+                        help="Output .npz path. Defaults to datasets/real_ivtt_<scaling>_<layout>.npz")
     parser.add_argument("--mcherry-divisor", type=float, default=2.0,
                         help="Divide raw mCherry RFU by this to convert to concentration units (default 2.0).")
     args = parser.parse_args()
@@ -88,7 +128,13 @@ def main():
     pm_idx = layout["pm_idx"]
     x0_init = np.asarray(layout["x0_init"], dtype=np.float32)
 
-    output = args.output or f"datasets/real_ivtt_minmax_{args.layout}.npz"
+    if args.output is not None:
+        output = args.output
+    else:
+        if args.reagent_scaling == "minmax":
+            output = f"datasets/real_ivtt_minmax_{args.layout}.npz"
+        else:
+            output = f"datasets/real_ivtt_raw_{args.layout}.npz"
 
     pairs = collect_experiment_pairs(args.data_dir)
     if not pairs:
@@ -136,37 +182,69 @@ def main():
 
         obs_full = np.stack([broccoli, mcherry], axis=1)
 
-        if obs_full[:, 1].max() > PM_OUTLIER_THRESHOLD:
-            n_dropped += 1
-            continue
+        if args.outlier_mode != "none":
+            pm = obs_full[:, 1]
+            too_high = False
+            if args.outlier_mode == "max":
+                too_high = float(pm.max()) > PM_OUTLIER_THRESHOLD
+            elif args.outlier_mode == "last":
+                too_high = float(pm[-1]) > PM_OUTLIER_THRESHOLD
+            else:
+                raise ValueError(f"Unknown outlier_mode: {args.outlier_mode}")
+            if too_high:
+                n_dropped += 1
+                continue
 
         # Match supervisor: drop last frame; u_seq[k] drives [t_k, t_{k+1}).
         u_full = df_inp[control_cols].to_numpy(dtype=np.float32)[:-1]
 
         y0_obs_list.append(obs_full[0])
-        obs_list.append(obs_full[1:])
+        if args.obs_align == "next":
+            obs_list.append(obs_full[1:])
+        else:
+            obs_list.append(obs_full[:-1])
         u_raw_list.append(u_full)
         t_list.append(times)
 
-    print(f"Kept {len(obs_list)} experiments (dropped {n_dropped} as pm>{PM_OUTLIER_THRESHOLD:.0f} outliers)")
+    if args.outlier_mode == "none":
+        print(f"Kept {len(obs_list)} experiments (outlier dropping disabled)")
+    else:
+        print(
+            f"Kept {len(obs_list)} experiments (dropped {n_dropped} as pm>{PM_OUTLIER_THRESHOLD:.0f} outliers; mode={args.outlier_mode})"
+        )
 
-    # ---- Fit MinMax scaler jointly across all reagent columns (excluding DNA c) ----
-    all_reagents = np.concatenate([u[:, reagent_mask] for u in u_raw_list], axis=0)
-    scaler = MinMaxScaler().fit(all_reagents)
-    u_scale_min = scaler.data_min_.astype(np.float32)
-    u_scale_max = scaler.data_max_.astype(np.float32)
-    print(f"MinMax fit over {all_reagents.shape[0]} timesteps × {all_reagents.shape[1]} reagents")
+    u_scale_min = None
+    u_scale_max = None
+    reagent_col_names = np.array(
+        [c for c, keep in zip(control_cols, reagent_mask) if keep], dtype="<U32"
+    )
 
-    # ---- Apply MinMax + collapse DNA c to a single bolus at t=0 ----
+    scaler = None
+    if args.reagent_scaling == "minmax":
+        # ---- Fit MinMax scaler jointly across all reagent columns (excluding DNA c) ----
+        all_reagents = np.concatenate([u[:, reagent_mask] for u in u_raw_list], axis=0)
+        scaler = MinMaxScaler().fit(all_reagents)
+        u_scale_min = scaler.data_min_.astype(np.float32)
+        u_scale_max = scaler.data_max_.astype(np.float32)
+        print(f"MinMax fit over {all_reagents.shape[0]} timesteps × {all_reagents.shape[1]} reagents")
+    else:
+        print("Reagent scaling: none (raw controls)")
+
+    # ---- Apply scaling (optional) + DNA handling ----
     u_list: list[np.ndarray] = []
     dna_totals: list[float] = []
     for u_raw in u_raw_list:
         u = u_raw.copy()
-        u[:, reagent_mask] = scaler.transform(u_raw[:, reagent_mask]).astype(np.float32)
+        if scaler is not None:
+            u[:, reagent_mask] = scaler.transform(u_raw[:, reagent_mask]).astype(np.float32)
         dna_total = float(u_raw[:, dna_c_col_idx].sum())  # raw cumulative DNA
         dna_totals.append(dna_total)
-        u[:, dna_c_col_idx] = 0.0
-        u[0, dna_c_col_idx] = dna_total  # raw, kept unscaled (physical concentration)
+        if args.dna_mode == "bolus":
+            u[:, dna_c_col_idx] = 0.0
+            u[0, dna_c_col_idx] = dna_total  # raw, kept unscaled (physical concentration)
+        else:
+            # keep raw per-step deltas as-is
+            u[:, dna_c_col_idx] = u_raw[:, dna_c_col_idx]
         u_list.append(u)
 
     dna_totals_arr = np.asarray(dna_totals, dtype=np.float32)
@@ -215,9 +293,15 @@ def main():
     control_names = np.array(control_cols, dtype="<U32")
     obs_names = np.array(state_names, dtype="<U32")
     names_full = np.array(state_names + control_cols, dtype="<U32")
-    reagent_col_names = np.array(
-        [c for c, keep in zip(control_cols, reagent_mask) if keep], dtype="<U32"
-    )
+    save_kwargs: dict = {}
+    if scaler is not None:
+        save_kwargs.update(
+            dict(
+                u_scale_min=u_scale_min,
+                u_scale_max=u_scale_max,
+                u_scaled_cols=reagent_col_names,
+            )
+        )
 
     # ---- y_seq raw stats (regardless of u scaling) — useful for runtime obs_normalization ----
     obs_raw_min = y_seq.reshape(-1, P).min(axis=0).astype(np.float32)
@@ -246,20 +330,27 @@ def main():
         theta_true=np.zeros(0, dtype=np.float32),
         lengths=lengths,
         # provenance
-        reagent_scaling=np.array("minmax", dtype="<U16"),
-        u_scale_min=u_scale_min,
-        u_scale_max=u_scale_max,
-        u_scaled_cols=reagent_col_names,
+        reagent_scaling=np.array(args.reagent_scaling, dtype="<U16"),
+        dna_mode=np.array(args.dna_mode, dtype="<U16"),
+        obs_align=np.array(args.obs_align, dtype="<U16"),
+        outlier_mode=np.array(args.outlier_mode, dtype="<U16"),
         dna_totals=dna_totals_arr,
         obs_raw_min=obs_raw_min,
         obs_raw_max=obs_raw_max,
         obs_raw_mean=obs_raw_mean.astype(np.float32),
         obs_raw_std=obs_raw_std.astype(np.float32),
+        **save_kwargs,
     )
 
     print(f"\nSaved to {out_path}")
     print(f"  y0:      {y0.shape}  (P={P})")
     print(f"  u_seq:   {u_seq.shape}  (MinMax-scaled reagents, raw DNA bolus at t=0)")
+    if args.reagent_scaling == "none":
+        print("  u_seq:   reagents are RAW (no scaling)")
+    if args.dna_mode == "raw":
+        print("  u_seq:   DNA c is RAW per-step deltas")
+    else:
+        print("  u_seq:   DNA c is collapsed to a t=0 bolus")
     print(f"  y_seq:   {y_seq.shape}")
     print(f"  t_obs:   {t_obs.shape}")
     print(f"  lengths: {lengths.shape} (min={lengths.min()}, max={lengths.max()})")

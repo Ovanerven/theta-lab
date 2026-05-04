@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import math
 
+from sim.glycolysis import (
+    GlycolysisOracle22Scaffold,
+    GlycolysisReduced12Scaffold,
+    GlycolysisReduced8Scaffold,
+    GlycolysisReduced4Scaffold,
+)
+
 class MechanisticScaffold(nn.Module):
     def __init__(self, P: int, theta_dim: int):
         super().__init__()
@@ -668,6 +675,49 @@ class TXTLResourceandMaturationDNAScaffold(MechanisticScaffold):
         dmm  = kmatm * m_p - kdm * mm_p
         dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
         dpm  = O_p * kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
+
+
+class TXTLMaturationOnly7Scaffold(MechanisticScaffold):
+    """
+    7-state TXTL scaffold (same layout as TXTLResourceandMaturationDNAScaffold)
+    but with O decoupled from dpm — i.e., pure mRNA-maturation kinetics only.
+
+    This is the ablation counterpart of txtl_resource_and_maturation_dna: same
+    obs_idx=[3,5], same dataset layout, same theta bounds except lam_O is
+    dropped (theta_dim=6 vs 7).  The only mechanistic difference is:
+        dpm = kmt * p      (resource scaffold has dpm = O * kmt * p)
+    O is retained as a dummy state (dO = 0) so the dataset's 7-column y_seq
+    can be used directly without any dataset changes.
+
+    States (7): R, O (dummy), m, mm, p, pm, DNA
+    Parameters θ (6): lam, VTXmax, kdm, VTLmax, kmt, kmatm
+    Observed indices: [3, 5]  (mm, pm) — identical to resource variant
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=6)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dR   = -lam * R_p
+        dO   = torch.zeros_like(O)
+        dm   = R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  = kmt * p_p
         dDNA = torch.zeros_like(DNA)
 
         return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
@@ -1384,15 +1434,19 @@ class Kovacs54Scaffold(MechanisticScaffold):
             'CH4', 'O2', 'H2O', 'CO', 'CO2', 'H2', 'H', 'O',
             'OH', 'HO2', 'H2O2', 'CH3', 'CH2O', 'N2'
         ]
+        # No per-reaction override — falls back to scalar [theta_lo, theta_hi]
+        # from config (defaults [1e-6, 100]). This range is what was used
+        # before and trained stably; the wider bounds I tried earlier
+        # interact badly with the mole-fraction correction and NaN out RK4.
 
     def forward(self, y, k):
         """
         y: Tensor of shape (batch, 14)
         k: Tensor of shape (batch, 54)
         """
-        # 1. Unpack states (ReLU ensures no negative concentrations)
-        y = torch.relu(y) 
-        
+        # No ReLU on y — non-smooth gate kills gradient flow when species
+        # cross zero during integration. Mass-action terms naturally damp
+        # toward zero anyway; clamping happens once for the dilution weight.
         FUEL = y[:, 0]
         O2   = y[:, 1]
         H2O  = y[:, 2]
@@ -1516,12 +1570,108 @@ class Kovacs54Scaffold(MechanisticScaffold):
                  
         d_H2O2 = r4 + r21 + r23 + r45 - r46 - r47 - r48 - r49 - r50
         
-        d_N2   = torch.zeros_like(FUEL) 
+        d_N2   = torch.zeros_like(FUEL)
 
         dy_dt = torch.stack([
-            d_FUEL, d_O2, d_H2O, d_CO, d_CO2, d_H2, d_H, d_O, 
+            d_FUEL, d_O2, d_H2O, d_CO, d_CO2, d_H2, d_H, d_O,
             d_OH, d_HO2, d_H2O2, d_R, d_IO, d_N2
         ], dim=-1)
+
+        # Mole-fraction correction (Gibbs-Duhem-like): when total moles change
+        # due to net reaction, dx_i/dt = R_i - x_i * sum(R_j). This makes inert
+        # species (N2) shift via dilution and keeps sum(x) normalized.
+        # Clamp y to [0,1] so RK4 overshoots don't blow up the dilution term.
+        x = torch.clamp(y, 0.0, 1.0)
+        dy_dt = dy_dt - x * dy_dt.sum(dim=-1, keepdim=True)
+
+        return dy_dt
+
+class KovacsMethaneSRPScaffold(MechanisticScaffold):
+    """
+    7-state scaffold for CH4 combustion following Kovács et al. (2026) SRP.
+
+    States (P=7): [FUEL, R, IO, CO, CO2, O2, H2O]
+    Mapping to AramcoMech 3.0: CH4, CH3, CH2O, CO, CO2, O2, H2O
+
+    Radical species (H, O, OH, HO2, H2O2, H2) are NOT tracked.
+    They appear only via θ(t): the neural encoder learns the time-varying
+    effective pseudo-first-order rates k_eff(t) = k_Arrhenius * [X](t),
+    implicitly encoding the radical pool dynamics.
+
+    Effective fluxes (pseudo-first-order in virtual species):
+      v1 = k1 * FUEL    FUEL → R       (H-abstraction, dominant)
+      v2 = k2 * FUEL    FUEL → IO      (direct shortcut)
+      v3 = k3 * FUEL    FUEL → CO      (direct shortcut)
+      v4 = k4 * R       R → IO         (radical oxidation)
+      v5 = k5 * R       R → CO         (direct)
+      v6 = k6 * IO      IO → CO        (aldehyde oxidation, dominant)
+      v7 = k7 * IO      IO → CO2       (direct)
+      v8 = k8 * CO      CO → CO2       (H2/CO core, CO oxidation)
+
+    O2 and H2O follow approximate global stoichiometry:
+      O2 consumed ~1 mol per mol FUEL C-atom converted (rough average)
+      H2O produced ~0.5 mol per mol FUEL consumed at each H-abstraction step
+
+    θ_dim = 8: [k1, k2, k3, k4, k5, k6, k7, k8]
+    Observed: all 7 states (fitting to AramcoMech simulation data)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=8)
+        self.state_names = ["FUEL", "R", "IO", "CO", "CO2", "O2", "H2O"]
+        # Pseudo-first-order effective rate constants [normalized_conc^-1 * s^-1 effectively]
+        # Wide bounds: radical pool concentration spans ~1e-6 to 1e-3,
+        # Arrhenius A factors ~1e8–1e14, so k_eff = k*[X] ~ 1e2–1e8 s^-1
+        # In your normalized concentration space, scale down proportionally
+        self.theta_lo_vec = [1e-3] * 8
+        self.theta_hi_vec = [1e3]  * 8
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        FUEL, R, IO, CO, CO2, O2, H2O = y.unbind(dim=-1)
+        k1, k2, k3, k4, k5, k6, k7, k8 = theta.unbind(dim=-1)
+
+        # Physical non-negativity
+        FUEL_p = torch.clamp_min(FUEL, 0.0)
+        R_p    = torch.clamp_min(R,    0.0)
+        IO_p   = torch.clamp_min(IO,   0.0)
+        CO_p   = torch.clamp_min(CO,   0.0)
+        O2_p   = torch.clamp_min(O2,   0.0)
+
+        # Effective fluxes (all pseudo-first-order; radical [X] absorbed into k_i(t))
+        v1 = k1 * FUEL_p   # FUEL → R
+        v2 = k2 * FUEL_p   # FUEL → IO  (shortcut)
+        v3 = k3 * FUEL_p   # FUEL → CO  (shortcut)
+        v4 = k4 * R_p      # R → IO
+        v5 = k5 * R_p      # R → CO
+        v6 = k6 * IO_p     # IO → CO
+        v7 = k7 * IO_p     # IO → CO2
+        v8 = k8 * CO_p     # CO → CO2
+
+        dFUEL = -(v1 + v2 + v3)
+        dR    =   v1 - (v4 + v5)
+        dIO   =   v2 + v4 - (v6 + v7)
+        dCO   =   v3 + v5 + v6 - v8
+        dCO2  =   v7 + v8
+
+        # Global O2 stoichiometry:
+        # CH4 → CO2 + 2H2O consumes 2 O2 total.
+        # Distribute: ~1 O2 from FUEL abstraction, ~1 O2 from CO oxidation.
+        # Rough split: v_O2 = (v1+v2+v3) * 1.0 + v8 * 1.0
+        # Using simpler: total O2 ≈ 2 × FUEL consumption rate
+        total_fuel_flux = v1 + v2 + v3
+        dO2  = -(total_fuel_flux + v8)  # one O2 for C-H bond abstraction, one for CO→CO2
+
+        # H2O stoichiometry: produced at H-abstraction steps
+        # Each FUEL+OH→R+H2O or R+OH→IO+H2 etc.
+        # Per Kovács Table 2: mainly at v1 (FUEL→R via OH gives H2O) and v6 (IO→CO via OH gives H2O)
+        dH2O =  v1 + v6 + v2  # rough; dominant sources are H-abstraction from FUEL and IO
+
+        dy_dt = torch.stack((dFUEL, dR, dIO, dCO, dCO2, dO2, dH2O), dim=-1)
+
+        # Mole-fraction correction: dx_i/dt = R_i - x_i * sum(R_j), so the
+        # subset's mole-fractions stay self-consistent even when species
+        # outside the 7-state subset (radicals) carry net mole change.
+        x = torch.clamp(y, 0.0, 1.0)
+        dy_dt = dy_dt - x * dy_dt.sum(dim=-1, keepdim=True)
 
         return dy_dt
 
@@ -1547,5 +1697,12 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "westbrook_dryer_2step": WestbrookDryer2Step(),
     "global_one_step": GlobalOneStep(),
     "kovacs_54":  Kovacs54Scaffold(),
+    "kovacs_7": KovacsMethaneSRPScaffold(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
+    "txtl_maturation_only_dna": TXTLMaturationOnly7Scaffold(),
+    # Glycolysis scaffolds (oracle + 3 reduced models)
+    "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
+    "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
+    "glycolysis_reduced8":  GlycolysisReduced8Scaffold(),
+    "glycolysis_reduced4":  GlycolysisReduced4Scaffold(),
 }

@@ -60,6 +60,9 @@ class NeuralOdeGRU(nn.Module):
         if u_minmax_max is not None and u_minmax_cols is not None:
             cols = torch.as_tensor(u_minmax_cols, dtype=torch.long)
             u_max_full[cols] = u_minmax_max.float().clamp_min(1e-8)
+            self._has_u_minmax = True
+        else:
+            self._has_u_minmax = False
         self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
     def forward(
@@ -92,11 +95,24 @@ class NeuralOdeGRU(nn.Module):
 
         use_partial = obs_idx.numel() > 0
 
+        if u_transform in ("cumsum", "cumsum_sqrt"):
+            u_gru = u_seq.cumsum(dim=1)
+        else:
+            u_gru = u_seq
+        if u_transform in ("minmax", "minmax_sqrt"):
+            if not self._has_u_minmax:
+                raise ValueError(
+                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
+                )
+            u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
+        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+            u_gru = u_gru.clamp_min(0.0).sqrt()
+
         y_prev = y0
         for k in range(K):
-            u_k     = u_seq[:, k, :]    # raw delta — used for ODE jumps
-            u_gru_k = u_gru[:, k, :]   # transformed — used for GRU features
-            dt_k    = dt_seq[:, k]
+            u_k     = u_seq[:, k, :]   # raw — used for the bolus jump
+            u_gru_k = u_gru[:, k, :]   # transformed — used for GRU feature
+            dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
             if teacher_forcing and k > 0 and (k % tf_every == 0) and y_seq is not None:
@@ -107,13 +123,14 @@ class NeuralOdeGRU(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            y_in_feat = y_in
             if y_transform == "sqrt":
-                y_in_feat = y_in_feat.clamp_min(0.0).sqrt()
+                y_in_feat = y_in.clamp_min(0.0).sqrt()
             elif y_transform == "sqrt_clamp1":
-                y_in_feat = y_in_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+                y_in_feat = y_in.clamp_min(0.0).sqrt().clamp_min(1.0)
             elif y_transform == "log1p":
-                y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
+                y_in_feat = torch.log1p(y_in.clamp_min(0.0))
+            else:
+                y_in_feat = y_in
 
             feat = torch.cat([u_gru_k, y_in_feat], dim=-1)
             x    = self.lift(feat).unsqueeze(1)

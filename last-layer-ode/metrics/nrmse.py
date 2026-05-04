@@ -23,7 +23,17 @@ CACHE_FIELDS = ["run", "scaffold", "P", "species", "n_samples",
 
 
 def nrmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
+    # Black-box rollouts (e.g. neural_ode_mlp) can diverge to ±inf over long
+    # horizons. Replace non-finite preds with a large finite sentinel scaled to
+    # y_true's magnitude so a diverged model scores "huge but finite" rather
+    # than NaN — keeps the CSV/aggregation usable.
+    if not np.all(np.isfinite(y_pred)):
+        scale = float(np.max(np.abs(y_true))) if y_true.size else 1.0
+        sentinel = 1e6 * max(scale, 1.0)
+        y_pred = np.nan_to_num(y_pred, nan=sentinel, posinf=sentinel, neginf=-sentinel)
+    with np.errstate(over="ignore", invalid="ignore"):
+        diff = y_pred.astype(np.float64) - y_true.astype(np.float64)
+        rmse = float(np.sqrt(np.mean(diff * diff)))
     rng = float(np.max(y_true) - np.min(y_true))
     return rmse / max(rng, 1e-8)
 
@@ -132,9 +142,16 @@ def load_or_compute(exp_root: Path, recompute: bool = False,
 
         if cache_path.exists() and not recompute and dataset_override is None:
             rows = _load_cache(cache_path)
-            print(f"  {exp_dir.name}  (cached)")
-            all_rows.extend(rows)
-            continue
+            cache_has_nan = any(
+                not np.isfinite(r[c])
+                for r in rows for c in ("median", "mean", "std", "q25", "q75")
+            )
+            if cache_has_nan:
+                print(f"  {exp_dir.name}  (stale NaN cache — recomputing)")
+            else:
+                print(f"  {exp_dir.name}  (cached)")
+                all_rows.extend(rows)
+                continue
 
         try:
             rows = _compute_run(exp_dir, device, no_split=no_split,

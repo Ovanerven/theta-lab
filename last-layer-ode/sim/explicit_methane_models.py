@@ -1,6 +1,6 @@
 import numpy as np
 import cantera as ct
-from numba import njit # <--- ADD THIS
+# from numba import njit # <--- ADD THIS
 
 """
 Explicit stoichiometric methane benchmark models.
@@ -1402,7 +1402,7 @@ def Smooke_ReducedModel(t: float, y: np.ndarray, k: np.ndarray, dim=False) -> np
 
     return np.array([dCH4, dH2, dO2, dO, dH, dOH, dHO2, dH2O2, dH2O, dCO, dCH3, dCH2O, dHCO, dCH3O, dCO2, dN2], dtype=float)
 
-@njit
+# @njit
 def _math_core(t: float, y: np.ndarray, k: np.ndarray) -> np.ndarray:
     # Unpack species
     AR = y[0]

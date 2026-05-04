@@ -1,0 +1,52 @@
+# Glycolysis oracle ablation sweep (GRU backbone).
+#
+# Oracle: 22-state inhibited glycolysis with fixed kinetics.
+# Dataset: 4 observed species (Glc, Pyr, ATP, NADH); 7 control channels
+#          (Glc bolus + 6 enzyme inhibitor boluses).
+# Scaffold used for training: glycolysis_reduced4 (4-state lumped model).
+#
+# Generate the dataset first:
+#   python create_dataset.py --model glycolysis_oracle22 \
+#     --obs-indices 0,10,12,15 --control-indices 0,16,17,18,19,20,21 \
+#     --t-span 20 --n-steps 400 --n-samples 2000 \
+#     --output-file datasets/glycolysis_oracle22.npz
+#
+# Ablation axes:
+#   A1  fixed global theta (no NN)
+#   A2  per-sample constant theta (MLP on y0, fixed across time)
+#   A3  black-box GRU (dy/dt Euler, no scaffold)
+#   A4  black-box MLP (dy/dt, no history)
+#   A5  LL-ODE, softplus theta (unbounded)
+#   A6  LL-ODE, gamma-bounded theta (baseline)
+#   A7  LL-ODE + L1 theta smoothness regularization
+#   A8  LL-ODE + L2 theta smoothness regularization
+
+study: glycolysis_gru_ablation
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  base_config: configs/archs/gru_optimal.yaml
+  dataset_path: datasets/glycolysis_oracle22.npz
+  scaffold: glycolysis_reduced4
+  epochs: 100
+
+runs:
+  # A1 — fixed global theta (no NN)
+  - {model_class: ode_fixed_theta,  exp_name: A1_fixed_theta}
+  # A2 — per-sample constant theta (MLP encodes y0, fixed across timesteps)
+  - {model_class: ode_sample_theta, exp_name: A2_sample_theta}
+  # A3 — black-box GRU (dy/dt, Euler, no scaffold)
+  - {model_class: neural_ode_gru,   exp_name: A3_neural_ode_gru}
+  # A4 — black-box MLP (dy/dt, no history)
+  - {model_class: neural_ode_mlp,   exp_name: A4_neural_ode_mlp}
+  # A5 — our method without gamma bounds (softplus, unbounded)
+  - {model_class: ode_rnn,          exp_name: A5_unbounded, theta_bounded: false}
+  # A6 — + gamma bounds → our baseline
+  - {model_class: ode_rnn,          exp_name: A6_baseline}
+  # A7 — + gamma bounds + L1 theta smoothness regularization
+  - {model_class: ode_rnn,          exp_name: A7_l1reg, l1_regularization: true, lambda_reg: 0.1}
+  # A8 — + gamma bounds + L2 theta smoothness regularization
+  - {model_class: ode_rnn,          exp_name: A8_l2reg, l2_regularization: true, lambda_reg: 0.1}

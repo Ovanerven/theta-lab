@@ -1,0 +1,69 @@
+# Partial-observation ablation on the 14-species pulsed AramcoMech dataset.
+#
+# Question: does the ODE-RNN scaffold model outperform black-box Neural ODEs
+# when fewer species are observed?
+#
+# Two observation regimes:
+#   full (14 species)  — kovacs_54 scaffold vs neural-ODE baselines
+#   partial (7 species) — kovacs_7 scaffold vs neural-ODE baselines,
+#                         using dataset_species_subset to restrict the 14-species
+#                         dataset to the 7 scaffold states in their expected order:
+#                         [CH4, CH3, CH2O, CO, CO2, O2, H2O] → indices [0,11,12,3,4,1,2]
+#
+# Runs:
+#   B1 — neural_ode_gru, all 14 species
+#   B2 — neural_ode_gru,  7 species subset
+#   B3 — ode_rnn kovacs_54 (bounded), all 14 species
+#   B4 — ode_rnn kovacs_7  (bounded),  7 species subset
+#   B5 — neural_ode_mlp, all 14 species
+#   B6 — neural_ode_mlp,  7 species subset
+
+study: aramco_pulsed_partial_obs
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/methane/gru_aramco_kovacs54.yaml
+
+fixed:
+  dataset_path: datasets/aramco_pulsed_n500_molfrac.npz
+  epochs: 100
+  obs_normalization: zscore
+  n_substeps: 4
+
+runs:
+  # --- Full 14-species observation ---
+  - exp_name: B1_neural_ode_gru_full14
+    model_class: neural_ode_gru
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: B3_ode_rnn_kovacs54_full14
+    model_class: ode_rnn
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  - exp_name: B5_neural_ode_mlp_full14
+    model_class: neural_ode_mlp
+    scaffold: kovacs_54
+    obs_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+  # --- Partial 7-species observation ---
+  # dataset_species_subset selects [CH4, CH3, CH2O, CO, CO2, O2, H2O] in kovacs_7 state order
+  - exp_name: B2_neural_ode_gru_partial7
+    model_class: neural_ode_gru
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: B4_ode_rnn_kovacs7_partial7
+    model_class: ode_rnn
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]
+
+  - exp_name: B6_neural_ode_mlp_partial7
+    model_class: neural_ode_mlp
+    scaffold: kovacs_7
+    dataset_species_subset: [0, 11, 12, 3, 4, 1, 2]
+    obs_idx: [0, 1, 2, 3, 4, 5, 6]

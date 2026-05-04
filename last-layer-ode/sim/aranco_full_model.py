@@ -1,7 +1,7 @@
 import numpy as np
-from numba import njit
+# from numba import njit
 
-@njit
+# @njit
 def _math_core(t: float, y: np.ndarray, k: np.ndarray) -> np.ndarray:
     # Unpack species
     AR = y[0]
