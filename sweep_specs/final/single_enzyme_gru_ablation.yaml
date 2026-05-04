@@ -1,0 +1,42 @@
+# Teacher-forcing frequency sweep (GRU, TXTL maturation).
+#
+# All runs drop TF at epoch 70, so the last 30 epochs are fully free-running.
+# We vary tf_every (how often ground-truth is injected during TF epochs).
+#
+#   TF1  No teacher forcing at all (baseline reference)
+#   TF2  tf_every=50, drop at 70  (default frequency, sensible drop)
+#   TF3  tf_every=25, drop at 70  (2x more frequent)
+#   TF4  tf_every=10, drop at 70  (5x more frequent)
+#   TF5  tf_every=50, never drop  (current default — TF throughout all 100 epochs)
+
+study: single_enzyme_gru_ablation
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  base_config: configs/single_enzyme/single_enzyme.yaml
+  dataset_path: datasets/single_enzyme_lumped.npz
+  scaffold: single_enzyme_lumped
+  epochs: 100
+
+runs:
+  # # A1 — fixed global theta (no NN)
+  # - {model_class: ode_fixed_theta,  exp_name: A1_fixed_theta}
+  # # A2 — per-sample constant theta (MLP encodes y0, fixed across timesteps)
+  # - {model_class: ode_sample_theta, exp_name: A2_sample_theta}
+  # # A3 — black-box GRU (dy/dt, Euler, no scaffold)
+  # - {model_class: neural_ode_gru,   exp_name: A3_neural_ode_gru}
+  # # A4 — black-box MLP (dy/dt, no history)
+  # - {model_class: neural_ode_mlp,   exp_name: A4_neural_ode_mlp}
+  # # A5 — our method without gamma bounds (softplus, unbounded)
+  # - {model_class: ode_rnn,          exp_name: A5_unbounded, theta_bounded: false}
+  # # A6 — + gamma bounds → our baseline
+  # - {model_class: ode_rnn,          exp_name: A6_baseline}
+  # # A7 — + gamma bounds + L1 theta smoothness regularization
+  # - {model_class: ode_rnn,          exp_name: A7_l1reg, l1_regularization: true, lambda_reg: 0.1}
+  # # A8 — + gamma bounds + L2 theta smoothness regularization
+  # - {model_class: ode_rnn,          exp_name: A8_l2reg, l2_regularization: true, lambda_reg: 0.1}
+  # A9 — neural ode correction term baseline
+  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction}

@@ -10,7 +10,7 @@ def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tens
     return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
 
 
-class OdeFixedThetaNN(nn.Module):
+class NeuralOdeCorrection(nn.Module):
     """
     Baseline: single global learnable theta + state-dependent neural correction.
 

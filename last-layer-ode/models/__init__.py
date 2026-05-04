@@ -6,7 +6,7 @@ from models.neural_ode import NeuralODE
 from models.ode_transformer import OdeTransformer
 from models.ode_mlp import OdeMLP
 from models.ode_fixed_theta import OdeFixedTheta
-from models.ode_fixed_theta_nn import OdeFixedThetaNN
+from models.ode_fixed_theta_nn import NeuralOdeCorrection
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
@@ -40,7 +40,7 @@ MODELS: dict = {
     "ode_transformer":    OdeTransformer,
     "ode_mlp":            OdeMLP,
     "ode_fixed_theta":    OdeFixedTheta,
-    "ode_fixed_theta_nn": OdeFixedThetaNN,
+    "neural_ode_correction": NeuralOdeCorrection,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
     "ode_transformer_grouped": OdeTransformerGrouped,
