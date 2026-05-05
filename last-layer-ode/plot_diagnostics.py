@@ -253,7 +253,10 @@ def plot_val_species_losses(loss_npz: Path, out_dir: Path, state_names: list[str
     if "val_species_losses" not in data.files or data["val_species_losses"] is None:
         return
     V = data["val_species_losses"]
-    if V.size == 0:
+    # When `val_n=0`, np.savez(..., val_species_losses=None) round-trips to a 0-d
+    # object array containing None. `.size` is 1 (not 0) and `.shape[1]` would raise
+    # IndexError. Guard on dtype/ndim before any shape indexing.
+    if V.dtype == object or V.ndim < 2 or V.size == 0:
         return
 
     if obs_idx is not None and len(obs_idx) == V.shape[1]:

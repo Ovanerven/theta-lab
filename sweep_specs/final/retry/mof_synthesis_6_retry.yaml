@@ -1,0 +1,104 @@
+study: mof_synthesis_6_data_ablation
+runs_per_job: 1
+time: 04:00:00
+partition: gpu_a100
+no_plot: false
+fixed:
+  base_config: configs/archs/gru_optimal.yaml
+  scaffold: mof_synthesis_6
+  epochs: 100
+runs:
+- model_class: ode_fixed_theta
+  exp_name: A1_fixed_theta_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: ode_sample_theta
+  exp_name: A2_sample_theta_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: neural_ode_gru
+  exp_name: A3_neural_ode_gru_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: neural_ode_gru
+  exp_name: A3_neural_ode_gru_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  obs_idx:
+  - 0
+  - 5
+- model_class: neural_ode_mlp
+  exp_name: A4_neural_ode_mlp_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: neural_ode_mlp
+  exp_name: A4_neural_ode_mlp_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  obs_idx:
+  - 0
+  - 5
+- model_class: ode_rnn
+  exp_name: A5_unbounded_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  theta_bounded: false
+- model_class: ode_rnn
+  exp_name: A5_unbounded_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  theta_bounded: false
+  obs_idx:
+  - 0
+  - 5
+- model_class: ode_rnn
+  exp_name: A6_baseline_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: ode_rnn
+  exp_name: A6_baseline_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  obs_idx:
+  - 0
+  - 5
+- model_class: ode_rnn
+  exp_name: A7_l1reg_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  l1_regularization: true
+  lambda_reg: 0.1
+- model_class: ode_rnn
+  exp_name: A7_l1reg_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  l1_regularization: true
+  lambda_reg: 0.1
+  obs_idx:
+  - 0
+  - 5
+- model_class: neural_ode_correction
+  exp_name: A9_neural_ode_correction_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+- model_class: neural_ode_correction
+  exp_name: A9_neural_ode_correction_first_last_n1000
+  dataset_path: datasets/mof/mof_synthesis_6_n1000.npz
+  val_n: 100
+  test_n: 100
+  obs_idx:
+  - 0
+  - 5

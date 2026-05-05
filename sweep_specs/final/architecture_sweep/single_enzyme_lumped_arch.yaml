@@ -1,0 +1,39 @@
+# Architecture sweep for single_enzyme_lumped at n=100.
+# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 = 3 runs.
+# NOTE: single_enzyme_lumped has only n^x = 2 species, so d_y = n^x = 2 already
+# coincides with the d_y = 2 (first_last) case — only one obs setting needed.
+# GRU runs and seeds {0,1} are commented out (GRU comes from existing data-ablation sweep).
+# Baseline reference: A6_baseline_n100 (ode_rnn) ≈ 0.046 NRMSE — easiest of the
+# three datasets, included for completeness.
+
+study: single_enzyme_lumped_arch_sweep
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  scaffold: single_enzyme_lumped
+  dataset_path: datasets/single_enzyme/single_enzyme_lumped_n100.npz
+  val_n: 10
+  test_n: 10
+  epochs: 100
+  batch_size: 32
+
+runs:
+  # --- GRU (ode_rnn) --- already covered by data-ablation sweep; copy A6_baseline_n100 over manually.
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_enzlumped_n100_s42}
+  # - {base_config: configs/archs/gru.yaml,         seed: 0,  exp_name: gru_enzlumped_n100_s0}
+  # - {base_config: configs/archs/gru.yaml,         seed: 1,  exp_name: gru_enzlumped_n100_s1}
+  # --- LSTM ---
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_enzlumped_n100_s42}
+  # - {base_config: configs/archs/lstm.yaml,        seed: 0,  exp_name: lstm_enzlumped_n100_s0}
+  # - {base_config: configs/archs/lstm.yaml,        seed: 1,  exp_name: lstm_enzlumped_n100_s1}
+  # --- Mamba ---
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_enzlumped_n100_s42, env: mamba_env}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 0,  exp_name: mamba_enzlumped_n100_s0,  env: mamba_env}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 1,  exp_name: mamba_enzlumped_n100_s1,  env: mamba_env}
+  # --- Transformer ---
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n100_s42}
+  # - {base_config: configs/archs/transformer.yaml, seed: 0,  exp_name: trans_enzlumped_n100_s0}
+  # - {base_config: configs/archs/transformer.yaml, seed: 1,  exp_name: trans_enzlumped_n100_s1}

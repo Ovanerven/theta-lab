@@ -116,6 +116,32 @@ def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> tor
     return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
 
 
+def _load_bob_seed_splits(path: str | Path, idx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Parse bob_model/3 seed splits.py and return the (train, val, test) triple at `idx`.
+
+    The file contains three repeated assignments to `test=`, `val=`, `train=`. We
+    exec it under a namespace and capture each set as the assignments overwrite,
+    yielding 3 triples in source order.
+    """
+    import re
+    src = Path(path).read_text()
+    triples: list[dict[str, list[int]]] = []
+    current: dict[str, list[int]] = {}
+    pat = re.compile(r"^\s*(test|val|train)\s*=\s*(\[[^\]]*\])", re.MULTILINE)
+    for m in pat.finditer(src):
+        key, lst = m.group(1), m.group(2)
+        current[key] = list(eval(lst))  # safe: list literals only
+        if {"test", "val", "train"}.issubset(current):
+            triples.append(current)
+            current = {}
+    if not (0 <= idx < len(triples)):
+        raise ValueError(f"bob_seed_split_idx={idx} out of range; file has {len(triples)} triples")
+    t = triples[idx]
+    return (np.asarray(t["train"], dtype=np.int64),
+            np.asarray(t["val"],   dtype=np.int64),
+            np.asarray(t["test"],  dtype=np.int64))
+
+
 def loss_fn(
     pred: torch.Tensor,
     y_seq: torch.Tensor,
@@ -512,18 +538,36 @@ class TrainConfig:
     legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
 
     # bob_model compatibility
-    use_bob_loss: bool = False  # when True and model_class==bob_gru_verbatim, use Bob's exact loss
+    use_bob_loss: bool = False  # when True, use Bob's exact loss (loss_fn_bob_exact). Requires the
+                                 # model to emit an 8-d theta layout [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO]
+                                 # — produced by either model_class=bob_gru_verbatim or any model paired
+                                 # with scaffold=ivtt_analytic.
 
     use_bob_split: bool = False
     bob_split_seed: int = 57
     bob_test_frac: float = 0.125
     bob_val_frac: float = 0.125
 
+    # Use one of the three hardcoded (test, val, train) triples from
+    # bob_model/3 seed splits.py. Takes precedence over use_bob_split when set.
+    bob_seed_split_file: Optional[str] = None
+    bob_seed_split_idx: int = 0  # 0, 1, or 2
+
     use_basal: bool = False
     beta_regularization: bool = False
     lambda_beta: float = 1.0
 
     theta_bounded: bool = True   # if False, use softplus (unbounded above) instead of gamma
+
+    # OdeRNN encoder knobs — defaults preserve current behaviour for synthetic data.
+    lift_skip: bool = False               # drop the lift MLP and feed feat→GRU directly (Bob)
+    gru_variant: str = "nn_gru"           # "nn_gru" | "stacked_cell" (Bob's stacked GRUCell + dropout-on-last)
+    gru_init: str = "default"             # "default" | "supervisor" (orthogonal_ + xavier_ + zeros)
+    head_init: str = "default"            # "default" | "supervisor" (xavier_ + zeros, unconditional)
+    theta_head_transform: str = "log_gamma"  # "log_gamma" | "gamma"
+    theta_head_tau: float = 1.0           # log_gamma sigmoid temperature (Bob: 2.3)
+    u_transform: str = "none"             # forward-time u feature transform ("none" | "sqrt" | "cumsum" | …)
+    y_transform: str = "none"             # forward-time y feature transform ("none" | "sqrt_clamp1" | "log1p" | …)
 
     grad_clip: float = 1.0
     teacher_forcing: bool = True
@@ -545,6 +589,12 @@ class TrainConfig:
     # If set, restrict GRU encoder input to these species indices (must match obs_idx
     # for a strictly partial-observation experiment). None = all P species (default).
     gru_y_cols: list[int] | None = None
+
+    # If set, restrict GRU encoder input to these control (u) column indices.
+    # Used e.g. by the IVTT analytic scaffold to drop the DNA c column from the
+    # encoder feature (DNA c is consumed by the scaffold via dna_cum_total instead).
+    # None = all U columns (default).
+    gru_u_cols: list[int] | None = None
 
     # If set, slice ds.y0 and ds.y_seq to these column indices after loading.
     # Lets you use a dataset with more species than the scaffold expects by
@@ -746,7 +796,25 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     N = len(ds)
 
-    if cfg.use_bob_split:
+    if cfg.bob_seed_split_file:
+        train_idx, val_idx, test_idx = _load_bob_seed_splits(
+            cfg.bob_seed_split_file, int(cfg.bob_seed_split_idx)
+        )
+        # safety: clip to dataset size in case the source file references a
+        # superset of experiments (e.g. unfiltered indices)
+        for name, arr in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
+            if arr.size and (arr.max() >= N or arr.min() < 0):
+                raise ValueError(
+                    f"bob_seed_split {name}_idx out of range for N={N} "
+                    f"(min={arr.min()}, max={arr.max()})"
+                )
+        print(
+            f"Split: bob_seed_split_file={cfg.bob_seed_split_file}"
+            f" | idx={int(cfg.bob_seed_split_idx)}"
+            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
+        )
+
+    elif cfg.use_bob_split:
         idx = list(range(N))
         rng = random.Random(int(cfg.bob_split_seed))
         rng.shuffle(idx)
@@ -764,11 +832,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
         )
 
-    else:
+    elif not cfg.bob_seed_split_file:
         n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
         n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
 
-    if (not cfg.use_bob_split) and cfg.fixed_test_idx_path:
+    if (not cfg.use_bob_split) and (not cfg.bob_seed_split_file) and cfg.fixed_test_idx_path:
         fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
         if fixed_test.max() >= N or fixed_test.min() < 0:
             raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
@@ -782,7 +850,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         test_idx = fixed_test
         print(f"Split: fixed test from {cfg.fixed_test_idx_path} "
               f"(n_test={len(test_idx)}, n_val={len(val_idx)}, n_train={len(train_idx)})")
-    elif not cfg.use_bob_split:
+    elif (not cfg.use_bob_split) and (not cfg.bob_seed_split_file):
         train_idx, val_idx, test_idx = _make_split_indices(
             N=N,
             y_seq=ds.y_seq,
@@ -896,6 +964,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
         gru_y_cols=cfg.gru_y_cols,
+        gru_u_cols=cfg.gru_u_cols,
+        lift_skip=cfg.lift_skip,
+        gru_variant=cfg.gru_variant,
+        gru_init=cfg.gru_init,
+        head_init=cfg.head_init,
+        theta_head_transform=cfg.theta_head_transform,
+        theta_head_tau=cfg.theta_head_tau,
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -919,8 +994,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         try:
             model = torch.jit.script(model)
             print('The model compiled successfully')
-        except:
-            print('The model did not compile please check')
+        except Exception as e:
+            # Bare `except:` previously swallowed the error — the actual TorchScript
+            # diagnostic is what tells you which line/branch is non-scriptable.
+            import traceback
+            print(f'JIT scripting failed: {type(e).__name__}: {e}')
+            traceback.print_exc()
+            print('Continuing with eager model.')
 
     elif compile_model == True:
         try:
@@ -995,6 +1075,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     dt_tensor = torch.from_numpy(ds.dt).to(device)
     grouped_model = cfg.model_class == "ode_transformer_grouped"
 
+    def _inject_feat_transforms(mk: dict) -> dict:
+        # Only add when set so models whose forward() doesn't accept these kwargs
+        # (transformer/mamba forward signatures vary) aren't disturbed.
+        if cfg.u_transform and cfg.u_transform != "none":
+            mk["u_transform"] = cfg.u_transform
+        if cfg.y_transform and cfg.y_transform != "none":
+            mk["y_transform"] = cfg.y_transform
+        return mk
+
     for ep in range(1, cfg.epochs + 1):
         ep_t0 = time.time()
         teacher_forcing = bool(cfg.teacher_forcing) and (ep < int(cfg.tf_drop_epoch))
@@ -1020,6 +1109,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 "teacher_forcing": teacher_forcing,
                 "tf_every": int(cfg.tf_every),
             }
+            _inject_feat_transforms(model_kwargs)
             if grouped_model and batch_lengths is not None:
                 model_kwargs["lengths"] = batch_lengths
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -1031,7 +1121,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq,
                     **model_kwargs,
                 )
-            if cfg.use_bob_loss and cfg.model_class == "bob_gru_verbatim":
+            if cfg.use_bob_loss:
                 loss = loss_fn_bob_exact(pred_full=pred, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
                 # keep these for any logging/diagnostics below
                 pred = pred[:, :, obs_idx]
@@ -1094,8 +1184,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
 
-                    if cfg.use_bob_loss and cfg.model_class == "bob_gru_verbatim":
+                    if cfg.use_bob_loss:
                         model_kwargs = {"teacher_forcing": False, "tf_every": int(cfg.tf_every)}
+                        _inject_feat_transforms(model_kwargs)
                         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
                             pred_full, theta, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq, **model_kwargs)
                         loss = loss_fn_bob_exact(pred_full=pred_full, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
@@ -1104,6 +1195,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         continue
 
                     model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                    _inject_feat_transforms(model_kwargs)
                     if grouped_model and batch_lengths is not None:
                         model_kwargs["lengths"] = batch_lengths
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
@@ -1205,6 +1297,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_total = 0.0
         te_batches = 0
         sp_total = None
+        # Accumulate per-sample predictions to compute R² across the entire test set
+        # in both linear and log1p space. We pad to the global K_max and apply a
+        # length-aware boolean mask before computing SS_res / SS_tot.
+        all_pred_chunks: list[torch.Tensor] = []
+        all_true_chunks: list[torch.Tensor] = []
+        all_len_chunks:  list[torch.Tensor] = []
         with torch.no_grad():
             for y0, u_seq, y_seq, batch_lengths in test_loader:
                 K_batch = u_seq.shape[1]
@@ -1216,6 +1314,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 if batch_lengths is not None:
                     batch_lengths = batch_lengths.to(device)
                 model_kwargs = {"y_seq": None, "teacher_forcing": False}
+                _inject_feat_transforms(model_kwargs)
                 if grouped_model and batch_lengths is not None:
                     model_kwargs["lengths"] = batch_lengths
                 pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
@@ -1226,6 +1325,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()
                 sp_total = sp if sp_total is None else sp_total + sp
                 te_batches += 1
+                all_pred_chunks.append(pred.detach().cpu())
+                all_true_chunks.append(y_seq.detach().cpu())
+                if batch_lengths is not None:
+                    all_len_chunks.append(batch_lengths.detach().cpu())
         test_loss = te_total / max(1, te_batches)
         if sp_total is not None:
             test_species_loss = (sp_total / max(1, te_batches)).numpy()
@@ -1239,6 +1342,65 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_str = ""
         print(f"\nTest loss (best model): {test_loss:.6f}{sp_str}")
 
+        # ---- R² (per-species) on the test set, both linear and log1p space ----
+        # Variable-length batches may have different K, so pad each chunk to K_max
+        # before stacking; a length-mask filters padded steps out of the regression.
+        test_r2_lin: np.ndarray | None = None
+        test_r2_log: np.ndarray | None = None
+        if all_pred_chunks:
+            K_max = max(p.shape[1] for p in all_pred_chunks)
+            S = all_pred_chunks[0].shape[-1]
+
+            def _pad_K(t: torch.Tensor, target: int) -> torch.Tensor:
+                # Pad along time dim with zeros so concat works; length mask zeros these out anyway.
+                if t.shape[1] == target:
+                    return t
+                pad = torch.zeros(t.shape[0], target - t.shape[1], t.shape[2], dtype=t.dtype)
+                return torch.cat([t, pad], dim=1)
+
+            pred_cat = torch.cat([_pad_K(t, K_max) for t in all_pred_chunks], dim=0)  # (N, K_max, S)
+            true_cat = torch.cat([_pad_K(t, K_max) for t in all_true_chunks], dim=0)
+            if all_len_chunks:
+                lengths_cat = torch.cat(all_len_chunks, dim=0)
+                mask_2d = torch.arange(K_max)[None, :] < lengths_cat[:, None]   # (N, K_max)
+            else:
+                mask_2d = torch.ones(pred_cat.shape[0], K_max, dtype=torch.bool)
+
+            def _r2_per_species(p: torch.Tensor, t: torch.Tensor, m: torch.Tensor) -> np.ndarray:
+                p_np, t_np, m_np = p.numpy(), t.numpy(), m.numpy()
+                out = np.full((S,), np.nan, dtype=np.float32)
+                for s in range(S):
+                    pp = p_np[..., s][m_np]
+                    tt = t_np[..., s][m_np]
+                    if tt.size == 0:
+                        continue
+                    ss_res = float(((pp - tt) ** 2).sum())
+                    ss_tot = float(((tt - tt.mean()) ** 2).sum())
+                    out[s] = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+                return out
+
+            test_r2_lin = _r2_per_species(pred_cat, true_cat, mask_2d)
+            # log1p R²: clamp first to avoid log of negative spurious preds.
+            test_r2_log = _r2_per_species(
+                torch.log1p(pred_cat.clamp_min(0.0)),
+                torch.log1p(true_cat.clamp_min(0.0)),
+                mask_2d,
+            )
+            obs_names_for_print = (
+                [mech_names[i] for i in cfg.obs_idx] if (mech_names is not None and cfg.obs_idx is not None)
+                else (mech_names if mech_names is not None else [f"s{i}" for i in range(S)])
+            )
+            r2_lin_str = "  ".join(f"{n}:{v:.4f}" for n, v in zip(obs_names_for_print, test_r2_lin))
+            r2_log_str = "  ".join(f"{n}:{v:.4f}" for n, v in zip(obs_names_for_print, test_r2_log))
+            print(f"Test R² (linear)  : [{r2_lin_str}]   mean={float(np.nanmean(test_r2_lin)):.4f}")
+            print(f"Test R² (log1p)   : [{r2_log_str}]   mean={float(np.nanmean(test_r2_log)):.4f}")
+            if wandb_run is not None:
+                wandb_run.summary["test/r2_lin_mean"] = float(np.nanmean(test_r2_lin))
+                wandb_run.summary["test/r2_log_mean"] = float(np.nanmean(test_r2_log))
+                for n, v_lin, v_log in zip(obs_names_for_print, test_r2_lin, test_r2_log):
+                    wandb_run.summary[f"test/r2_lin/{n}"] = float(v_lin)
+                    wandb_run.summary[f"test/r2_log/{n}"] = float(v_log)
+
     # write final loss_curves.npz including test results
     np.savez(
         logs_dir / cfg.save_curves_name,
@@ -1247,6 +1409,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         val_species_losses=np.array(val_species_losses, dtype=np.float32) if len(val_species_losses) > 0 else None,
         test_loss=np.float32(test_loss) if test_loss is not None else None,
         test_species_losses=test_species_loss.astype(np.float32) if test_species_loss is not None else None,
+        test_r2_linear=test_r2_lin if test_r2_lin is not None else None,
+        test_r2_log1p=test_r2_log if test_r2_log is not None else None,
     )
 
     # save best model (plot expects exp_dir/model.pt)
@@ -1282,7 +1446,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             import sys
             print(f"[plot] plot_diagnostics.py import failed: {e}; sys.path={sys.path}; skipping plots.")
         except Exception as e:
-            print(f"[plot] failed: {e}")
+            import traceback
+            print(f"[plot] failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
 
     if wandb_run is not None:
         plots_dir = exp_dir / "plots"

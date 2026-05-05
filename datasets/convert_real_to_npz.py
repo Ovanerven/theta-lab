@@ -66,6 +66,33 @@ LAYOUTS = {
 
 
 def collect_experiment_pairs(data_dir: str) -> list[tuple[str, str]]:
+    """Return (inputs_path, outputs_path) pairs in **manifest.json key order**.
+
+    Bob's `parse_IVTT_data.load_parsed_io` populates `inputs_dict` by iterating
+    `manifest_json.items()` and Python dicts preserve JSON insertion order, so
+    his per-experiment indexing follows manifest order. The hardcoded splits in
+    `bob_model/3 seed splits.py` are aligned to that ordering. Falling back to
+    `sorted(glob(...))` produces a different order and silently misaligns the
+    splits with the experiments.
+
+    If `manifest.json` is missing, fall back to sorted globbing (with a warning).
+    """
+    import json
+    manifest = os.path.join(data_dir, "manifest.json")
+    if os.path.isfile(manifest):
+        with open(manifest, "r", encoding="utf-8") as fh:
+            entries = json.load(fh)
+        pairs: list[tuple[str, str]] = []
+        for key_str, entry in entries.items():
+            inp_path = os.path.join(data_dir, entry["inputs_path"])
+            out_path = os.path.join(data_dir, entry["outputs_path"])
+            if os.path.exists(inp_path) and os.path.exists(out_path):
+                pairs.append((inp_path, out_path))
+            else:
+                print(f"WARNING: missing parquet for manifest key {key_str}, skipping")
+        return pairs
+
+    print(f"WARNING: no manifest.json in {data_dir} — falling back to sorted glob (will misalign Bob's splits)")
     inp_files = sorted(glob.glob(os.path.join(data_dir, "*__inputs.parquet")))
     pairs = []
     for inp_path in inp_files:

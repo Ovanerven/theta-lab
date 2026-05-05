@@ -1,0 +1,27 @@
+# Architecture sweep for mof_synthesis_4 at n=1000.
+# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 × 2 obs settings = 6 runs.
+
+study: mof_synthesis_4_arch_sweep_n1000
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  scaffold: mof_synthesis_4
+  dataset_path: datasets/mof/mof_synthesis_4_n1000.npz
+  val_n: 100
+  test_n: 100
+  epochs: 100
+  batch_size: 32
+
+runs:
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof4_n1000_s42}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_s42}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_s42, env: mamba_env}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_s42}
+
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof4_n1000_fl_s42, obs_idx: [0, 3]}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_fl_s42, obs_idx: [0, 3]}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_fl_s42, env: mamba_env, obs_idx: [0, 3]}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_fl_s42, obs_idx: [0, 3]}

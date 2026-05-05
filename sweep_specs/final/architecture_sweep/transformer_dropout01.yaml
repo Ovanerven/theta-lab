@@ -1,0 +1,56 @@
+# Transformer-only follow-up to the architecture sweep, with dropout=0.1
+# (matching LSTM/Mamba/GRU). The original arch sweep used the transformer base
+# config's default dropout=0.0, which was the only real shared-budget asymmetry
+# vs the other architectures. This sweep re-runs transformer at 0.1 across all
+# 5 dataset/obs settings used in the arch sweep, seed 42, n=100.
+#
+# Runs (9 total):
+#   glycolysis_reduced12  — full obs, first_last [0,11]
+#   glycolysis_reduced8   — full obs, first_last [0,7]
+#   mof_synthesis_4       — full obs, first_last [0,3]
+#   mof_synthesis_6       — full obs, first_last [0,5]
+#   single_enzyme_lumped  — d_y=2 already, single setting
+#
+# Compare against trans_*_s42 entries in each *_arch_sweep CSV.
+
+study: transformer_dropout01_arch_sweep
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  val_n: 10
+  test_n: 10
+  epochs: 100
+  batch_size: 32
+  dropout: 0.1
+
+runs:
+  # ── glycolysis_reduced12 ──────────────────────────────────────────────
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc12_n100_s42_d01,
+     scaffold: glycolysis_reduced12, dataset_path: datasets/glycolysis/glycolysis_reduced12_n100.npz}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc12_n100_fl_s42_d01,
+     scaffold: glycolysis_reduced12, dataset_path: datasets/glycolysis/glycolysis_reduced12_n100.npz, obs_idx: [0, 11]}
+
+  # ── glycolysis_reduced8 ───────────────────────────────────────────────
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc8_n100_s42_d01,
+     scaffold: glycolysis_reduced8, dataset_path: datasets/glycolysis/glycolysis_reduced8_n100.npz}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc8_n100_fl_s42_d01,
+     scaffold: glycolysis_reduced8, dataset_path: datasets/glycolysis/glycolysis_reduced8_n100.npz, obs_idx: [0, 7]}
+
+  # ── mof_synthesis_4 ───────────────────────────────────────────────────
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n100_s42_d01,
+     scaffold: mof_synthesis_4, dataset_path: datasets/mof/mof_synthesis_4_n100.npz}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n100_fl_s42_d01,
+     scaffold: mof_synthesis_4, dataset_path: datasets/mof/mof_synthesis_4_n100.npz, obs_idx: [0, 3]}
+
+  # ── mof_synthesis_6 ───────────────────────────────────────────────────
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_s42_d01,
+     scaffold: mof_synthesis_6, dataset_path: datasets/mof/mof_synthesis_6_n100.npz}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_fl_s42_d01,
+     scaffold: mof_synthesis_6, dataset_path: datasets/mof/mof_synthesis_6_n100.npz, obs_idx: [0, 5]}
+
+  # ── single_enzyme_lumped (d_y = n^x = 2 already) ──────────────────────
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n100_s42_d01,
+     scaffold: single_enzyme_lumped, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n100.npz}

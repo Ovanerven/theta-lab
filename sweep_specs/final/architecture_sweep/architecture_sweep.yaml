@@ -1,0 +1,31 @@
+# Architecture sweep — split into one file per scaffold so each produces
+# its own results CSV (named by `study`). Run them separately.
+#
+# Two scaffolds per dataset, picked from data-ablation A6_baseline_n100 NRMSE
+# (where ode-rnn has the most headroom for new architectures to improve on):
+#
+#   Glycolysis:
+#     - glycolysis_reduced12_arch.yaml   (baseline n100 ≈ 0.148, most headroom)
+#     - glycolysis_reduced8_arch.yaml    (baseline n100 ≈ 0.129)
+#
+#   MOF synthesis:
+#     - mof_synthesis_4_arch.yaml        (baseline n100 ≈ 0.119, most headroom)
+#     - mof_synthesis_6_arch.yaml        (baseline n100 ≈ 0.057)
+#     # mof_synthesis_8 omitted (baseline n100 ≈ 0.021 — already saturated)
+#
+#   Single enzyme:
+#     - single_enzyme_lumped_arch.yaml   (baseline n100 ≈ 0.046)
+#     # single_enzyme_6 omitted (baseline n100 ≈ 0.0026 — basically solved,
+#     # nothing to "improve on")
+#
+# Active per-scaffold sweep: 3 architectures (LSTM, Mamba, Transformer) ×
+# seed 42 × 2 obs settings at n=100:
+#   d_y = n^x   (full obs, no obs_idx)
+#   d_y = 2     (first_last, obs_idx: [0, n^x - 1])
+# = 6 runs per scaffold; single_enzyme_lumped is 3 (n^x = 2 = d_y already).
+# GRU and additional seeds {0,1} are commented out (kept in-file for future runs):
+#   - GRU/ode_rnn at n=100 already exists in data_ablation_ran/* CSVs
+#     (A6_baseline_n100 / A6_baseline_first_last_n100) — copy over manually.
+#   - Seeds 0 and 1 only become active if multi-seed error bars are needed later.
+#
+# Transformer context window: 128 (set in configs/archs/transformer.yaml).

@@ -35,6 +35,11 @@ bob_split_seed: 57
 bob_test_frac: 0.125
 bob_val_frac: 0.125
 
+# Use one of the three hardcoded (test, val, train) triples from
+# bob_model/3 seed splits.py. Takes precedence over use_bob_split when set.
+bob_seed_split_file: "bob_model/3 seed splits.py"
+bob_seed_split_idx: 0  # 0, 1, or 2
+
 # Optional stratification by endpoint outcomes
 stratified_split: false
 stratify_bins: 5
@@ -47,8 +52,9 @@ pin_memory: true
 model_class: bob_gru_verbatim
 
 # Model architecture (matching bob_model defaults for GRU_model_latent_decay_simple_fb_matO)
-# Note: scaffold is unused by BobGRUVerbatim (hardcoded to 7-state IVTT)
-scaffold: reduced5
+# Note: scaffold is unused by BobGRUVerbatim (hardcoded to 7-state IVTT) but the
+# plot scripts still look it up — match the npz layout to avoid KeyError.
+scaffold: txtl_resource_and_maturation_dna
 hidden: 400
 lift_dim: 32
 num_layers: 2
@@ -69,3 +75,6 @@ teacher_forcing: true
 tf_every: 200
 tf_drop_epoch: 100
 grad_clip: 1.0
+
+# Match bob_model/neural_spline.py:1760: model = torch.jit.script(model)
+jit_scripting: true

@@ -1,0 +1,18 @@
+study: single_enzyme_6_data_ablation
+runs_per_job: 1
+time: 04:00:00
+partition: gpu_h100
+no_plot: false
+fixed:
+  base_config: configs/single_enzyme/single_enzyme.yaml
+  scaffold: single_enzyme_6
+  epochs: 100
+runs:
+- model_class: neural_ode_correction
+  exp_name: A9_neural_ode_correction_first_last_n1000
+  dataset_path: datasets/single_enzyme/single_enzyme_6.npz
+  val_n: 100
+  test_n: 100
+  obs_idx:
+  - 0
+  - 5

@@ -17,23 +17,11 @@ runs:
   # - {base_config: configs/archs/gru.yaml,         batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 0,  exp_name: gru_enzyme_bs32_s0}
   # - {base_config: configs/archs/gru.yaml,         batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 1,  exp_name: gru_enzyme_bs32_s1}
   # --- LSTM --- (done, commented out)
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 42, exp_name: lstm_mof4_bs32_s42}
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 0,  exp_name: lstm_mof4_bs32_s0}
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 1,  exp_name: lstm_mof4_bs32_s1}
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 42, exp_name: lstm_enzyme_bs32_s42}
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 0,  exp_name: lstm_enzyme_bs32_s0}
-  # - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 1,  exp_name: lstm_enzyme_bs32_s1}
+  - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 42, exp_name: lstm_mof4_bs32_s42}
+  - {base_config: configs/archs/lstm.yaml,        batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 42, exp_name: lstm_enzyme_bs32_s42}
   # --- Mamba ---
   - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 42, exp_name: mamba_mof4_bs32_s42, env: mamba_env}
-  - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 0,  exp_name: mamba_mof4_bs32_s0,  env: mamba_env}
-  - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 1,  exp_name: mamba_mof4_bs32_s1,  env: mamba_env}
   - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 42, exp_name: mamba_enzyme_bs32_s42, env: mamba_env}
-  - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 0,  exp_name: mamba_enzyme_bs32_s0,  env: mamba_env}
-  - {base_config: configs/archs/mamba.yaml,       batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 1,  exp_name: mamba_enzyme_bs32_s1,  env: mamba_env}
   # --- Transformer --- (most done, only s1 mof4 NaN'd)
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 42, exp_name: trans_mof4_bs32_s42}
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 0,  exp_name: trans_mof4_bs32_s0}
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 1,  exp_name: trans_mof4_bs32_s1}
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 42, exp_name: trans_enzyme_bs32_s42}
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 0,  exp_name: trans_enzyme_bs32_s0}
-  # - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 1,  exp_name: trans_enzyme_bs32_s1}
+  - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/mof_synthesis_4.npz,        scaffold: mof_synthesis_4,       seed: 42, exp_name: trans_mof4_bs32_s42}
+  - {base_config: configs/archs/transformer.yaml, batch_size: 32, dataset_path: datasets/single_enzyme_lumped.npz,   scaffold: single_enzyme_lumped,  seed: 42, exp_name: trans_enzyme_bs32_s42}

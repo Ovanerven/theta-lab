@@ -1,0 +1,27 @@
+# Architecture sweep for glycolysis_reduced8 at n=10.
+# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 × 2 obs settings = 6 runs.
+
+study: glycolysis_reduced8_arch_sweep_n10
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  scaffold: glycolysis_reduced8
+  dataset_path: datasets/glycolysis/glycolysis_reduced8_n10.npz
+  val_n: 1
+  test_n: 1
+  epochs: 100
+  batch_size: 32
+
+runs:
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_glyc8_n10_s42}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_glyc8_n10_s42}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_glyc8_n10_s42, env: mamba_env}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc8_n10_s42}
+
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_glyc8_n10_fl_s42, obs_idx: [0, 7]}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_glyc8_n10_fl_s42, obs_idx: [0, 7]}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_glyc8_n10_fl_s42, env: mamba_env, obs_idx: [0, 7]}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_glyc8_n10_fl_s42, obs_idx: [0, 7]}

@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -61,6 +61,15 @@ class OdeRNN(nn.Module):
       y <- integrate ODE(scaffold, theta_k) over dt_k
     """
 
+    # Compile-time flags for TorchScript so the analytic-scaffold branch is DCE'd
+    # for non-analytic scaffolds, and so the TF-at-k=0 branch evaluates statically.
+    # `_has_gru_*_cols` flags route the encoder feature build to either index_select
+    # (TorchScript-friendly) or full-passthrough — selected once at script time.
+    __constants__ = [
+        "_analytic_scaffold", "_tf_at_k_zero", "theta_dim_emit",
+        "_has_gru_u_cols", "_has_gru_y_cols",
+    ]
+
     def __init__(
         self,
         *,
@@ -106,12 +115,28 @@ class OdeRNN(nn.Module):
         self.P = int(rhs.P)
         self.theta_dim = int(rhs.theta_dim)
         self.rhs = rhs
+        # Analytic-scaffold hooks: when the scaffold defines a closed-form step
+        # (e.g. IvttAnalyticScaffold), bypass the u-jump + RK4 path and let the
+        # scaffold own integration. Default-False keeps every other scaffold's
+        # codepath unchanged.
+        self._analytic_scaffold = bool(getattr(rhs, "has_analytic_step", False))
+        self._tf_at_k_zero      = bool(getattr(rhs, "tf_at_k_zero", False))
+        self.theta_dim_emit     = int(getattr(rhs, "theta_dim_emit", self.theta_dim))
         self.n_substeps   = int(n_substeps)
         self.use_basal    = bool(use_basal)
         self.theta_lo     = float(theta_lo)
         self.theta_hi     = float(theta_hi)
         self.theta_bounded = bool(theta_bounded)
+        # gru_u_cols / gru_y_cols storage — keep the original `Optional[List[int]]`
+        # shadow attrs for back-compat (some external code may inspect them) but
+        # the forward loop uses TorchScript-friendly buffer + bool flag below.
         self.gru_u_cols   = list(gru_u_cols) if gru_u_cols is not None else None
+        self._has_gru_u_cols: bool = gru_u_cols is not None
+        self.register_buffer(
+            "gru_u_idx",
+            torch.tensor(list(gru_u_cols) if gru_u_cols is not None else [], dtype=torch.long),
+            persistent=False,
+        )
         self.detach_y_prev = bool(detach_y_prev)
         if theta_head_transform not in ("log_gamma", "gamma"):
             raise ValueError(f"theta_head_transform must be 'log_gamma' or 'gamma', got {theta_head_transform}")
@@ -145,6 +170,12 @@ class OdeRNN(nn.Module):
         # When restricted (e.g. to obs only), the GRU avoids being dominated by
         # unobservable latent states whose values are model fabrications.
         self.gru_y_cols = list(gru_y_cols) if gru_y_cols is not None else None
+        self._has_gru_y_cols: bool = gru_y_cols is not None
+        self.register_buffer(
+            "gru_y_idx",
+            torch.tensor(list(gru_y_cols) if gru_y_cols is not None else [], dtype=torch.long),
+            persistent=False,
+        )
         gru_y_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
         gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
@@ -275,8 +306,16 @@ class OdeRNN(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
-        th_out   = torch.empty(B, K, self.theta_dim, device=y0.device, dtype=y0.dtype)
+        th_out   = torch.empty(B, K, self.theta_dim_emit, device=y0.device, dtype=y0.dtype)
         beta_out = torch.zeros(B, K, self.P, device=y0.device, dtype=y0.dtype)
+
+        # Analytic scaffolds (e.g. IVTT) compute per-batch context (e.g. cumulative
+        # DNA) once, and re-seed y_prev to a hidden-state-aware initial vector.
+        # Typed as `Dict[str, Tensor]` (not `Optional[Dict]`) so TorchScript can
+        # pass it into `analytic_step` without a None-narrow.
+        analytic_ctx: Dict[str, torch.Tensor] = {}
+        if self._analytic_scaffold:
+            analytic_ctx = self.rhs.precompute_batch(y0, u_seq)
 
         h = torch.zeros(self.gru.num_layers, B, self.gru.hidden_size, device=y0.device, dtype=y0.dtype)
 
@@ -285,22 +324,24 @@ class OdeRNN(nn.Module):
         # Pre-compute the GRU's view of u_seq (separate from the raw delta used for ODE jumps).
         # cumsum: after a bolus at step t, the GRU sees it at ALL subsequent steps — no long-range
         # memory required. The ODE jump always uses the raw delta u_seq.
-        if u_transform in ("cumsum", "cumsum_sqrt"):
+        # Replaced `in (...)` membership tests with explicit `==` chains —
+        # TorchScript handles plain string equality but not always the tuple membership form.
+        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
             u_gru = u_seq.cumsum(dim=1)
         else:
             u_gru = u_seq
-        if u_transform in ("minmax", "minmax_sqrt"):
+        if u_transform == "minmax" or u_transform == "minmax_sqrt":
             if not self._has_u_minmax:
                 raise ValueError(
                     "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
                 )
             u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
-        if u_transform in ("sqrt", "cumsum_sqrt", "minmax_sqrt"):
+        if u_transform == "sqrt" or u_transform == "cumsum_sqrt" or u_transform == "minmax_sqrt":
             u_gru = u_gru.clamp_min(0.0).sqrt()
 
         # Per-sample logit bias from y0 MLP (None when y0_theta_init=False).
         if self.y0_mlp is not None:
-            y0_feat = y0[:, self.gru_y_cols] if self.gru_y_cols is not None else y0
+            y0_feat = torch.index_select(y0, dim=1, index=self.gru_y_idx) if self._has_gru_y_cols else y0
             if y_transform == "sqrt":
                 y0_feat = y0_feat.clamp_min(0.0).sqrt()
             elif y_transform == "sqrt_clamp1":
@@ -311,7 +352,7 @@ class OdeRNN(nn.Module):
         else:
             raw_y0_bias = None
 
-        y_prev = y0
+        y_prev = self.rhs.initial_state(y0) if self._analytic_scaffold else y0
         for k in range(K):
             u_k     = u_seq[:, k, :]   # raw delta — used only for ODE jumps
             u_gru_k = u_gru[:, k, :]   # transformed — used for GRU features
@@ -319,7 +360,10 @@ class OdeRNN(nn.Module):
 
             y_in = y_prev.detach() if self.detach_y_prev else y_prev
 
-            if teacher_forcing and k > 0 and (k % tf_every == 0) and y_seq is not None:
+            # Bob's verbatim policy: TF fires at k=0 too (with k-1=-1 wrapping to the
+            # last frame). Default OdeRNN behaviour skips k=0.
+            tf_fires = (k % tf_every == 0) if self._tf_at_k_zero else (k > 0 and k % tf_every == 0)
+            if teacher_forcing and tf_fires and y_seq is not None:
                 if use_partial:
                     y_in = y_prev.clone()
                     idx = obs_idx.to(device=y_in.device, dtype=torch.long)
@@ -327,9 +371,11 @@ class OdeRNN(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            u_gru_k_feat = u_gru_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_gru_k
+            # Use index_select on the precomputed long buffer instead of advanced
+            # indexing with a Python list (TorchScript can't reliably script `t[:, list]`).
+            u_gru_k_feat = torch.index_select(u_gru_k, dim=1, index=self.gru_u_idx) if self._has_gru_u_cols else u_gru_k
 
-            y_in_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
+            y_in_feat = torch.index_select(y_in, dim=1, index=self.gru_y_idx) if self._has_gru_y_cols else y_in
             if y_transform == "sqrt":
                 y_in_feat = y_in_feat.clamp_min(0.0).sqrt()
             elif y_transform == "sqrt_clamp1":
@@ -369,11 +415,17 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
-                y = y_prev + (u_k @ self.u_to_y_jump)
-                y = self._rk4_substeps(y, dt_k, theta_k)
+                if self._analytic_scaffold:
+                    # Closed-form integrator owns the step (no u-jump, no RK4).
+                    y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
+                else:
+                    y = y_prev + (u_k @ self.u_to_y_jump)
+                    y = self._rk4_substeps(y, dt_k, theta_k)
 
             y_out[:, k, :] = y
-            th_out[:, k, :] = theta_k
+            # When the scaffold defines a wider loss-facing theta layout (e.g. Bob's
+            # 8-d [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO]), let it repack here.
+            th_out[:, k, :] = self.rhs.emit_theta(theta_k, y) if self._analytic_scaffold else theta_k
             y_prev = y
 
         return y_out, th_out, beta_out

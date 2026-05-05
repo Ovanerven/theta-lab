@@ -57,6 +57,8 @@ class OdeMambaSSM(nn.Module):
         d_state: int = 16,
         expand: int = 2,
         d_conv: int = 4,
+        gru_u_cols: Optional[list] = None,
+        gru_y_cols: Optional[list] = None,
         **kwargs,
     ):
         super().__init__()
@@ -69,6 +71,17 @@ class OdeMambaSSM(nn.Module):
         self.theta_bounded = bool(theta_bounded)
         self.hidden = int(hidden)
 
+        # Analytic-scaffold hooks (mirrors OdeRNN/OdeTransformer).
+        self._analytic_scaffold = bool(getattr(rhs, "has_analytic_step", False))
+        self._tf_at_k_zero      = bool(getattr(rhs, "tf_at_k_zero", False))
+        self.theta_dim_emit     = int(getattr(rhs, "theta_dim_emit", self.theta_dim))
+
+        # Encoder column filters (drop DNA c, keep mm/pm only for IVTT).
+        self.gru_u_cols = list(gru_u_cols) if gru_u_cols is not None else None
+        self.gru_y_cols = list(gru_y_cols) if gru_y_cols is not None else None
+        u_cols_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
+        y_cols_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
+
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
             lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
             hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
@@ -79,7 +92,7 @@ class OdeMambaSSM(nn.Module):
         self.register_buffer("theta_hi_vec", hi)
 
         self.lift = nn.Sequential(
-            nn.Linear(self.U + self.P, lift_dim),
+            nn.Linear(u_cols_dim + y_cols_dim, lift_dim),
             nn.SiLU(),
             nn.Linear(lift_dim, hidden),
         )
@@ -112,26 +125,45 @@ class OdeMambaSSM(nn.Module):
         y_seq: Optional[torch.Tensor] = None,  # (B, K, P) for teacher forcing
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        u_transform: str = "none",
+        y_transform: str = "none",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         device, dtype = y0.device, y0.dtype
 
-        y_out    = torch.empty(B, K, self.P,         device=device, dtype=dtype)
-        th_out   = torch.empty(B, K, self.theta_dim, device=device, dtype=dtype)
-        beta_out = torch.zeros(B, K, self.P,         device=device, dtype=dtype)
+        y_out    = torch.empty(B, K, self.P,                device=device, dtype=dtype)
+        th_out   = torch.empty(B, K, self.theta_dim_emit,   device=device, dtype=dtype)
+        beta_out = torch.zeros(B, K, self.P,                device=device, dtype=dtype)
 
         # InferenceParams carries conv and SSM state across steps for each layer
         inference_params = InferenceParams(max_seqlen=K, max_batch_size=B)
 
         use_partial = obs_idx.numel() > 0
-        y_prev = y0
+
+        analytic_ctx: dict = {}
+        if self._analytic_scaffold:
+            analytic_ctx = self.rhs.precompute_batch(y0, u_seq)
+            y_prev = self.rhs.initial_state(y0)
+        else:
+            y_prev = y0
+
+        # u_transform applied once on the full sequence (encoder view); ODE jump
+        # always uses raw u_seq.
+        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
+            u_enc = u_seq.cumsum(dim=1)
+        else:
+            u_enc = u_seq
+        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
+            u_enc = u_enc.clamp_min(0.0).sqrt()
 
         for k in range(K):
-            u_k  = u_seq[:, k, :]
-            dt_k = dt_seq[:, k]
+            u_k     = u_seq[:, k, :]
+            u_enc_k = u_enc[:, k, :]
+            dt_k    = dt_seq[:, k]
 
             y_in = y_prev.detach()
-            if teacher_forcing and k > 0 and (k % tf_every == 0) and y_seq is not None:
+            tf_fires = (k % tf_every == 0) if self._tf_at_k_zero else (k > 0 and k % tf_every == 0)
+            if teacher_forcing and tf_fires and y_seq is not None:
                 if use_partial:
                     y_in = y_prev.clone()
                     idx  = obs_idx.to(device=y_in.device, dtype=torch.long)
@@ -139,7 +171,15 @@ class OdeMambaSSM(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            x = self.lift(torch.cat([u_k, y_in], dim=-1)).unsqueeze(1)  # (B, 1, hidden)
+            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
+            y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
+            if y_transform == "sqrt":
+                y_feat = y_feat.clamp_min(0.0).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                y_feat = y_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+            elif y_transform == "log1p":
+                y_feat = torch.log1p(y_feat.clamp_min(0.0))
+            x = self.lift(torch.cat([u_feat, y_feat], dim=-1)).unsqueeze(1)  # (B, 1, hidden)
 
             # seqlen_offset=0: init cache; >0: fast recurrent update via CUDA kernel
             inference_params.seqlen_offset = k
@@ -160,11 +200,14 @@ class OdeMambaSSM(nn.Module):
             else:
                 theta_k = (log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
                            if self.theta_bounded else F.softplus(raw))
-                y = y_prev + (u_k @ self.u_to_y_jump)
-                y = self._rk4_substeps(y, dt_k, theta_k)
+                if self._analytic_scaffold:
+                    y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
+                else:
+                    y = y_prev + (u_k @ self.u_to_y_jump)
+                    y = self._rk4_substeps(y, dt_k, theta_k)
 
             y_out[:, k, :] = y
-            th_out[:, k, :] = theta_k
+            th_out[:, k, :] = self.rhs.emit_theta(theta_k, y) if self._analytic_scaffold else theta_k
             y_prev = y
 
         return y_out, th_out, beta_out

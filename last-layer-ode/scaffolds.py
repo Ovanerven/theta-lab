@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from typing import Dict, List
 
 from sim.glycolysis import (
     GlycolysisOracle22Scaffold,
@@ -10,17 +11,64 @@ from sim.glycolysis import (
 )
 
 class MechanisticScaffold(nn.Module):
+    """Base class for mechanistic scaffolds.
+
+    Carries optional hooks (precompute_batch / initial_state / analytic_step /
+    emit_theta) used by models that support analytic-step integration. The base
+    implementations are scriptable no-ops so non-analytic scaffolds compile fine
+    even when the model code references the hooks behind a constant gate.
+    """
+
+    # `__constants__` lets TorchScript treat these as compile-time so models
+    # that gate `if scaffold.has_analytic_step:` can DCE the dead branch.
+    __constants__ = ["has_analytic_step", "tf_at_k_zero", "theta_dim_emit"]
+
     def __init__(self, P: int, theta_dim: int):
         super().__init__()
         self.P = int(P)
         self.theta_dim = int(theta_dim)
-        self.state_names: list[str] = []
+        # Encoder emits theta_dim params; some scaffolds repack to a different
+        # width via emit_theta() before the loss sees it (e.g. Bob's IVTT loss).
+        self.theta_dim_emit = int(theta_dim)
+        # Set as instance attrs (so TorchScript tracks them); subclasses overwrite.
+        self.has_analytic_step: bool = False
+        self.tf_at_k_zero: bool = False
+        self.state_names: List[str] = []
         # Per-parameter bounds — set by subclasses. None means use scalar fallback.
         self.theta_lo_vec: "list[float] | None" = None
         self.theta_hi_vec: "list[float] | None" = None
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
+
+    # ---------- analytic-scaffold hooks (used iff has_analytic_step) ----------
+    # All four are scriptable no-ops on the base class so TorchScript can compile
+    # any model that calls `self.rhs.<hook>(...)` regardless of which concrete
+    # scaffold is used. Subclasses override with real bodies.
+
+    def precompute_batch(
+        self, y0: torch.Tensor, u_seq: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        out: Dict[str, torch.Tensor] = {}
+        return out
+
+    def initial_state(self, y0: torch.Tensor) -> torch.Tensor:
+        return y0
+
+    def analytic_step(
+        self,
+        y_prev: torch.Tensor,
+        dt_k: torch.Tensor,
+        theta_k: torch.Tensor,
+        ctx: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        # No-op default — subclasses with has_analytic_step=True must override.
+        return y_prev
+
+    def emit_theta(
+        self, theta_enc: torch.Tensor, y_state: torch.Tensor,
+    ) -> torch.Tensor:
+        return theta_enc
 
 class MOFSynthesis12Scaffold(MechanisticScaffold):
     """
@@ -1675,6 +1723,172 @@ class KovacsMethaneSRPScaffold(MechanisticScaffold):
 
         return dy_dt
 
+# ============================================================================
+# IvttAnalyticScaffold — verbatim port of Bob's 7-state IVTT closed-form step.
+#
+# Replaces RK4 integration with the analytic update from
+#   bob_model/spline_models.py:ivtt_step_R_O_mRNA_maturation
+# (also mirrored in last-layer-ode/models/bob_gru_verbatim.py). The scaffold owns:
+#   - the 7-state layout [R, O, m, mm, p, pm, _]
+#   - per-parameter bounds for the 7 encoder outputs [lam, lam_O, VTX, kdm, VTL, kmt, kmatm]
+#   - the seeded init (R=O=1, m=p=0.01, mm=mm0+0.01, pm=pm0+0.01)
+#   - the per-batch DNA cumulative total (constant per sequence)
+#   - the loss-facing theta repack [VTX, kdm, VTL, kmt, kmatm, R, lam, lam_O]
+#
+# Encoder-side concerns (DNA c column dropped from u, sqrt features on u and
+# sqrt+clamp_min(1) on mm/pm) are handled by OdeRNN via its existing
+# u_transform/y_transform/gru_u_cols/gru_y_cols knobs.
+# ============================================================================
+class IvttAnalyticScaffold(MechanisticScaffold):
+    # Layout indices into the 7-d state and the U=12 control vector — declared as
+    # class constants so TorchScript treats them as compile-time integers.
+    __constants__ = [
+        "DNA_C_COL_IDX", "R_IDX", "O_IDX", "M_IDX", "MM_IDX", "P_IDX", "PM_IDX",
+    ]
+    DNA_C_COL_IDX: int = 2     # column of u_seq that carries DNA c (per sequence)
+    R_IDX:  int = 0
+    O_IDX:  int = 1
+    M_IDX:  int = 2
+    MM_IDX: int = 3
+    P_IDX:  int = 4
+    PM_IDX: int = 5
+
+    def __init__(self):
+        # P=7 (state width matching the dataset y); theta_dim=7 (encoder output).
+        # theta_dim_emit=8 because Bob's loss reads [VTX, kdm, VTL, kmt, kmatm, R, lam, lam_O].
+        super().__init__(P=7, theta_dim=7)
+        self.theta_dim_emit = 8
+        # Override base defaults — TorchScript reads these from the instance.
+        self.has_analytic_step = True
+        self.tf_at_k_zero = True   # Bob fires TF at k=0 (with k-1=-1 wrap to last frame)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "_"]
+        # Bound order matches encoder output: [lam, lam_O, VTX, kdm, VTL, kmt, kmatm]
+        self.theta_lo_vec = [1e-6, 1e-6, 5e-5, 1e-5, 5e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 5e-4, 1e-1, 1e-2, 6e-2, 3.5e-4, 3.5e-3]
+
+    # Standard scaffold.forward (RHS for RK4) is unused — keep a stub so the
+    # base contract is still satisfied if anyone calls it accidentally.
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError(
+            "IvttAnalyticScaffold has no RHS; integrate via analytic_step() instead."
+        )
+
+    def precompute_batch(
+        self, y0: torch.Tensor, u_seq: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        # u_seq: (B, K, U). Bob's "DNA cumulative" is just sum of the DNA c column
+        # along time, equivalent to a bolus at t=0 plus a constant; reused at every step.
+        dna_raw = u_seq[:, :, self.DNA_C_COL_IDX:self.DNA_C_COL_IDX + 1]
+        dna_cum_total = dna_raw.cumsum(dim=1)[:, -1, :]   # (B, 1)
+        out: Dict[str, torch.Tensor] = {"dna_cum_total": dna_cum_total}
+        return out
+
+    def initial_state(self, y0: torch.Tensor) -> torch.Tensor:
+        # Seeded hidden states — exact values from bob_gru_verbatim.forward().
+        # Built via concatenation of (B, 1) columns so TorchScript stays happy
+        # (slice-assignment of scalars also works, but concat is bulletproof).
+        mm0   = y0[:, self.MM_IDX:self.MM_IDX + 1]
+        pm0   = y0[:, self.PM_IDX:self.PM_IDX + 1]
+        ones  = torch.ones_like(mm0)             # (B, 1) — for R, O
+        cents = torch.full_like(mm0, 0.01)       # (B, 1) — for m, p
+        tail  = torch.zeros_like(mm0)            # (B, 1) — unused slot 6
+        return torch.cat(
+            [ones, ones, cents, mm0 + 0.01, cents, pm0 + 0.01, tail], dim=-1,
+        )
+
+    def analytic_step(
+        self,
+        y_prev: torch.Tensor,
+        dt_k: torch.Tensor,
+        theta_k: torch.Tensor,
+        ctx: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        # y_prev: (B, 7); dt_k: (B,) or (B, 1); theta_k: (B, 7)
+        if dt_k.dim() == 1:
+            dt_k = dt_k.unsqueeze(-1)
+        R_prev  = y_prev[:, self.R_IDX:self.R_IDX + 1]
+        O_prev  = y_prev[:, self.O_IDX:self.O_IDX + 1]
+        m_prev  = y_prev[:, self.M_IDX:self.M_IDX + 1]
+        mm_prev = y_prev[:, self.MM_IDX:self.MM_IDX + 1]
+        p_prev  = y_prev[:, self.P_IDX:self.P_IDX + 1]
+        pm_prev = y_prev[:, self.PM_IDX:self.PM_IDX + 1]
+
+        lam_k   = theta_k[:, 0:1]
+        lamO_k  = theta_k[:, 1:2]
+        VTXmax  = theta_k[:, 2:3]
+        kdm_k   = theta_k[:, 3:4]
+        VTLmax  = theta_k[:, 4:5]
+        kmt_k   = theta_k[:, 5:6]
+        kmatm_k = theta_k[:, 6:7]
+
+        eps = 1e-9
+        rho_R = torch.exp(-lam_k  * dt_k)
+        rho_O = torch.exp(-lamO_k * dt_k)
+        R_curr = R_prev * rho_R
+        O_curr = O_prev * rho_O
+
+        VTX_eff = R_curr * VTXmax
+        VTL_eff = R_curr * VTLmax
+        O_eff   = O_curr
+
+        S = VTX_eff * ctx["dna_cum_total"]
+
+        alpha = (kdm_k + kmatm_k).clamp_min(eps)
+        m_inf = S / alpha
+        exp_a = torch.exp(-alpha * dt_k)
+        m_curr = torch.clamp_min(m_inf + (m_prev - m_inf) * exp_a, 0.0)
+
+        exp_d  = torch.exp(-kdm_k   * dt_k)
+        exp_mr = torch.exp(-kmatm_k * dt_k)
+        term1 = mm_prev * exp_d
+        term2 = m_inf * (kmatm_k / (kdm_k + eps)) * (1.0 - exp_d)
+        term3 = (m_prev - m_inf) * exp_d * (1.0 - exp_mr)
+        mm_curr = torch.clamp_min(term1 + term2 + term3, 0.0)
+
+        M_prev = m_prev + mm_prev
+        M_inf  = S / (kdm_k + eps)
+        exp_M  = exp_d
+
+        eta   = torch.exp(-kmt_k * dt_k)
+        delta = kdm_k - kmt_k
+        same  = torch.abs(delta) < 1e-6
+        int_M_eq  = M_inf * (1.0 - eta) / (kmt_k + eps) + (M_prev - M_inf) * dt_k * eta
+        int_M_gen = M_inf * (1.0 - eta) / (kmt_k + eps) + (M_prev - M_inf) * (eta - exp_M) / (delta + eps)
+        int_M_conv = torch.where(same, int_M_eq, int_M_gen)
+        p_curr = torch.clamp_min(p_prev * eta + VTL_eff * int_M_conv, 0.0)
+
+        int_M_total = M_inf * dt_k + (M_prev - M_inf) / (kdm_k + eps) * (1.0 - exp_M)
+        pm_curr = torch.clamp_min(
+            pm_prev + O_eff * (VTL_eff * int_M_total - (p_curr - p_prev)),
+            0.0,
+        )
+
+        # Build y_new via concatenation rather than zero-init + index assignment;
+        # TorchScript handles cat() of slice views more reliably than mutating
+        # an empty tensor with `[:, slice] = …`.
+        tail = torch.zeros_like(R_curr)  # (B, 1) — placeholder for state idx 6
+        y_new = torch.cat(
+            [R_curr, O_curr, m_curr, mm_curr, p_curr, pm_curr, tail], dim=-1,
+        )
+        return y_new
+
+    def emit_theta(
+        self, theta_enc: torch.Tensor, y_state: torch.Tensor,
+    ) -> torch.Tensor:
+        # theta_enc: (B, 7) [lam, lamO, VTX, kdm, VTL, kmt, kmatm]
+        # y_state:   (B, 7) — post-step state, R at idx 0
+        # emit:      (B, 8) [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO]  (Bob's loss layout)
+        lam   = theta_enc[:, 0:1]
+        lamO  = theta_enc[:, 1:2]
+        VTX   = theta_enc[:, 2:3]
+        kdm   = theta_enc[:, 3:4]
+        VTL   = theta_enc[:, 4:5]
+        kmt   = theta_enc[:, 5:6]
+        kmatm = theta_enc[:, 6:7]
+        R     = y_state[:, self.R_IDX:self.R_IDX + 1]
+        return torch.cat([VTX, kdm, VTL, kmt, kmatm, R, lam, lamO], dim=-1)
+
+
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "mof_synthesis_12":  MOFSynthesis12Scaffold(),
     "mof_synthesis_8":   MOFSynthesis8Scaffold(),
@@ -1705,4 +1919,5 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
     "glycolysis_reduced8":  GlycolysisReduced8Scaffold(),
     "glycolysis_reduced4":  GlycolysisReduced4Scaffold(),
+    "ivtt_analytic":        IvttAnalyticScaffold(),
 }

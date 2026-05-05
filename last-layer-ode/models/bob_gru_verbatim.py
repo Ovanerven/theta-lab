@@ -140,11 +140,7 @@ class BobGRUVerbatim(nn.Module):
         self.cells = nn.ModuleList(cells)
         self.drop = nn.Dropout(float(dropout))
 
-        self.bottle = nn.Sequential(
-            nn.Linear(self.hidden, 128), nn.SiLU(),
-            nn.Linear(128, 64),          nn.SiLU(),
-        )
-        self.head = nn.Linear(64, 7)     # [lam, lam_O, VTX, kdm, VTL, kmt, kmatm]
+        self.head = nn.Linear(self.hidden, 7)  # [lam, lam_O, VTX, kdm, VTL, kmt, kmatm]
 
         # Bob's init — orthogonal_ W_hh + xavier_ W_ih + zeros biases; xavier_ head + zeros bias
         for c in self.cells:
@@ -181,7 +177,6 @@ class BobGRUVerbatim(nn.Module):
         y_seq:   Optional[torch.Tensor] = None, # (B, K, P=7) for TF
         teacher_forcing: bool = True,
         tf_every: int = 200,                    # Bob hardcodes 200; left as kwarg for train.py
-        **_unused,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         dev = u_seq.device
@@ -259,8 +254,7 @@ class BobGRUVerbatim(nn.Module):
                 x = self.drop(hs[li]) if self.training else hs[li]
             h = x
 
-            z   = self.bottle(h)
-            raw = self.head(z)
+            raw = self.head(h)
             lam_raw, lamO_raw, VTX_mag, kdm_raw, VTL_mag, kmt_raw, kmatm_raw = raw.split(1, dim=-1)
 
             lam_k_t = gamma(lam_raw,  1e-6, 5e-4)

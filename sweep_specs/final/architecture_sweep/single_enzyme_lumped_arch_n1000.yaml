@@ -1,0 +1,24 @@
+# Architecture sweep for single_enzyme_lumped at n=1000.
+# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 = 3 runs.
+# NOTE: n^x = 2 → d_y = n^x = 2 already coincides with the d_y = 2 (first_last)
+# case — only one obs setting needed.
+
+study: single_enzyme_lumped_arch_sweep_n1000
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  scaffold: single_enzyme_lumped
+  dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz
+  val_n: 100
+  test_n: 100
+  epochs: 100
+  batch_size: 32
+
+runs:
+  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_enzlumped_n1000_s42}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_enzlumped_n1000_s42}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_enzlumped_n1000_s42, env: mamba_env}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n1000_s42}
