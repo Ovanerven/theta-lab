@@ -14,7 +14,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from plot_diagnostics import rebuild_model_from_experiment, device_auto, _test_subset
+from plot_diagnostics import rebuild_model_from_experiment, device_auto, _test_subset, _filter_model_kwargs
 from scaffolds import SCAFFOLDS
 
 CACHE_NAME = "nrmse_cache.csv"
@@ -66,6 +66,13 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
 
     species_vals: dict[str, list[float]] = {s: [] for s in obs_names}
 
+    base_kwargs = {
+        "y_seq": None,
+        "teacher_forcing": False,
+        "u_transform": str(cfg.get("u_transform", "none")),
+        "y_transform": str(cfg.get("y_transform", "none")),
+    }
+
     with torch.no_grad():
         for i in range(len(test_subset)):
             y0, u_seq, y_seq = test_subset[i]
@@ -74,8 +81,7 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
                 u_seq.unsqueeze(0).to(device),
                 dt.unsqueeze(0),
                 torch.arange(len(obs_names), device=device),
-                y_seq=None,
-                teacher_forcing=False,
+                **_filter_model_kwargs(model, base_kwargs),
             )
             y_np = y_seq.cpu().numpy()
             p_np = pred[0].cpu().numpy()

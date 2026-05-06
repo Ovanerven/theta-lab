@@ -19,7 +19,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from plot_diagnostics import rebuild_model_from_experiment, device_auto
+from plot_diagnostics import rebuild_model_from_experiment, device_auto, load_yaml, _filter_model_kwargs
 from metrics import endpoint_r2
 
 
@@ -51,6 +51,14 @@ def collect(exp_dir: Path, split: str, protein_sp: str, mrna_sp: str, device: to
 
     indices = load_split_indices(exp_dir, split, len(ds))
 
+    cfg_local = load_yaml(exp_dir / "config.yaml")
+    base_kwargs = {
+        "y_seq": None,
+        "teacher_forcing": False,
+        "u_transform": str(cfg_local.get("u_transform", "none")),
+        "y_transform": str(cfg_local.get("y_transform", "none")),
+    }
+
     true_final, pred_final = [], []
     true_max, pred_max = [], []
     sample_idx = []
@@ -64,8 +72,7 @@ def collect(exp_dir: Path, split: str, protein_sp: str, mrna_sp: str, device: to
                 u_seq.unsqueeze(0).to(device),
                 dt.unsqueeze(0),
                 obs_idx,
-                y_seq=None,
-                teacher_forcing=False,
+                **_filter_model_kwargs(model, base_kwargs),
             )
             y_np = y_seq.cpu().numpy()
             p_np = pred[0].cpu().numpy()

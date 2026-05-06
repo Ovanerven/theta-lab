@@ -15,7 +15,7 @@ save_curves_name: loss_curves.npz
 # Training hyperparameters — kept identical to the GRU config for like-for-like
 # comparison. Tune lr/weight_decay separately if the transformer is harder to fit.
 epochs: 250
-batch_size: 32
+batch_size: 100
 lr: 0.001
 weight_decay: 0.0018
 warmup_epochs: 10
@@ -48,9 +48,10 @@ scaffold: ivtt_analytic
 
 # Transformer encoder
 hidden: 400
-lift_dim: 32
+lift_dim: 32          # ignored when lift_skip=true
 num_layers: 2
-dropout: 0.1
+dropout: 0.2
+lift_skip: true                 # no 2-layer SiLU lift — single Linear(feat_in, hidden), GRU-equivalent
 ff_mult: 2
 context_len: 100
 

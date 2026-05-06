@@ -11,7 +11,7 @@ Pipeline:
                 per experiment (supervisor-style), or
             * kept as per-step deltas (bob_model-style)
         (see --dna-mode).
-    - Pipetting-error anomalies (pm > 7000 RFU) can be dropped (see --outlier-mode).
+    - Pipetting-error anomalies (pm > 5000 RFU) can be dropped (see --outlier-mode).
     - y_seq observations: Broccoli (mm), mCherry/2 (pm) — stored raw.
     - y0 = obs at t0; y_seq[k] = obs at t_{k+1}; u_seq[k] = u during [t_k, t_{k+1}).
         This alignment can be switched to bob_model-style y_seq[k]=obs at t_k
@@ -42,7 +42,7 @@ from sklearn.preprocessing import MinMaxScaler
 TIME_COL = "Time_seconds"
 DNA_C_COL = "DNA c"
 EXCLUDE_FROM_U = {TIME_COL, "DNA"}
-PM_OUTLIER_THRESHOLD = 7000.0  # mCherry/2 RFU above this = pipetting error (per Leonardo)
+PM_OUTLIER_THRESHOLD = 5000.0  # mCherry/2 RFU above this = pipetting error (per Leonardo)
 
 
 LAYOUTS = {
@@ -136,8 +136,8 @@ def main():
         choices=["max", "last", "none"],
         help=(
             "How to drop pipetting-error experiments based on pm (mCherry/divisor): "
-            "'max' drops if any timestep exceeds 7000 (default); "
-            "'last' drops if ONLY the final timestep exceeds 7000 (bob_model); "
+            "'max' drops if any timestep exceeds 5000 (default); "
+            "'last' drops if ONLY the final timestep exceeds 5000 (bob_model); "
             "'none' disables dropping."
         ),
     )

@@ -26,7 +26,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from plot_diagnostics import rebuild_model_from_experiment, device_auto
+from plot_diagnostics import rebuild_model_from_experiment, device_auto, load_yaml, _filter_model_kwargs
 
 
 def r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -73,6 +73,19 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
     dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
     obs_idx = torch.arange(len(obs_names), device=device)
 
+    # Forward-time feature transforms (u_transform/y_transform) are kwargs on
+    # ode_rnn.forward — they MUST be passed at eval time too, or the trained
+    # model is fed raw (un-sqrt'd) features and produces garbage. bob_gru_verbatim
+    # bakes these transforms into its forward and ignores the kwargs, so the
+    # _filter_model_kwargs strip is safe for it.
+    cfg_local = load_yaml(exp_dir / "config.yaml")
+    base_kwargs = {
+        "y_seq": None,
+        "teacher_forcing": False,
+        "u_transform": str(cfg_local.get("u_transform", "none")),
+        "y_transform": str(cfg_local.get("y_transform", "none")),
+    }
+
     if protein_sp not in obs_names or mrna_sp not in obs_names:
         raise ValueError(
             f"{exp_dir.name}: species {protein_sp!r}/{mrna_sp!r} not in obs_names={obs_names}"
@@ -92,8 +105,7 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
                 u_seq.unsqueeze(0).to(device),
                 dt.unsqueeze(0),
                 obs_idx,
-                y_seq=None,
-                teacher_forcing=False,
+                **_filter_model_kwargs(model, base_kwargs),
             )
             y_np = y_seq.cpu().numpy()
             p_np = pred[0].cpu().numpy()

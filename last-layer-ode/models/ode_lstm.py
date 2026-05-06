@@ -47,6 +47,8 @@ class OdeLSTM(nn.Module):
         legacy_forget_bias_bug: bool = False,
         gru_u_cols: Optional[list] = None,
         gru_y_cols: Optional[list] = None,
+        lift_skip: bool = False,
+        head_init: str = "default",  # "default" | "supervisor" (xavier_ + zeros, unconditional)
         **kwargs,
     ):
         super().__init__()
@@ -79,14 +81,21 @@ class OdeLSTM(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
-        self.lift = nn.Sequential(
-            nn.Linear(u_cols_dim + y_cols_dim, lift_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-        )
+        self.lift_skip = bool(lift_skip)
+        feat_in = u_cols_dim + y_cols_dim
+        if self.lift_skip:
+            self.lift = nn.Identity()
+            lstm_input_dim = feat_in
+        else:
+            self.lift = nn.Sequential(
+                nn.Linear(feat_in, lift_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+            )
+            lstm_input_dim = lift_dim
 
         self.lstm = nn.LSTM(
-            input_size=lift_dim,
+            input_size=lstm_input_dim,
             hidden_size=hidden,
             num_layers=num_layers,
             batch_first=True,
@@ -94,6 +103,12 @@ class OdeLSTM(nn.Module):
         )
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim
         self.head = nn.Linear(hidden, head_out)
+
+        if head_init not in ("default", "supervisor"):
+            raise ValueError(f"head_init must be 'default' or 'supervisor', got {head_init}")
+        if str(head_init) == "supervisor":
+            nn.init.xavier_uniform_(self.head.weight, gain=1.0)
+            nn.init.zeros_(self.head.bias)
 
         # PyTorch LSTM bias layout per layer: [i, f, g, o], each block of size hidden.
         #

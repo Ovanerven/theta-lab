@@ -43,10 +43,11 @@ model_class: lstm_rnn
 scaffold: ivtt_analytic
 
 hidden: 400
-lift_dim: 32
-lift_skip: true
+lift_dim: 32          # ignored when lift_skip=true
 num_layers: 2
 dropout: 0.2
+lift_skip: true                 # no lift MLP — feed feat→LSTM directly (mirror GRU config)
+head_init: supervisor           # xavier_uniform_ + zeros — match GRU/Bob head init
 
 theta_lo: 1.0e-06
 theta_hi: 2.0

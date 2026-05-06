@@ -17,7 +17,7 @@ epochs: 250
 batch_size: 100
 lr: 0.002
 weight_decay: 0.0018
-warmup_epochs: 10
+warmup_epochs: 0
 cosine_decay: false
 
 val_n: 0
@@ -46,9 +46,11 @@ scaffold: ivtt_analytic
 
 # Mamba encoder
 hidden: 400
-lift_dim: 32
+lift_dim: 32          # ignored when lift_skip=true
 num_layers: 2
 dropout: 0.2
+lift_skip: true                 # no 2-layer SiLU lift — single Linear(feat_in, hidden), GRU-equivalent
+head_init: supervisor           # xavier_uniform_ + zeros — match GRU/Bob head init
 d_state: 16
 expand: 2
 d_conv: 4

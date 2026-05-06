@@ -177,6 +177,16 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         theta_head_transform=str(cfg.get("theta_head_transform", "log_gamma")),
         head_bottle=bool(cfg.get("head_bottle", False)),
         lift_skip=bool(cfg.get("lift_skip", False)),
+        # GRU/head variant + init knobs — these change parameter NAMES
+        # ("gru.cells.0.weight_ih" vs "gru.weight_ih_l0"), so omitting them
+        # makes load_state_dict(strict=False) silently drop the encoder weights
+        # and the eval'd model runs with a random GRU. theta_head_tau changes
+        # the gamma slope; default 1.0 vs supervisor 2.3 is silently wrong.
+        gru_variant=str(cfg.get("gru_variant", "nn_gru")),
+        gru_init=str(cfg.get("gru_init", "default")),
+        head_init=str(cfg.get("head_init", "default")),
+        theta_head_tau=float(cfg.get("theta_head_tau", 1.0)),
+        y0_theta_init=bool(cfg.get("y0_theta_init", False)),
 
         # --- NEW ADDITIONS TO SYNC WITH TRAIN.PY ---
         tf_group_size=int(cfg.get("tf_group_size", 32)),
@@ -222,7 +232,23 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
                     model._has_u_minmax = True
             except Exception:
                 pass
-    model.load_state_dict(ckpt["state_dict"], strict=False)
+    # strict=False historically hid silent param-name mismatches (e.g. when
+    # gru_variant wasn't propagated to the rebuild and the checkpoint's
+    # StackedGRUCellBlock keys silently fell on the floor). Use strict-with-report
+    # so any future drift is loud rather than producing a random-encoder model.
+    missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
+    # Allow non-persistent buffer drift (e.g. gru_u_idx, gru_y_idx, u_minmax_max_full)
+    # but flag any param-shaped drift loudly.
+    _benign = {"gru_u_idx", "gru_y_idx", "u_minmax_max_full", "theta_lo_vec", "theta_hi_vec", "u_to_y_jump"}
+    real_missing = [k for k in missing if k.split(".")[-1] not in _benign]
+    real_unexpected = [k for k in unexpected if k.split(".")[-1] not in _benign]
+    if real_missing or real_unexpected:
+        print(f"[rebuild] WARNING — state_dict mismatch:")
+        if real_missing:
+            print(f"  missing  ({len(real_missing)}): {real_missing[:8]}{' ...' if len(real_missing) > 8 else ''}")
+        if real_unexpected:
+            print(f"  unexpect ({len(real_unexpected)}): {real_unexpected[:8]}{' ...' if len(real_unexpected) > 8 else ''}")
+        print("  → eval will use RANDOM weights for missing keys. Check rebuild_model_from_experiment kwargs vs train.py.")
     model.eval()
 
     state_names = ds.obs_names.tolist() if ds.obs_names is not None else [f"y{i}" for i in range(P_obs)]

@@ -1,0 +1,41 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Found 1 completed run(s) in experiments/ivtt_gru
+
+
+[run]   20260506_002618_default  (plots, R²)
+Loading checkpoint: experiments/ivtt_gru/20260506_002618_default/model.pt
+/gpfs/home2/overven1/theta-lab/last-layer-ode/plot_diagnostics.py:149: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  ckpt = torch.load(chosen, map_location="cpu")
+[plot_predictions] n_samples=5, plot_ds_len=86
+[plot_predictions] y0.shape=(5, 7), u_seq.shape=(5, 1464, 12), y_seq.shape=(5, 1464, 7), dt_seq.shape=(5, 1464)
+Saved plots to experiments/ivtt_gru/20260506_002618_default/plots
+Loading checkpoint: experiments/ivtt_gru/20260506_002618_default/model.pt
+/gpfs/home2/overven1/theta-lab/last-layer-ode/plot_diagnostics.py:734: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  ckpt = torch.load(ckpt_path, map_location="cpu")
+[epoch overlay] saved: experiments/ivtt_gru/20260506_002618_default/plots/pred_overlays_sample000.png
+  [plots] OK  →  experiments/ivtt_gru/20260506_002618_default/plots
+Loading checkpoint: experiments/ivtt_gru/20260506_002618_default/model.pt
+  R²(protein final) = 0.4265
+  R²(mRNA max)      = 0.3626
+Saved plot -> experiments/ivtt_gru/20260506_002618_default/endpoint_r2.png
+  [R²]   OK  →  experiments/ivtt_gru/20260506_002618_default/endpoint_r2.png
+
+Done.
+----
+22513934       00:03:24                          RUNNING 
+22513934.ba+   00:03:24                          RUNNING 
+22513934.ex+   00:03:24                          RUNNING 

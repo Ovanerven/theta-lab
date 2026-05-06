@@ -49,6 +49,7 @@ class OdeTransformer(nn.Module):
         context_len: int = 64,
         gru_u_cols: Optional[list] = None,   # restrict u columns into the encoder (e.g. drop DNA c)
         gru_y_cols: Optional[list] = None,   # restrict y columns into the encoder (e.g. obs only)
+        lift_skip: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -86,11 +87,19 @@ class OdeTransformer(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
-        self.lift = nn.Sequential(
-            nn.Linear(u_cols_dim + y_cols_dim, lift_dim),
-            nn.SiLU(),
-            nn.Linear(lift_dim, hidden),
-        )
+        # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
+        # the analogue of GRU/LSTM's intrinsic W_ih projection. The Transformer
+        # requires d_model=hidden so the projection cannot be skipped entirely.
+        self.lift_skip = bool(lift_skip)
+        feat_in = u_cols_dim + y_cols_dim
+        if self.lift_skip:
+            self.lift = nn.Linear(feat_in, hidden)
+        else:
+            self.lift = nn.Sequential(
+                nn.Linear(feat_in, lift_dim),
+                nn.SiLU(),
+                nn.Linear(lift_dim, hidden),
+            )
 
         self.pos_embed = nn.Embedding(self.context_len, hidden)
 

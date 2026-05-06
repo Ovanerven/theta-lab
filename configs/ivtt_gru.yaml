@@ -6,8 +6,8 @@
 # Generate the dataset with (EXACT bob_model semantics):
 #   python datasets/convert_real_to_npz.py --layout full --reagent-scaling none --dna-mode raw --obs-align current --output datasets/real_ivtt_exact_full.npz
 
-dataset_path: datasets/real_ivtt_exact_full.npz
-study: ivtt_gru
+dataset_path: datasets/real_ivtt_exact_full_drop5000.npz
+study: ivtt_gru_drop5000
 tags: null
 exp_name: default
 out_root: experiments

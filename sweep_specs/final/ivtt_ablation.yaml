@@ -21,7 +21,7 @@
 #   1. Mechanism is load-bearing: {A1..A7} > {B1, B2}
 #   2. Time-varying θ is load-bearing: {A4..A7} > {A1, A2, A3}
 
-study: ivtt_ablation_consistent
+study: ivtt_ablation_FIX
 runs_per_job: 1
 time: "20:00:00"
 partition: gpu_h100
@@ -37,7 +37,7 @@ runs:
   # B1 — black-box neural ODE: pure MLP vector field, no mechanistic scaffold
   # - {base_config: configs/ivtt_neural_ode_mlp.yaml,    exp_name: A4_neural_ode_mlp, seed: 5}
   # B2 — black-box neural ODE: pure GRU vector field, no mechanistic scaffold
-  # - {base_config: configs/ivtt_neural_ode_gru.yaml,    exp_name: A3_neural_ode_gru}
+  - {base_config: configs/ivtt_neural_ode_gru.yaml,    exp_name: A3_neural_ode_gru}
   # A1 — global learnable theta (no encoder)
   # - {base_config: configs/ivtt_fixed_theta.yaml,       exp_name: A1_fixed_theta}
   # A2 — per-sample constant theta (MLP on y0)
@@ -45,10 +45,10 @@ runs:
   # A3 — global theta + state-dependent neural ODE correction
   # - {base_config: configs/ivtt_neural_correction.yaml, exp_name: A9_neural_correction}
   # A4 — time-varying θ via GRU encoder (proposed)
-  # - {base_config: configs/ivtt_gru.yaml,               exp_name: A4_gru}
+  - {base_config: configs/ivtt_gru.yaml,               exp_name: A4_gru}
   # # A5 — time-varying θ via LSTM encoder
-  # - {base_config: configs/ivtt_lstm.yaml,              exp_name: A5_lstm}
+  - {base_config: configs/ivtt_lstm.yaml,              exp_name: A5_lstm}
   # # A6 — time-varying θ via Transformer encoder
   - {base_config: configs/ivtt_transformer.yaml,       exp_name: A6_transformer}
   # # A7 — time-varying θ via Mamba SSM encoder (requires mamba_ssm in env)
-  # - {base_config: configs/ivtt_mamba_ssm.yaml,         exp_name: A7_mamba_ssm}
+  - {base_config: configs/ivtt_mamba_ssm.yaml,         exp_name: A7_mamba_ssm}

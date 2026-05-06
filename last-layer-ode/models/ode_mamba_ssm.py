@@ -59,6 +59,8 @@ class OdeMambaSSM(nn.Module):
         d_conv: int = 4,
         gru_u_cols: Optional[list] = None,
         gru_y_cols: Optional[list] = None,
+        lift_skip: bool = False,
+        head_init: str = "default",  # "default" (normal_(std=0.01) + zeros) | "supervisor" (xavier_ + zeros)
         **kwargs,
     ):
         super().__init__()
@@ -91,11 +93,19 @@ class OdeMambaSSM(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
-        self.lift = nn.Sequential(
-            nn.Linear(u_cols_dim + y_cols_dim, lift_dim),
-            nn.SiLU(),
-            nn.Linear(lift_dim, hidden),
-        )
+        # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
+        # the analogue of GRU/LSTM's intrinsic W_ih projection. Mamba blocks require
+        # d_model=hidden so the projection cannot be skipped entirely.
+        self.lift_skip = bool(lift_skip)
+        feat_in = u_cols_dim + y_cols_dim
+        if self.lift_skip:
+            self.lift = nn.Linear(feat_in, hidden)
+        else:
+            self.lift = nn.Sequential(
+                nn.Linear(feat_in, lift_dim),
+                nn.SiLU(),
+                nn.Linear(lift_dim, hidden),
+            )
 
         # layer_idx is required so each block gets its own slot in InferenceParams cache
         n = max(1, num_layers)
@@ -107,8 +117,14 @@ class OdeMambaSSM(nn.Module):
 
         head_out = self.theta_dim + self.P if use_basal else self.theta_dim
         self.head = nn.Linear(hidden, head_out)
-        nn.init.normal_(self.head.weight, std=0.01)
-        nn.init.zeros_(self.head.bias)
+        if head_init not in ("default", "supervisor"):
+            raise ValueError(f"head_init must be 'default' or 'supervisor', got {head_init}")
+        if str(head_init) == "supervisor":
+            nn.init.xavier_uniform_(self.head.weight, gain=1.0)
+            nn.init.zeros_(self.head.bias)
+        else:
+            nn.init.normal_(self.head.weight, std=0.01)
+            nn.init.zeros_(self.head.bias)
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(

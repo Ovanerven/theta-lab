@@ -21,7 +21,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from plot_diagnostics import rebuild_model_from_experiment, device_auto
+from plot_diagnostics import rebuild_model_from_experiment, device_auto, _filter_model_kwargs
 
 
 def list_experiment_dirs(exp_root: Path) -> list[Path]:
@@ -76,14 +76,20 @@ def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict 
             obs_idx = torch.arange(y0.shape[-1], device=device, dtype=torch.long)
         extra["obs_idx"] = obs_idx
 
+    base_kwargs = {
+        "y_seq": None,
+        "teacher_forcing": False,
+        "u_transform": str((cfg or {}).get("u_transform", "none")),
+        "y_transform": str((cfg or {}).get("y_transform", "none")),
+    }
+
     with torch.no_grad():
         out = model(
             y0.unsqueeze(0).to(device),
             u_seq.unsqueeze(0).to(device),
             dt,
             **extra,
-            y_seq=None,
-            teacher_forcing=False,
+            **_filter_model_kwargs(model, base_kwargs),
         )
 
     pred = out[0] if isinstance(out, (tuple, list)) else out
