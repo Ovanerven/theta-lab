@@ -1,0 +1,54 @@
+# IVTT ablation sweep — proves that learning time-varying theta(t) over the
+# analytic IVTT step beats the fixed / per-sample-constant / hybrid baselines.
+#
+# Dataset: datasets/real_ivtt_exact_full.npz (shared across all runs).
+# Scaffold: ivtt_analytic for every run.
+# Loss: use_ivtt_mse_loss (plain MSE on mm, pm).
+# Split: bob_model/3 seed splits.py, idx 0 (shared via base_config).
+#
+# Ablation axes:
+#   B1  black-box neural ODE — pure MLP IS the vector field, no scaffold
+#   B2  black-box neural ODE — pure GRU IS the vector field, no scaffold
+#   A1  global learnable theta, no encoder, no recurrence (mechanism-only)
+#   A2  per-sample constant theta (MLP encodes y0, fixed across timesteps)
+#   A3  global theta + neural ODE correction (Lie-Trotter operator split)
+#   A4  time-varying theta via GRU encoder      ← proposed method (baseline)
+#   A5  time-varying theta via LSTM encoder
+#   A6  time-varying theta via Transformer encoder
+#   A7  time-varying theta via Mamba SSM encoder      (skip if mamba_ssm absent)
+#
+# Two arguments to make:
+#   1. Mechanism is load-bearing: {A1..A7} > {B1, B2}
+#   2. Time-varying θ is load-bearing: {A4..A7} > {A1, A2, A3}
+
+study: ivtt_ablation_consistent
+runs_per_job: 1
+time: "20:00:00"
+partition: gpu_h100
+no_plot: false
+
+# Each run brings its own base_config (different model_classes need different
+# encoder hyperparameters). The sweep launcher resolves run.base_config first,
+# then spec.base_config — see launch_sweep.py:124.
+fixed:
+  base_config: configs/ivtt_gru.yaml   # default fallback only
+
+runs:
+  # B1 — black-box neural ODE: pure MLP vector field, no mechanistic scaffold
+  # - {base_config: configs/ivtt_neural_ode_mlp.yaml,    exp_name: A4_neural_ode_mlp, seed: 5}
+  # B2 — black-box neural ODE: pure GRU vector field, no mechanistic scaffold
+  # - {base_config: configs/ivtt_neural_ode_gru.yaml,    exp_name: A3_neural_ode_gru}
+  # A1 — global learnable theta (no encoder)
+  # - {base_config: configs/ivtt_fixed_theta.yaml,       exp_name: A1_fixed_theta}
+  # A2 — per-sample constant theta (MLP on y0)
+  # - {base_config: configs/ivtt_sample_theta.yaml,      exp_name: A2_sample_theta}
+  # A3 — global theta + state-dependent neural ODE correction
+  # - {base_config: configs/ivtt_neural_correction.yaml, exp_name: A9_neural_correction}
+  # A4 — time-varying θ via GRU encoder (proposed)
+  # - {base_config: configs/ivtt_gru.yaml,               exp_name: A4_gru}
+  # # A5 — time-varying θ via LSTM encoder
+  # - {base_config: configs/ivtt_lstm.yaml,              exp_name: A5_lstm}
+  # # A6 — time-varying θ via Transformer encoder
+  - {base_config: configs/ivtt_transformer.yaml,       exp_name: A6_transformer}
+  # # A7 — time-varying θ via Mamba SSM encoder (requires mamba_ssm in env)
+  # - {base_config: configs/ivtt_mamba_ssm.yaml,         exp_name: A7_mamba_ssm}

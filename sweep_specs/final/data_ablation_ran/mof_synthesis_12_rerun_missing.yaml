@@ -1,0 +1,75 @@
+# Rerun sweep for mof_synthesis_12_data_ablation: fills the 8 runs
+# missing from results/mof_synthesis_12_data_ablation_{mean,median}.csv.
+#
+# Missing runs are the A1/A2 "first_last" observability variants
+# across N in {1000, 100, 10, 3}. For mof_synthesis_12, first_last
+# corresponds to obs_idx=[0, 11] (12 observed species total).
+
+study: mof_synthesis_12_data_ablation
+runs_per_job: 1
+time: "03:00:00"
+partition: gpu_h100
+no_plot: false
+
+base_config: configs/archs/gru.yaml
+
+fixed:
+  scaffold: mof_synthesis_12
+  epochs: 100
+
+runs:
+  - model_class: ode_fixed_theta
+    exp_name: A1_fixed_theta_first_last_n1000
+    dataset_path: datasets/mof/mof_synthesis_12_n1000.npz
+    val_n: 100
+    test_n: 100
+    obs_idx: [0, 11]
+
+  - model_class: ode_sample_theta
+    exp_name: A2_sample_theta_first_last_n1000
+    dataset_path: datasets/mof/mof_synthesis_12_n1000.npz
+    val_n: 100
+    test_n: 100
+    obs_idx: [0, 11]
+
+  - model_class: ode_fixed_theta
+    exp_name: A1_fixed_theta_first_last_n100
+    dataset_path: datasets/mof/mof_synthesis_12_n100.npz
+    val_n: 10
+    test_n: 10
+    obs_idx: [0, 11]
+
+  - model_class: ode_sample_theta
+    exp_name: A2_sample_theta_first_last_n100
+    dataset_path: datasets/mof/mof_synthesis_12_n100.npz
+    val_n: 10
+    test_n: 10
+    obs_idx: [0, 11]
+
+  - model_class: ode_fixed_theta
+    exp_name: A1_fixed_theta_first_last_n10
+    dataset_path: datasets/mof/mof_synthesis_12_n10.npz
+    val_n: 1
+    test_n: 1
+    obs_idx: [0, 11]
+
+  - model_class: ode_sample_theta
+    exp_name: A2_sample_theta_first_last_n10
+    dataset_path: datasets/mof/mof_synthesis_12_n10.npz
+    val_n: 1
+    test_n: 1
+    obs_idx: [0, 11]
+
+  - model_class: ode_fixed_theta
+    exp_name: A1_fixed_theta_first_last_n3
+    dataset_path: datasets/mof/mof_synthesis_12_n3.npz
+    val_n: 1
+    test_n: 1
+    obs_idx: [0, 11]
+
+  - model_class: ode_sample_theta
+    exp_name: A2_sample_theta_first_last_n3
+    dataset_path: datasets/mof/mof_synthesis_12_n3.npz
+    val_n: 1
+    test_n: 1
+    obs_idx: [0, 11]

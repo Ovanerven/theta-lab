@@ -1,0 +1,95 @@
+# Rerun sweep for glycolysis_full22_data_ablation: fills the 17 runs
+# missing from results/glycolysis_full22_data_ablation_{mean,median}.csv.
+#
+# 9 runs that were in the original spec but produced no model.pt
+# (mostly n1000, presumed OOM/timeout — bumped time to 04:00:00).
+# 8 runs that were NEVER in the original spec: A1/A2 _first_last
+# variants across all four N values (synthesized here with obs_idx=[0,21]).
+#
+study: glycolysis_full22_data_ablation
+runs_per_job: 1
+time: 08:00:00
+partition: gpu_h100
+no_plot: false
+fixed: {base_config: configs/glycolisis/glycolisis.yaml, scaffold: glycolysis_oracle22, epochs: 100}
+runs:
+- {model_class: ode_fixed_theta, exp_name: A1_fixed_theta_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100}
+- {model_class: ode_sample_theta, exp_name: A2_sample_theta_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100}
+- {model_class: ode_rnn, exp_name: A5_unbounded_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100, theta_bounded: false}
+# - model_class: ode_rnn
+#   exp_name: A5_unbounded_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   theta_bounded: false
+#   obs_idx: [0, 21]
+# - model_class: ode_rnn
+#   exp_name: A6_baseline_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   obs_idx: [0, 21]
+# - {model_class: ode_rnn, exp_name: A7_l1reg_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100, l1_regularization: true, lambda_reg: 0.1}
+# - model_class: ode_rnn
+#   exp_name: A7_l1reg_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   l1_regularization: true
+#   lambda_reg: 0.1
+#   obs_idx: [0, 21]
+# - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100}
+# - model_class: neural_ode_correction
+#   exp_name: A9_neural_ode_correction_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   obs_idx: [0, 21]
+# - model_class: ode_fixed_theta
+#   exp_name: A1_fixed_theta_first_last_n3
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n3.npz
+#   val_n: 1
+#   test_n: 1
+#   obs_idx: [0, 21]
+# - model_class: ode_sample_theta
+#   exp_name: A2_sample_theta_first_last_n3
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n3.npz
+#   val_n: 1
+#   test_n: 1
+#   obs_idx: [0, 21]
+# - model_class: ode_fixed_theta
+#   exp_name: A1_fixed_theta_first_last_n10
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n10.npz
+#   val_n: 1
+#   test_n: 1
+#   obs_idx: [0, 21]
+# - model_class: ode_sample_theta
+#   exp_name: A2_sample_theta_first_last_n10
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n10.npz
+#   val_n: 1
+#   test_n: 1
+#   obs_idx: [0, 21]
+# - model_class: ode_fixed_theta
+#   exp_name: A1_fixed_theta_first_last_n100
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n100.npz
+#   val_n: 10
+#   test_n: 10
+#   obs_idx: [0, 21]
+# - model_class: ode_sample_theta
+#   exp_name: A2_sample_theta_first_last_n100
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n100.npz
+#   val_n: 10
+#   test_n: 10
+#   obs_idx: [0, 21]
+# - model_class: ode_fixed_theta
+#   exp_name: A1_fixed_theta_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   obs_idx: [0, 21]
+# - model_class: ode_sample_theta
+#   exp_name: A2_sample_theta_first_last_n1000
+#   dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz
+#   val_n: 100
+#   test_n: 100
+#   obs_idx: [0, 21]

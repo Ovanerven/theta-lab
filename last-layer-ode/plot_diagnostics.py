@@ -118,6 +118,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
     gru_u_cols = None
     if cfg.get("exclude_ode_cols_from_gru", False):
         gru_u_cols = [j for j in range(U) if int(ds.control_indices[j]) >= scaffold.P]
+    elif cfg.get("gru_u_cols") is not None:
+        # Explicit gru_u_cols from TrainConfig — must be honored at rebuild
+        # time or lift.0.weight shape will not match the checkpoint.
+        gru_u_cols = list(cfg["gru_u_cols"])
 
     gru_y_cols = None
     if cfg.get("gru_y_obs_only", False):
@@ -384,14 +388,17 @@ def _save_event_driven_dashboard(t, y_true, y_pred, u_val, theta_val, state_name
         if ax.get_subplotspec().is_last_row() or ax.get_subplotspec().rowspan.stop == rows:
             ax.set_xlabel("Time", fontsize=10)
 
-    # 4. Create a custom legend for the event lines at the top of the figure
+    # 4. Title on top, bolus-event legend just below it (so they don't overlap)
     from matplotlib.lines import Line2D
     custom_lines = [Line2D([0], [0], color=f'C{j % 10}', linestyle='--', lw=2) for j in range(U)]
-    fig.legend(custom_lines, control_names, loc='upper center', ncol=U, title="Bolus Events", fontsize=10, title_fontsize=12)
-
-    # Adjust layout to make room for the top legend
-    fig.suptitle(title, fontsize=16, y=0.98)
-    fig.tight_layout(rect=[0, 0, 1, 0.92]) 
+    fig.suptitle(title, fontsize=16, y=0.985)
+    fig.legend(
+        custom_lines, control_names,
+        loc='upper center', bbox_to_anchor=(0.5, 0.945),
+        ncol=U, title="Bolus Events", fontsize=10, title_fontsize=12,
+    )
+    # Reserve the top ~12% of the figure for title + legend.
+    fig.tight_layout(rect=[0, 0, 1, 0.88])
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 

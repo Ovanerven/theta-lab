@@ -55,6 +55,9 @@ class OdeSampleTheta(nn.Module):
         self.theta_lo   = float(theta_lo)
         self.theta_hi   = float(theta_hi)
 
+        self._analytic_scaffold = bool(getattr(rhs, "has_analytic_step", False))
+        self.theta_dim_emit     = int(getattr(rhs, "theta_dim_emit", self.theta_dim))
+
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
             lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
@@ -102,19 +105,28 @@ class OdeSampleTheta(nn.Module):
         raw = self.head(self.mlp(y0))
         theta = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)  # (B, theta_dim)
 
-        y_out  = torch.empty(B, K, self.P,         device=device, dtype=dtype)
-        th_out = torch.empty(B, K, self.theta_dim, device=device, dtype=dtype)
+        y_out  = torch.empty(B, K, self.P,                 device=device, dtype=dtype)
+        th_out = torch.empty(B, K, self.theta_dim_emit,    device=device, dtype=dtype)
 
-        y_prev = y0
+        analytic_ctx: dict = {}
+        if self._analytic_scaffold:
+            analytic_ctx = self.rhs.precompute_batch(y0, u_seq)
+            y_prev = self.rhs.initial_state(y0)
+        else:
+            y_prev = y0
+
         for k in range(K):
             u_k  = u_seq[:, k, :]
             dt_k = dt_seq[:, k]
 
-            y = y_prev + (u_k @ self.u_to_y_jump)
-            y = self._rk4_substeps(y, dt_k, theta)
+            if self._analytic_scaffold:
+                y = self.rhs.analytic_step(y_prev, dt_k, theta, analytic_ctx)
+            else:
+                y = y_prev + (u_k @ self.u_to_y_jump)
+                y = self._rk4_substeps(y, dt_k, theta)
 
             y_out[:, k, :]  = y
-            th_out[:, k, :] = theta
+            th_out[:, k, :] = self.rhs.emit_theta(theta, y) if self._analytic_scaffold else theta
             y_prev = y
 
         beta_out = torch.zeros(B, K, self.P, device=device, dtype=dtype)

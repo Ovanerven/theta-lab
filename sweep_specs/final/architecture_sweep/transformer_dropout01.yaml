@@ -42,8 +42,8 @@ runs:
   # ── mof_synthesis_4 ───────────────────────────────────────────────────
   - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n100_s42_d01,
      scaffold: mof_synthesis_4, dataset_path: datasets/mof/mof_synthesis_4_n100.npz}
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n100_fl_s42_d01,
-     scaffold: mof_synthesis_4, dataset_path: datasets/mof/mof_synthesis_4_n100.npz, obs_idx: [0, 3]}
+#   - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n100_fl_s42_d01,
+#      scaffold: mof_synthesis_4, dataset_path: datasets/mof/mof_synthesis_4_n100.npz, obs_idx: [0, 3]}
 
   # ── mof_synthesis_6 ───────────────────────────────────────────────────
   - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_s42_d01,
@@ -52,5 +52,5 @@ runs:
      scaffold: mof_synthesis_6, dataset_path: datasets/mof/mof_synthesis_6_n100.npz, obs_idx: [0, 5]}
 
   # ── single_enzyme_lumped (d_y = n^x = 2 already) ──────────────────────
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n100_s42_d01,
-     scaffold: single_enzyme_lumped, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n100.npz}
+#   - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n100_s42_d01,
+#      scaffold: single_enzyme_lumped, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n100.npz}

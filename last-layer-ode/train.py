@@ -116,8 +116,8 @@ def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> tor
     return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
 
 
-def _load_bob_seed_splits(path: str | Path, idx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Parse bob_model/3 seed splits.py and return the (train, val, test) triple at `idx`.
+def _load_fixed_split_triples(path: str | Path, idx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Parse a python file of hardcoded (test, val, train) splits and return triple `idx`.
 
     The file contains three repeated assignments to `test=`, `val=`, `train=`. We
     exec it under a namespace and capture each set as the assignments overwrite,
@@ -135,7 +135,7 @@ def _load_bob_seed_splits(path: str | Path, idx: int) -> tuple[np.ndarray, np.nd
             triples.append(current)
             current = {}
     if not (0 <= idx < len(triples)):
-        raise ValueError(f"bob_seed_split_idx={idx} out of range; file has {len(triples)} triples")
+        raise ValueError(f"fixed_split_idx={idx} out of range; file has {len(triples)} triples")
     t = triples[idx]
     return (np.asarray(t["train"], dtype=np.int64),
             np.asarray(t["val"],   dtype=np.int64),
@@ -160,7 +160,7 @@ def loss_fn(
     return se.mean()
 
 
-def loss_fn_bob_exact(
+def loss_fn_ivtt_mse(
     *,
     pred_full: torch.Tensor,
     theta: torch.Tensor,
@@ -534,24 +534,30 @@ class TrainConfig:
     expand: int = 2
     d_conv: int = 4
 
+    # neural_ode_correction / fixed_theta_nn-specific (ignored by other models via **kwargs)
+    nn_hidden: int = 256
+    nn_layers: int = 2
+
     forget_bias_init: Optional[float] = None  # None = PyTorch default; 1.0 = Gers/Jozefowicz positive shift
     legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
 
-    # bob_model compatibility
-    use_bob_loss: bool = False  # when True, use Bob's exact loss (loss_fn_bob_exact). Requires the
-                                 # model to emit an 8-d theta layout [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO]
-                                 # — produced by either model_class=bob_gru_verbatim or any model paired
-                                 # with scaffold=ivtt_analytic.
+    # Plain MSE on (mm, pm) in raw scale, no normalization, no aux terms.
+    # Requires the model to emit an 8-d theta layout
+    # [VTX, kdm, VTL, kmt, kmatm, R, lam, lamO] — produced by any model paired
+    # with scaffold=ivtt_analytic.
+    use_ivtt_mse_loss: bool = False
 
-    use_bob_split: bool = False
-    bob_split_seed: int = 57
-    bob_test_frac: float = 0.125
-    bob_val_frac: float = 0.125
+    # Random shuffle split with a separate seed, used when no fixed_split_file
+    # is provided. Test fraction is taken first, then val fraction of the remainder.
+    use_fixed_split: bool = False
+    fixed_split_seed: int = 57
+    fixed_test_frac: float = 0.125
+    fixed_val_frac: float = 0.125
 
-    # Use one of the three hardcoded (test, val, train) triples from
-    # bob_model/3 seed splits.py. Takes precedence over use_bob_split when set.
-    bob_seed_split_file: Optional[str] = None
-    bob_seed_split_idx: int = 0  # 0, 1, or 2
+    # Use one of the hardcoded (test, val, train) triples from a python file
+    # listing them. Takes precedence over use_fixed_split when set.
+    fixed_split_file: Optional[str] = None
+    fixed_split_idx: int = 0
 
     use_basal: bool = False
     beta_regularization: bool = False
@@ -576,6 +582,10 @@ class TrainConfig:
 
     # checkpointing cadence (0 disables periodic ckpts)
     ckpt_every: int = 10
+
+    # If True, run endpoint R² analysis at end of training and save the plot
+    # + cache into exp_dir. Also picked up by replot.py post-hoc.
+    endpoint_r2: bool = False
 
     l1_regularization: bool = False   # smoothness: penalizes mean |theta[t] - theta[t-1]|
     l2_regularization: bool = False   # smoothness: penalizes mean (theta[t] - theta[t-1])^2
@@ -796,47 +806,47 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     N = len(ds)
 
-    if cfg.bob_seed_split_file:
-        train_idx, val_idx, test_idx = _load_bob_seed_splits(
-            cfg.bob_seed_split_file, int(cfg.bob_seed_split_idx)
+    if cfg.fixed_split_file:
+        train_idx, val_idx, test_idx = _load_fixed_split_triples(
+            cfg.fixed_split_file, int(cfg.fixed_split_idx)
         )
         # safety: clip to dataset size in case the source file references a
         # superset of experiments (e.g. unfiltered indices)
         for name, arr in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
             if arr.size and (arr.max() >= N or arr.min() < 0):
                 raise ValueError(
-                    f"bob_seed_split {name}_idx out of range for N={N} "
+                    f"fixed_split {name}_idx out of range for N={N} "
                     f"(min={arr.min()}, max={arr.max()})"
                 )
         print(
-            f"Split: bob_seed_split_file={cfg.bob_seed_split_file}"
-            f" | idx={int(cfg.bob_seed_split_idx)}"
+            f"Split: fixed_split_file={cfg.fixed_split_file}"
+            f" | idx={int(cfg.fixed_split_idx)}"
             f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
         )
 
-    elif cfg.use_bob_split:
+    elif cfg.use_fixed_split:
         idx = list(range(N))
-        rng = random.Random(int(cfg.bob_split_seed))
+        rng = random.Random(int(cfg.fixed_split_seed))
         rng.shuffle(idx)
-        n_test = int(N * float(cfg.bob_test_frac))
+        n_test = int(N * float(cfg.fixed_test_frac))
         test_idx = np.asarray(idx[:n_test], dtype=np.int64)
         rest = idx[n_test:]
-        n_val = int(len(rest) * float(cfg.bob_val_frac))
+        n_val = int(len(rest) * float(cfg.fixed_val_frac))
         val_idx = np.asarray(rest[:n_val], dtype=np.int64)
         train_idx = np.asarray(rest[n_val:], dtype=np.int64)
         print(
-            f"Split: bob_model"
-            f" | seed={int(cfg.bob_split_seed)}"
-            f" | test_frac={float(cfg.bob_test_frac)}"
-            f" | val_frac={float(cfg.bob_val_frac)}"
+            f"Split: fixed_split"
+            f" | seed={int(cfg.fixed_split_seed)}"
+            f" | test_frac={float(cfg.fixed_test_frac)}"
+            f" | val_frac={float(cfg.fixed_val_frac)}"
             f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
         )
 
-    elif not cfg.bob_seed_split_file:
+    elif not cfg.fixed_split_file:
         n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
         n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
 
-    if (not cfg.use_bob_split) and (not cfg.bob_seed_split_file) and cfg.fixed_test_idx_path:
+    if (not cfg.use_fixed_split) and (not cfg.fixed_split_file) and cfg.fixed_test_idx_path:
         fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
         if fixed_test.max() >= N or fixed_test.min() < 0:
             raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
@@ -850,7 +860,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         test_idx = fixed_test
         print(f"Split: fixed test from {cfg.fixed_test_idx_path} "
               f"(n_test={len(test_idx)}, n_val={len(val_idx)}, n_train={len(train_idx)})")
-    elif (not cfg.use_bob_split) and (not cfg.bob_seed_split_file):
+    elif (not cfg.use_fixed_split) and (not cfg.fixed_split_file):
         train_idx, val_idx, test_idx = _make_split_indices(
             N=N,
             y_seq=ds.y_seq,
@@ -1121,8 +1131,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq,
                     **model_kwargs,
                 )
-            if cfg.use_bob_loss:
-                loss = loss_fn_bob_exact(pred_full=pred, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
+            if cfg.use_ivtt_mse_loss:
+                loss = loss_fn_ivtt_mse(pred_full=pred, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
                 # keep these for any logging/diagnostics below
                 pred = pred[:, :, obs_idx]
                 y_seq = y_seq[:, :, obs_idx]
@@ -1184,12 +1194,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
 
-                    if cfg.use_bob_loss:
+                    if cfg.use_ivtt_mse_loss:
                         model_kwargs = {"teacher_forcing": False, "tf_every": int(cfg.tf_every)}
                         _inject_feat_transforms(model_kwargs)
                         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(cfg.autocast_bf16 and device.type == "cuda")):
                             pred_full, theta, _ = model(y0, u_seq, dt_seq, obs_idx, y_seq, **model_kwargs)
-                        loss = loss_fn_bob_exact(pred_full=pred_full, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
+                        loss = loss_fn_ivtt_mse(pred_full=pred_full, theta=theta, y_seq_full=y_seq, lengths=batch_lengths)
                         va_total += float(loss.item())
                         va_batches += 1
                         continue
@@ -1449,6 +1459,33 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             import traceback
             print(f"[plot] failed: {type(e).__name__}: {e}")
             traceback.print_exc()
+
+    if cfg.endpoint_r2:
+        try:
+            from metrics import endpoint_r2
+            from plot_diagnostics import device_auto as _dev_auto
+
+            r2_device = _dev_auto()
+            print("\nRunning endpoint R² analysis...")
+            result = endpoint_r2.collect_endpoints(
+                exp_dir, r2_device, split="test", protein_sp="pm", mrna_sp="mm"
+            )
+            r2_protein = endpoint_r2.r2(result["true_protein_final"], result["pred_protein_final"])
+            r2_mrna    = endpoint_r2.r2(result["true_mrna_max"],      result["pred_mrna_max"])
+            print(f"  R²(protein final) = {r2_protein:.4f}")
+            print(f"  R²(mRNA max)      = {r2_mrna:.4f}")
+
+            out_path = exp_dir / "endpoint_r2.png"
+            endpoint_r2.plot_endpoints(
+                [result], protein_sp="pm", mrna_sp="mm", split="test", out_path=out_path
+            )
+            endpoint_r2.save_r2_cache(exp_dir, result, r2_protein, r2_mrna)
+
+            if wandb_run is not None:
+                wandb_run.summary["endpoint_r2/protein_final"] = float(r2_protein)
+                wandb_run.summary["endpoint_r2/mrna_max"]      = float(r2_mrna)
+        except Exception as e:
+            print(f"[endpoint_r2] failed: {e}")
 
     if wandb_run is not None:
         plots_dir = exp_dir / "plots"

@@ -2,9 +2,9 @@
 # IMPORTANT: bob_model runs shown in bob_model/main_neural_spline.py construct
 # NeuralSpline(..., rescale_inputs=False), i.e. *no* MinMax scaling on reagents.
 # Generate the matching dataset with (EXACT bob_model semantics):
-#   python datasets/convert_real_to_npz.py --layout full --reagent-scaling none --dna-mode raw --obs-align current --output datasets/real_ivtt_bob_exact_full.npz
+#   python datasets/convert_real_to_npz.py --layout full --reagent-scaling none --dna-mode raw --obs-align current --output datasets/real_ivtt_exact_full.npz
 
-dataset_path: datasets/real_ivtt_bob_exact_full.npz
+dataset_path: datasets/real_ivtt_exact_full.npz
 study: bob_gru_verbatim
 tags: null
 exp_name: default
@@ -30,15 +30,15 @@ seed: 42
 split_seed: 42
 
 # Match bob_model/neural_spline.py make_train_test_split(): seed=57, 12.5% test, 12.5% val
-use_bob_split: true
-bob_split_seed: 57
-bob_test_frac: 0.125
-bob_val_frac: 0.125
+use_fixed_split: true
+fixed_split_seed: 57
+fixed_test_frac: 0.125
+fixed_val_frac: 0.125
 
 # Use one of the three hardcoded (test, val, train) triples from
-# bob_model/3 seed splits.py. Takes precedence over use_bob_split when set.
-bob_seed_split_file: "bob_model/3 seed splits.py"
-bob_seed_split_idx: 0  # 0, 1, or 2
+# bob_model/3 seed splits.py. Takes precedence over use_fixed_split when set.
+fixed_split_file: "bob_model/3 seed splits.py"
+fixed_split_idx: 0  # 0, 1, or 2
 
 # Optional stratification by endpoint outcomes
 stratified_split: false
@@ -68,7 +68,7 @@ n_substeps: 1
 obs_normalization: null
 
 # bob_model compatibility
-use_bob_loss: true
+use_ivtt_mse_loss: true
 
 # Match bob_model teacher forcing schedule (on until epoch 99; off from epoch 100)
 teacher_forcing: true
@@ -78,3 +78,4 @@ grad_clip: 1.0
 
 # Match bob_model/neural_spline.py:1760: model = torch.jit.script(model)
 jit_scripting: true
+endpoint_r2: true

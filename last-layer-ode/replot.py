@@ -64,7 +64,7 @@ def replot(
     for exp_dir in exp_dirs:
         name = exp_dir.name
         run_plots = do_plots and _needs_plots(exp_dir, force)
-        run_r2 = do_r2 and _needs_r2(exp_dir, force) and _config_wants_r2(exp_dir)
+        run_r2 = do_r2 and (force or (_needs_r2(exp_dir, force) and _config_wants_r2(exp_dir)))
 
         if not run_plots and not run_r2:
             print(f"[skip]  {name}  (already complete)")
