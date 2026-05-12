@@ -1,4 +1,5 @@
 from models.ode_rnn import OdeRNN
+from models.ode_rnn_basal_v2 import OdeRNNBasalV2
 from models.ode_rnn_analytical import AnalyticalOdeRNN
 from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN, TXTLAnalyticalBleachOdeRNN, TXTLApproxOdeRNN, TXTLMaturationApproxOdeRNN
 from models.bob_gru_verbatim import BobGRUVerbatim
@@ -29,6 +30,7 @@ except ImportError:
 
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
+    "ode_rnn_basal_v2":   OdeRNNBasalV2,
     "lstm_rnn":           OdeLSTM,
     "ode_rnn_analytical": AnalyticalOdeRNN,
     "ode_rnn_txtl":       TXTLAnalyticalOdeRNN,

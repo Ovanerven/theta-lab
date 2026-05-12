@@ -668,7 +668,7 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
 
     plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names)
 
-    if cfg.get("use_basal", False):
+    if cfg.get("use_basal", False) or cfg.get("model_class", "") == "ode_rnn_basal_v2":
         plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
 
     print(f"Saved plots to {out_dir}")
