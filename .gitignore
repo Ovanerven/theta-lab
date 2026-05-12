@@ -1,39 +1,10 @@
-datasets/old/*.npz
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Test experiments
-tests
-
-#slurm outputs and jobs
 slurm_outputs/
+experiments/
 slurm_jobs/
-
-# macOS
-.DS_Store
-
-last-layer-ode/plot_comparison_mech_specificity.py
-last-layer-ode/plot_comparison.py
-last-layer-ode/reaggregate_nrmse_summary.py
-last-layer-ode/summarize_nrmse_mech_specificity.py
-
-.env
-
-last-layer-ode/thesis_plots
-
-CLAUDE.md
-.agents
 .claude
-AGENTS.md
-
-experiments/old
-configs/old
-
-experiments
-
-hints.txt
-
-datasets/aramco_pulsed_n500_molfrac.npz
-aramco_pulsed_n500_molfrac.npz
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
