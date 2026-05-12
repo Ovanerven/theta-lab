@@ -1,0 +1,9 @@
+run,study,exp_name,study_exp_name,seed,r2_protein_final,r2_mrna_max
+20260506_002618_default,ivtt_gru,default,ivtt_gru_default,42,0.426488,0.362597
+20260506_165316_default,ivtt_gru_drop5000,default,ivtt_gru_drop5000_default,42,0.380174,0.365102
+20260506_165328_MY_GRU,ivtt_gru_drop5000,MY_GRU,ivtt_gru_drop5000_MY_GRU,42,0.355879,0.582359
+20260506_170702_MY_GRU,ivtt_gru_drop5000,MY_GRU,ivtt_gru_drop5000_MY_GRU,42,0.355879,0.582359
+20260506_170705_default,ivtt_gru_drop5000,default,ivtt_gru_drop5000_default,42,0.380174,0.365102
+20260506_194435_cmvfgru_s1,ivtt_gru_drop5000,MY_GRU_s1,ivtt_gru_drop5000_MY_GRU_s1,35,0.409902,0.582604
+20260506_194507_ivtt_gru_seed13,ivtt_gru_drop5000,ivtt_gru_seed13,ivtt_gru_drop5000_ivtt_gru_seed13,13,0.315132,0.077325
+20260506_194511_ivtt_gru_seed1,ivtt_gru_drop5000,ivtt_gru_seed1,ivtt_gru_drop5000_ivtt_gru_seed1,24,0.302846,0.141819

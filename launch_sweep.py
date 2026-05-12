@@ -121,7 +121,15 @@ def resolve_exp_name(spec: dict, run: dict) -> str:
 
 
 def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
-    base_config = run.get("base_config") or spec.get("base_config", "configs/archs/gru.yaml")
+    # base_config may be set per-run, at spec top level, or — for historical
+    # reasons — under `fixed:`. Accept all three (per-run > top-level > fixed).
+    fixed_base = (spec.get("fixed") or {}).get("base_config")
+    base_config = (
+        run.get("base_config")
+        or spec.get("base_config")
+        or fixed_base
+        or "configs/archs/gru.yaml"
+    )
     exp_name = resolve_exp_name(spec, run)
     no_plot = spec.get("no_plot", False)
     train_script = run.get("train_script") or spec.get("train_script") or TRAIN_CMD.split()[-1]

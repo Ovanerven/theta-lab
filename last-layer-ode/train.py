@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional
 import math
-import random
 from pathlib import Path
 import re
 import time
@@ -56,6 +55,10 @@ class ODEDataset(Dataset):
         self.names_full = d["names_full"].astype(str) if "names_full" in d else None
         self.control_names = d["control_names"].astype(str) if "control_names" in d else None
         self.obs_names = d["obs_names"].astype(str) if "obs_names" in d else None
+        # Optional mapping from this (possibly filtered) dataset back to the
+        # original row indices in the source dataset. When present, callers
+        # can remap hardcoded splits that refer to the original indexing.
+        self.original_indices = d["original_indices"].astype(np.int64) if "original_indices" in d else None
 
         # MinMax stats for u (per channel). Mirrors train_R.py so replot works
         # with models trained via either training script.
@@ -116,30 +119,35 @@ def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> tor
     return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
 
 
-def _load_fixed_split_triples(path: str | Path, idx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Parse a python file of hardcoded (test, val, train) splits and return triple `idx`.
+def _load_fixed_split_triples(
+    path: str | Path,
+    idx: int,
+    original_indices: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load the (train, val, test) triple at position `idx` from an `.npz` file.
 
-    The file contains three repeated assignments to `test=`, `val=`, `train=`. We
-    exec it under a namespace and capture each set as the assignments overwrite,
-    yielding 3 triples in source order.
+    Expected keys: ``train_{i}``, ``val_{i}``, ``test_{i}`` for i in [0, n_triples).
+    If `original_indices` is provided (filtered dataset), the stored indices are
+    remapped to their new positions and any indices that were filtered out are
+    dropped.
     """
-    import re
-    src = Path(path).read_text()
-    triples: list[dict[str, list[int]]] = []
-    current: dict[str, list[int]] = {}
-    pat = re.compile(r"^\s*(test|val|train)\s*=\s*(\[[^\]]*\])", re.MULTILINE)
-    for m in pat.finditer(src):
-        key, lst = m.group(1), m.group(2)
-        current[key] = list(eval(lst))  # safe: list literals only
-        if {"test", "val", "train"}.issubset(current):
-            triples.append(current)
-            current = {}
-    if not (0 <= idx < len(triples)):
-        raise ValueError(f"fixed_split_idx={idx} out of range; file has {len(triples)} triples")
-    t = triples[idx]
-    return (np.asarray(t["train"], dtype=np.int64),
-            np.asarray(t["val"],   dtype=np.int64),
-            np.asarray(t["test"],  dtype=np.int64))
+    with np.load(path) as f:
+        keys = set(f.files)
+        n = int(f["n_triples"]) if "n_triples" in keys else \
+            sum(1 for k in keys if k.startswith("train_"))
+        if not (0 <= idx < n):
+            raise ValueError(f"fixed_split_idx={idx} out of range; file has {n} triples")
+        train_raw = f[f"train_{idx}"].astype(np.int64)
+        val_raw   = f[f"val_{idx}"].astype(np.int64)
+        test_raw  = f[f"test_{idx}"].astype(np.int64)
+
+    if original_indices is None:
+        return train_raw, val_raw, test_raw
+
+    mapping = {int(orig): new_i for new_i, orig in enumerate(original_indices)}
+    keep = lambda arr: np.asarray([mapping[int(i)] for i in arr if int(i) in mapping],
+                                  dtype=np.int64)
+    return keep(train_raw), keep(val_raw), keep(test_raw)
 
 
 def loss_fn(
@@ -473,6 +481,75 @@ def _make_split_indices(
     return train_idx, val_idx, test_idx
 
 
+def _resolve_split(cfg, ds, N: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Single entry point for train/val/test split selection.
+
+    Precedence (first match wins):
+      1. `fixed_split_file`     — manual triple loaded from an `.npz` file.
+      2. `fixed_test_idx_path`  — test set from `.npy`; train/val random from the rest.
+      3. default               — count-based random split (`val_n`, `test_n`),
+                                  optionally stratified by endpoint quantiles.
+    """
+    if cfg.fixed_split_file:
+        train_idx, val_idx, test_idx = _load_fixed_split_triples(
+            cfg.fixed_split_file, int(cfg.fixed_split_idx), ds.original_indices,
+        )
+        for name, arr in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
+            if arr.size and (arr.max() >= N or arr.min() < 0):
+                raise ValueError(
+                    f"fixed_split {name}_idx out of range for N={N} "
+                    f"(min={arr.min()}, max={arr.max()})"
+                )
+        print(
+            f"Split: fixed_split_file={cfg.fixed_split_file}"
+            f" | idx={int(cfg.fixed_split_idx)}"
+            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
+        )
+        return train_idx, val_idx, test_idx
+
+    n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
+    n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
+
+    if cfg.fixed_test_idx_path:
+        fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
+        if fixed_test.max() >= N or fixed_test.min() < 0:
+            raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
+        remaining = np.setdiff1d(np.arange(N, dtype=np.int64), fixed_test)
+        rng = np.random.default_rng(int(cfg.split_seed))
+        rng.shuffle(remaining)
+        if n_val > len(remaining):
+            raise ValueError(f"val_n={n_val} exceeds remaining {len(remaining)}")
+        val_idx = remaining[:n_val]
+        train_idx = remaining[n_val:]
+        test_idx = fixed_test
+        print(
+            f"Split: fixed_test_idx_path={cfg.fixed_test_idx_path}"
+            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
+        )
+        return train_idx, val_idx, test_idx
+
+    train_idx, val_idx, test_idx = _make_split_indices(
+        N=N,
+        y_seq=ds.y_seq,
+        lengths=ds.lengths if ds.variable_length else None,
+        n_val=n_val,
+        n_test=n_test,
+        split_seed=int(cfg.split_seed),
+        stratified_split=bool(cfg.stratified_split),
+        stratify_bins=int(cfg.stratify_bins),
+        stratify_targets=cfg.stratify_targets,
+    )
+    kind = "stratified" if cfg.stratified_split else "random"
+    extra = (f" | bins={int(cfg.stratify_bins)}"
+             f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
+             if cfg.stratified_split else "")
+    print(
+        f"Split: {kind} | seed={int(cfg.split_seed)}{extra}"
+        f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
+    )
+    return train_idx, val_idx, test_idx
+
+
 @dataclass
 class TrainConfig:
     dataset_path: str
@@ -547,15 +624,9 @@ class TrainConfig:
     # with scaffold=ivtt_analytic.
     use_ivtt_mse_loss: bool = False
 
-    # Random shuffle split with a separate seed, used when no fixed_split_file
-    # is provided. Test fraction is taken first, then val fraction of the remainder.
-    use_fixed_split: bool = False
-    fixed_split_seed: int = 57
-    fixed_test_frac: float = 0.125
-    fixed_val_frac: float = 0.125
-
-    # Use one of the hardcoded (test, val, train) triples from a python file
-    # listing them. Takes precedence over use_fixed_split when set.
+    # Manual split: load one of the (train, val, test) triples stored in an
+    # `.npz` file (keys: train_i / val_i / test_i). When set, this overrides
+    # all other split options including `fixed_test_idx_path`.
     fixed_split_file: Optional[str] = None
     fixed_split_idx: int = 0
 
@@ -570,6 +641,7 @@ class TrainConfig:
     gru_variant: str = "nn_gru"           # "nn_gru" | "stacked_cell" (Bob's stacked GRUCell + dropout-on-last)
     gru_init: str = "default"             # "default" | "supervisor" (orthogonal_ + xavier_ + zeros)
     head_init: str = "default"            # "default" | "supervisor" (xavier_ + zeros, unconditional)
+    y0_theta_init: bool = False           # ode_rnn: add MLP(y0) bias to theta-head logits at every step
     theta_head_transform: str = "log_gamma"  # "log_gamma" | "gamma"
     theta_head_tau: float = 1.0           # log_gamma sigmoid temperature (Bob: 2.3)
     u_transform: str = "none"             # forward-time u feature transform ("none" | "sqrt" | "cumsum" | …)
@@ -806,79 +878,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     N = len(ds)
 
-    if cfg.fixed_split_file:
-        train_idx, val_idx, test_idx = _load_fixed_split_triples(
-            cfg.fixed_split_file, int(cfg.fixed_split_idx)
-        )
-        # safety: clip to dataset size in case the source file references a
-        # superset of experiments (e.g. unfiltered indices)
-        for name, arr in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
-            if arr.size and (arr.max() >= N or arr.min() < 0):
-                raise ValueError(
-                    f"fixed_split {name}_idx out of range for N={N} "
-                    f"(min={arr.min()}, max={arr.max()})"
-                )
-        print(
-            f"Split: fixed_split_file={cfg.fixed_split_file}"
-            f" | idx={int(cfg.fixed_split_idx)}"
-            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
-        )
-
-    elif cfg.use_fixed_split:
-        idx = list(range(N))
-        rng = random.Random(int(cfg.fixed_split_seed))
-        rng.shuffle(idx)
-        n_test = int(N * float(cfg.fixed_test_frac))
-        test_idx = np.asarray(idx[:n_test], dtype=np.int64)
-        rest = idx[n_test:]
-        n_val = int(len(rest) * float(cfg.fixed_val_frac))
-        val_idx = np.asarray(rest[:n_val], dtype=np.int64)
-        train_idx = np.asarray(rest[n_val:], dtype=np.int64)
-        print(
-            f"Split: fixed_split"
-            f" | seed={int(cfg.fixed_split_seed)}"
-            f" | test_frac={float(cfg.fixed_test_frac)}"
-            f" | val_frac={float(cfg.fixed_val_frac)}"
-            f" | n_test={len(test_idx)} n_val={len(val_idx)} n_train={len(train_idx)}"
-        )
-
-    elif not cfg.fixed_split_file:
-        n_test = int(cfg.test_n) if cfg.test_n > 0 else 0
-        n_val  = int(cfg.val_n)  if cfg.val_n  > 0 else max(1, int(N * cfg.val_frac))
-
-    if (not cfg.use_fixed_split) and (not cfg.fixed_split_file) and cfg.fixed_test_idx_path:
-        fixed_test = np.load(cfg.fixed_test_idx_path).astype(np.int64)
-        if fixed_test.max() >= N or fixed_test.min() < 0:
-            raise ValueError(f"fixed_test_idx out of range for dataset size {N}")
-        remaining = np.setdiff1d(np.arange(N, dtype=np.int64), fixed_test)
-        rng = np.random.default_rng(int(cfg.split_seed))
-        rng.shuffle(remaining)
-        if n_val > len(remaining):
-            raise ValueError(f"val_n={n_val} exceeds remaining {len(remaining)}")
-        val_idx = remaining[:n_val]
-        train_idx = remaining[n_val:]
-        test_idx = fixed_test
-        print(f"Split: fixed test from {cfg.fixed_test_idx_path} "
-              f"(n_test={len(test_idx)}, n_val={len(val_idx)}, n_train={len(train_idx)})")
-    elif (not cfg.use_fixed_split) and (not cfg.fixed_split_file):
-        train_idx, val_idx, test_idx = _make_split_indices(
-            N=N,
-            y_seq=ds.y_seq,
-            lengths=ds.lengths if ds.variable_length else None,
-            n_val=n_val,
-            n_test=n_test,
-            split_seed=int(cfg.split_seed),
-            stratified_split=bool(cfg.stratified_split),
-            stratify_bins=int(cfg.stratify_bins),
-            stratify_targets=cfg.stratify_targets,
-        )
-
-    if cfg.stratified_split:
-        print(
-            "Split: stratified"
-            f" | bins={int(cfg.stratify_bins)}"
-            f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
-        )
+    train_idx, val_idx, test_idx = _resolve_split(cfg, ds, N)
 
     if int(cfg.train_n) > 0 and int(cfg.train_n) < len(train_idx):
         train_idx = train_idx[: int(cfg.train_n)]
@@ -979,6 +979,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         gru_variant=cfg.gru_variant,
         gru_init=cfg.gru_init,
         head_init=cfg.head_init,
+        y0_theta_init=cfg.y0_theta_init,
         theta_head_transform=cfg.theta_head_transform,
         theta_head_tau=cfg.theta_head_tau,
     ).to(device)
@@ -1307,12 +1308,6 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_total = 0.0
         te_batches = 0
         sp_total = None
-        # Accumulate per-sample predictions to compute R² across the entire test set
-        # in both linear and log1p space. We pad to the global K_max and apply a
-        # length-aware boolean mask before computing SS_res / SS_tot.
-        all_pred_chunks: list[torch.Tensor] = []
-        all_true_chunks: list[torch.Tensor] = []
-        all_len_chunks:  list[torch.Tensor] = []
         with torch.no_grad():
             for y0, u_seq, y_seq, batch_lengths in test_loader:
                 K_batch = u_seq.shape[1]
@@ -1335,10 +1330,6 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()
                 sp_total = sp if sp_total is None else sp_total + sp
                 te_batches += 1
-                all_pred_chunks.append(pred.detach().cpu())
-                all_true_chunks.append(y_seq.detach().cpu())
-                if batch_lengths is not None:
-                    all_len_chunks.append(batch_lengths.detach().cpu())
         test_loss = te_total / max(1, te_batches)
         if sp_total is not None:
             test_species_loss = (sp_total / max(1, te_batches)).numpy()
@@ -1352,65 +1343,6 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_str = ""
         print(f"\nTest loss (best model): {test_loss:.6f}{sp_str}")
 
-        # ---- R² (per-species) on the test set, both linear and log1p space ----
-        # Variable-length batches may have different K, so pad each chunk to K_max
-        # before stacking; a length-mask filters padded steps out of the regression.
-        test_r2_lin: np.ndarray | None = None
-        test_r2_log: np.ndarray | None = None
-        if all_pred_chunks:
-            K_max = max(p.shape[1] for p in all_pred_chunks)
-            S = all_pred_chunks[0].shape[-1]
-
-            def _pad_K(t: torch.Tensor, target: int) -> torch.Tensor:
-                # Pad along time dim with zeros so concat works; length mask zeros these out anyway.
-                if t.shape[1] == target:
-                    return t
-                pad = torch.zeros(t.shape[0], target - t.shape[1], t.shape[2], dtype=t.dtype)
-                return torch.cat([t, pad], dim=1)
-
-            pred_cat = torch.cat([_pad_K(t, K_max) for t in all_pred_chunks], dim=0)  # (N, K_max, S)
-            true_cat = torch.cat([_pad_K(t, K_max) for t in all_true_chunks], dim=0)
-            if all_len_chunks:
-                lengths_cat = torch.cat(all_len_chunks, dim=0)
-                mask_2d = torch.arange(K_max)[None, :] < lengths_cat[:, None]   # (N, K_max)
-            else:
-                mask_2d = torch.ones(pred_cat.shape[0], K_max, dtype=torch.bool)
-
-            def _r2_per_species(p: torch.Tensor, t: torch.Tensor, m: torch.Tensor) -> np.ndarray:
-                p_np, t_np, m_np = p.numpy(), t.numpy(), m.numpy()
-                out = np.full((S,), np.nan, dtype=np.float32)
-                for s in range(S):
-                    pp = p_np[..., s][m_np]
-                    tt = t_np[..., s][m_np]
-                    if tt.size == 0:
-                        continue
-                    ss_res = float(((pp - tt) ** 2).sum())
-                    ss_tot = float(((tt - tt.mean()) ** 2).sum())
-                    out[s] = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-                return out
-
-            test_r2_lin = _r2_per_species(pred_cat, true_cat, mask_2d)
-            # log1p R²: clamp first to avoid log of negative spurious preds.
-            test_r2_log = _r2_per_species(
-                torch.log1p(pred_cat.clamp_min(0.0)),
-                torch.log1p(true_cat.clamp_min(0.0)),
-                mask_2d,
-            )
-            obs_names_for_print = (
-                [mech_names[i] for i in cfg.obs_idx] if (mech_names is not None and cfg.obs_idx is not None)
-                else (mech_names if mech_names is not None else [f"s{i}" for i in range(S)])
-            )
-            r2_lin_str = "  ".join(f"{n}:{v:.4f}" for n, v in zip(obs_names_for_print, test_r2_lin))
-            r2_log_str = "  ".join(f"{n}:{v:.4f}" for n, v in zip(obs_names_for_print, test_r2_log))
-            print(f"Test R² (linear)  : [{r2_lin_str}]   mean={float(np.nanmean(test_r2_lin)):.4f}")
-            print(f"Test R² (log1p)   : [{r2_log_str}]   mean={float(np.nanmean(test_r2_log)):.4f}")
-            if wandb_run is not None:
-                wandb_run.summary["test/r2_lin_mean"] = float(np.nanmean(test_r2_lin))
-                wandb_run.summary["test/r2_log_mean"] = float(np.nanmean(test_r2_log))
-                for n, v_lin, v_log in zip(obs_names_for_print, test_r2_lin, test_r2_log):
-                    wandb_run.summary[f"test/r2_lin/{n}"] = float(v_lin)
-                    wandb_run.summary[f"test/r2_log/{n}"] = float(v_log)
-
     # write final loss_curves.npz including test results
     np.savez(
         logs_dir / cfg.save_curves_name,
@@ -1419,8 +1351,6 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         val_species_losses=np.array(val_species_losses, dtype=np.float32) if len(val_species_losses) > 0 else None,
         test_loss=np.float32(test_loss) if test_loss is not None else None,
         test_species_losses=test_species_loss.astype(np.float32) if test_species_loss is not None else None,
-        test_r2_linear=test_r2_lin if test_r2_lin is not None else None,
-        test_r2_log1p=test_r2_log if test_r2_log is not None else None,
     )
 
     # save best model (plot expects exp_dir/model.pt)

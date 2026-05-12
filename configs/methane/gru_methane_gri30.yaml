@@ -23,7 +23,7 @@ tf_every: 50
 tf_drop_epoch: 500
 
 scaffold: methane_obs5
-dataset_path: datasets/gri30_obs5.npz
+dataset_path: datasets/methane/gri30_obs5.npz
 obs_idx: [0, 1, 2, 3, 4]
 theta_lo: 1.0e-5
 theta_hi: 10.0

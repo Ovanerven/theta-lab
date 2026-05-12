@@ -7,17 +7,15 @@ import torch.nn.functional as F
 from scaffolds import MechanisticScaffold
 
 
-def gamma(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
+def gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
+    # Linear-sigmoid: arithmetic midpoint at x=0. Matches supervisor reference.
     return lo + (hi - lo) * torch.sigmoid(x)
 
 
-def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
-    # Linear alternative (DO NOT USE for wide bounds):
-    #   return lo + (hi - lo) * torch.sigmoid(x)
-    # At init (x≈0, sigmoid≈0.5) this gives arithmetic midpoint (lo+hi)/2.
-    # For bounds like knuc_A=[0.1,100] that's 50 — 5× true value, causing ODE blowup.
-    # Log-sigmoid gives geometric midpoint sqrt(lo*hi) ≈ 3.2 for knuc_A, which is stable.
-    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x))
+def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor, tau: float = 1.0) -> torch.Tensor:
+    # Sigmoid in log-space: bounded in [lo, hi], geometric midpoint at x=0.
+    # tau > 1 flattens the sigmoid (supervisor uses tau=2.3), preventing head saturation.
+    return lo * torch.exp(torch.log(hi / lo) * torch.sigmoid(x / tau))
 
 
 class OdeLSTM(nn.Module):
@@ -49,6 +47,8 @@ class OdeLSTM(nn.Module):
         gru_y_cols: Optional[list] = None,
         lift_skip: bool = False,
         head_init: str = "default",  # "default" | "supervisor" (xavier_ + zeros, unconditional)
+        theta_head_transform: str = "log_gamma",   # "log_gamma" | "gamma"
+        theta_head_tau: float = 1.0,
         **kwargs,
     ):
         super().__init__()
@@ -61,6 +61,11 @@ class OdeLSTM(nn.Module):
         self.theta_lo     = float(theta_lo)
         self.theta_hi     = float(theta_hi)
         self.theta_bounded = bool(theta_bounded)
+
+        if theta_head_transform not in ("log_gamma", "gamma"):
+            raise ValueError(f"theta_head_transform must be 'log_gamma' or 'gamma', got {theta_head_transform}")
+        self.theta_head_transform = str(theta_head_transform)
+        self.theta_head_tau = float(theta_head_tau)
 
         self._analytic_scaffold = bool(getattr(rhs, "has_analytic_step", False))
         self._tf_at_k_zero      = bool(getattr(rhs, "tf_at_k_zero", False))
@@ -216,7 +221,10 @@ class OdeLSTM(nn.Module):
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw_theta)
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
@@ -225,7 +233,10 @@ class OdeLSTM(nn.Module):
                 y = self._rk4_substeps_basal(y, dt_k, theta_k, beta_k)
             else:
                 if self.theta_bounded:
-                    theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    if self.theta_head_transform == "gamma":
+                        theta_k = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                    else:
+                        theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
                 if self._analytic_scaffold:

@@ -2,17 +2,17 @@ from models.ode_rnn import OdeRNN
 from models.ode_rnn_analytical import AnalyticalOdeRNN
 from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN, TXTLAnalyticalBleachOdeRNN, TXTLApproxOdeRNN, TXTLMaturationApproxOdeRNN
 from models.bob_gru_verbatim import BobGRUVerbatim
-from models.ode_rnn_2020 import OdeRNN2020
 from models.neural_ode import NeuralODE
 from models.ode_transformer import OdeTransformer
-from models.ode_mlp import OdeMLP
 from models.ode_fixed_theta import OdeFixedTheta
 from models.ode_fixed_theta_nn import NeuralOdeCorrection
 from models.ode_sample_theta import OdeSampleTheta
 from models.neural_ode_gru import NeuralOdeGRU
 from models.ode_mamba import OdeMamba
 from models.ode_lstm import OdeLSTM
-from models.ode_transformer_grouped import OdeTransformerGrouped
+# from models.ode_mlstm import OdemLSTM
+from models.ode_slstm import OdesLSTM
+from models.ode_mingru import OdeMinGRU 
 
 
 try:
@@ -35,17 +35,17 @@ MODELS: dict = {
     "ode_rnn_txtl_approx":     TXTLApproxOdeRNN,
     "ode_rnn_txtl_mat_approx": TXTLMaturationApproxOdeRNN,
     "ode_rnn_txtl_bleach": TXTLAnalyticalBleachOdeRNN,
-    "ode_rnn_2020":       OdeRNN2020,
     "neural_ode":         NeuralODE,
     "neural_ode_mlp":     NeuralODE,       # alias — same class, explicit name for ablation table
     "ode_transformer":    OdeTransformer,
-    "ode_mlp":            OdeMLP,
     "ode_fixed_theta":    OdeFixedTheta,
     "neural_ode_correction": NeuralOdeCorrection,
     "ode_sample_theta":   OdeSampleTheta,
     "neural_ode_gru":     NeuralOdeGRU,
-    "ode_transformer_grouped": OdeTransformerGrouped,
     "bob_gru_verbatim": BobGRUVerbatim,
+    # "ode_mlstm": Ode mLSTM,
+    "ode_slstm": OdesLSTM,
+    "ode_mingru": OdeMinGRU,
     # "ode_mamba":          OdeMamba,
     # "ode_transformer_kvcache": OdeTransformer_transformer,
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),

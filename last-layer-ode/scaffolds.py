@@ -1887,6 +1887,50 @@ class IvttAnalyticScaffold(MechanisticScaffold):
         kmatm = theta_enc[:, 6:7]
         R     = y_state[:, self.R_IDX:self.R_IDX + 1]
         return torch.cat([VTX, kdm, VTL, kmt, kmatm, R, lam, lamO], dim=-1)
+    
+class IvttODEScaffold(MechanisticScaffold):
+    """
+    7-state ODE counterpart of IvttAnalyticScaffold. Same mechanism, same θ
+    layout, same bounds — but integrated by RK4 over forward(y, θ) instead of
+    the closed-form per-slab update. Use this to A/B "true ODE" vs. analytic.
+
+    States (7): [R, O, m, mm, p, pm, DNA]
+      mm = Broccoli (observed), pm = mCherry/2 (observed),
+      DNA fed by u_to_y_jump from the "DNA c" control column.
+
+    θ (7): [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
+
+    DNA semantics is the big one. The analytic uses dna_cum_total = cumsum("DNA c")[:, -1, :] — the sum across the entire sequence — and feeds that same scalar into every step's S. That is the assumption "all DNA is present from t=0". The ODE form has DNA growing over time as boluses arrive (because u_to_y_jump is applied step-by-step). For cell-free IVTT where you pipette DNA once near t=0, these coincide after the first bolus. If anything in your dataset adds DNA mid-trajectory, they diverge — and the ODE is the more physically defensible model. To match Bob exactly, pre-fill y0[..., 6] = total_DNA and zero out the DNA column in u_to_y_jump for that scaffold.
+    R inside the source term. The analytic evaluates S = R_curr · VTXmax · DNA using R at the end of the slab. The ODE form integrates R(t) varying smoothly across the slab. Same story for VTL_eff = R_curr · VTLmax in the p-equation. The discrepancy is O(lam·dt) per slab — with your bounds (lam ≤ 5e-4) and second-scale dt this is genuinely small, but it's not nothing.
+    O factored out of the pm integral. The analytic writes pm_curr − pm_prev = O_curr · kmt · ∫p, pulling O out as a constant endpoint multiplier. The ODE integrates dpm/dt = O(t)·kmt·p(t) honestly. Discrepancy is O(lam_O·dt), same flavor as the R-in-S issue.
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=7)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        # Identical to IvttAnalyticScaffold's encoder-order bounds:
+        self.theta_lo_vec = [1e-6, 1e-6, 5e-5, 1e-5, 5e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 5e-4, 1e-1, 1e-2, 6e-2, 3.5e-4, 3.5e-3]
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O_p   = torch.clamp_min(O,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dR   = -lam   * R_p
+        dO   = -lam_O * O_p
+        dm   =  R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  =  kmatm * m_p - kdm * mm_p
+        dp   =  R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  =  O_p * kmt * p_p
+        dDNA =  torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
 
 
 SCAFFOLDS: dict[str, MechanisticScaffold] = {
@@ -1920,4 +1964,5 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "glycolysis_reduced8":  GlycolysisReduced8Scaffold(),
     "glycolysis_reduced4":  GlycolysisReduced4Scaffold(),
     "ivtt_analytic":        IvttAnalyticScaffold(),
-}
+    "ivtt_ode": IvttODEScaffold(),
+}   

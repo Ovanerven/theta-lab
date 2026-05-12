@@ -85,6 +85,21 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
             (p for p in candidates_paths if p is not None and p.exists()), None
         )
         if dataset_path is None:
+            # Fallback: recursive search under datasets/ for the basename or its
+            # n1000 variant (sweeps often save a logical name but train on the
+            # n=1000 file in a subdir).
+            base = Path(cfg["dataset_path"]).name
+            stem = Path(base).stem
+            for root in (project_root / "datasets", script_dir / "datasets"):
+                if not root.exists():
+                    continue
+                for cand in list(root.rglob(base)) + list(root.rglob(f"{stem}_n1000.npz")):
+                    if cand.exists():
+                        dataset_path = cand
+                        break
+                if dataset_path is not None:
+                    break
+        if dataset_path is None:
             raise FileNotFoundError(
                 f"Dataset not found: {cfg['dataset_path']} "
                 f"(checked cwd, {exp_dir}, {script_dir}, and {project_root}/datasets)"

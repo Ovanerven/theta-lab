@@ -2,7 +2,7 @@
 # timesteps. No encoder, no recurrence — establishes the "constant theta"
 # floor against which encoder-driven θ predictors are compared.
 
-dataset_path: datasets/real_ivtt_exact_full.npz
+dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
 study: ivtt_fixed_theta
 tags: null
 exp_name: default
@@ -25,11 +25,7 @@ val_frac: 0.0
 seed: 42
 split_seed: 42
 
-use_fixed_split: true
-fixed_split_seed: 57
-fixed_test_frac: 0.125
-fixed_val_frac: 0.125
-fixed_split_file: "bob_model/3 seed splits.py"
+fixed_split_file: "datasets/cell-free/ivtt_3seed_splits.npz"
 fixed_split_idx: 0
 
 stratified_split: false

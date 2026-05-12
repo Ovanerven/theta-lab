@@ -4,7 +4,7 @@
 # Dataset: datasets/real_ivtt_exact_full.npz (shared across all runs).
 # Scaffold: ivtt_analytic for every run.
 # Loss: use_ivtt_mse_loss (plain MSE on mm, pm).
-# Split: bob_model/3 seed splits.py, idx 0 (shared via base_config).
+# Split: datasets/cell-free/ivtt_3seed_splits.npz, idx 0 (shared via base_config).
 #
 # Ablation axes:
 #   B1  black-box neural ODE — pure MLP IS the vector field, no scaffold

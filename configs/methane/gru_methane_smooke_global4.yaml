@@ -23,7 +23,7 @@ tf_every: 50
 tf_drop_epoch: 500
 
 scaffold: methane_global4_ch2o
-dataset_path: datasets/smooke_obs7.npz
+dataset_path: datasets/methane/smooke_obs7.npz
 theta_lo: 1.0e-5
 theta_hi: 10.0
 n_substeps: 1

@@ -24,7 +24,7 @@ tf_every: 50
 tf_drop_epoch: 500
 
 scaffold: single_enzyme_lumped
-dataset_path: datasets/single_enzyme_lumped.npz
+dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz
 theta_lo: 1.0e-3
 theta_hi: 100.0
 n_substeps: 1

@@ -1,0 +1,78 @@
+# IVTT new-architecture comparison sweep.
+#
+# Compares the GRU baseline against the four encoders we just wired up
+# (sLSTM, mambapy, minGRU, plus the existing LSTM/mLSTM for completeness),
+# all with identical data / split / loss / theta-bounds / TF schedule.
+#
+# Final run: GRU baseline + y0_theta_init MLP — adds an MLP(y0) bias to the
+# theta-head logits at every step (ode_rnn flag), to test whether seeding
+# the theta head with the initial observation helps on real IVTT.
+#
+# Dataset: real_ivtt_exact_full_drop5000 (shared via base_config).
+# Scaffold: ivtt_analytic for every run.
+# Loss: use_ivtt_mse_loss.
+# Split: datasets/cell-free/ivtt_3seed_splits.npz, idx 0 (shared).
+
+study: ivtt_duplicate_good_runs
+runs_per_job: 1
+time: "20:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  base_config: configs/ivtt_gru.yaml   # default fallback only
+  jit_scripting: true
+  epochs: 150
+
+runs:
+  - {base_config: configs/ivtt_slstm.yaml,   exp_name: slstm}
+  - {base_config: configs/ivtt_slstm.yaml,   exp_name: slstm}
+  - {base_config: configs/ivtt_slstm.yaml,   exp_name: slstm}
+  - {base_config: configs/ivtt_slstm.yaml,   exp_name: slstm}
+  - {base_config: configs/ivtt_gru.yaml,     exp_name: gru_baseline}
+  - {base_config: configs/ivtt_gru.yaml,     exp_name: gru_baseline}
+  - {base_config: configs/ivtt_gru.yaml,     exp_name: gru_baseline}
+  - {base_config: configs/ivtt_gru.yaml,     exp_name: gru_baseline}
+  - {base_config: configs/ivtt_slstm.yaml, exp_name: slstm_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_slstm.yaml, exp_name: slstm_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_slstm.yaml, exp_name: slstm_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_slstm.yaml, exp_name: slstm_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_gru.yaml, exp_name: gru_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_gru.yaml, exp_name: gru_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_gru.yaml, exp_name: gru_y0_init, y0_theta_init: true}
+  - {base_config: configs/ivtt_gru.yaml, exp_name: gru_y0_init, y0_theta_init: true}
+
+
+  # mambapy + MLP(y0) bias on theta head at every step (ode_rnn:y0_theta_init)
+  # - {base_config: configs/ivtt_mambapy.yaml, exp_name: mambapy_y0_init, y0_theta_init: true}
+  # GRU baseline (proposed method)
+  # - {base_config: configs/ivtt_gru.yaml,     exp_name: gru_baseline}
+
+  # LSTM baseline (already existed)
+  # - {base_config: configs/ivtt_lstm.yaml,    exp_name: lstm}
+
+  # sLSTM — hand-rolled exponential-gating LSTM cell
+  # - {base_config: configs/ivtt_slstm.yaml,   exp_name: slstm}
+
+  # mLSTM — xLSTM matrix-memory variant (already existed)
+  # - {base_config: configs/ivtt_mlstm.yaml,   exp_name: mlstm}
+
+  # minGRU — Feng et al. 2024 simplified GRU (no reset gate, candidate sees only x_t)
+  # - {base_config: configs/ivtt_mingru.yaml,  exp_name: mingru}
+
+  # Mamba SSM (mambapy, pure-PyTorch — no CUDA kernel dependency)
+  # - {base_config: configs/ivtt_mambapy.yaml, exp_name: mambapy}
+
+  # GRU + MLP(y0) bias on theta head at every step (ode_rnn:y0_theta_init)
+  # - {base_config: configs/ivtt_gru.yaml, exp_name: gru_y0_init, y0_theta_init: true}
+
+
+
+  # BASAL TEST
+  # - {base_config: configs/ivtt_slstm.yaml, exp_name: slstm_y0_init, y0_theta_init: true}
+
+  # # LSTM + MLP(y0) bias on theta head at every step (ode_rnn:y0_theta_init)
+  # - {base_config: configs/ivtt_lstm.yaml, exp_name: lstm_y0_init, y0_theta_init: true}
+
+  # # mambapy + MLP(y0) bias on theta head at every step (ode_rnn:y0_theta_init)
+  # - {base_config: configs/ivtt_mambapy.yaml, exp_name: mambapy_y0_init, y0_theta_init: true}

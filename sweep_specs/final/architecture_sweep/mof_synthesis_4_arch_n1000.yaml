@@ -1,10 +1,10 @@
-# Architecture sweep for mof_synthesis_4 at n=1000.
-# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 × 2 obs settings = 6 runs.
+# Architecture sweep for mof_synthesis_4 at n1000.
+# sLSTM-only re-run: lands in existing study folder alongside lstm/mamba/trans results.
 
 study: mof_synthesis_4_arch_sweep_n1000
 runs_per_job: 1
 time: "08:00:00"
-partition: gpu_h100
+partition: gpu_a100
 no_plot: false
 
 fixed:
@@ -16,12 +16,14 @@ fixed:
   batch_size: 32
 
 runs:
-  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof4_n1000_s42}
-  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_s42}
-  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_s42, env: mamba_env}
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_s42}
+  # ── d_y = n^x (full obs) ──────────────────────────────────────────────
+  # - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_s42}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_s42, env: mamba_env}
+  # - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_s42}
+  - {base_config: configs/archs/slstm.yaml,       seed: 42, exp_name: slstm_mof4_n1000_s42}
 
-  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof4_n1000_fl_s42, obs_idx: [0, 3]}
-  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_fl_s42, obs_idx: [0, 3]}
-  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_fl_s42, env: mamba_env, obs_idx: [0, 3]}
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_fl_s42, obs_idx: [0, 3]}
+  # ── d_y = 2 (first_last, obs_idx: [0, 3]) ──────────────────────────
+  # - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof4_n1000_fl_s42, obs_idx: [0, 3]}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof4_n1000_fl_s42, env: mamba_env, obs_idx: [0, 3]}
+  # - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof4_n1000_fl_s42, obs_idx: [0, 3]}
+  - {base_config: configs/archs/slstm.yaml,       seed: 42, exp_name: slstm_mof4_n1000_fl_s42, obs_idx: [0, 3]}

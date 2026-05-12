@@ -29,7 +29,7 @@ tf_every: 50
 tf_drop_epoch: 500
 
 scaffold: mof_synthesis_4
-dataset_path: datasets/mof_synthesis_4.npz
+dataset_path: datasets/mof/mof_synthesis_4_n1000.npz
 theta_lo: 1.0e-3
 theta_hi: 2.0
 n_substeps: 1

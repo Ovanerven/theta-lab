@@ -88,12 +88,6 @@ python last-layer-ode/analysis/plot_per_step_theta_fit.py --export-dir results/t
 | `scaffolds.py` | Scaffold (mechanistic ODE structure) registry. |
 | `jumps.py` | Control-to-state jump mappings. |
 
-
-
-
-ck2yaml --input=AramcoMech3.0.MECH --thermo=ARAMCOMECH30.THERM --output=aramco_red.yaml --permissive
-
-
 use the new test set:
 
  In your training config (YAML/CLI flag), set:

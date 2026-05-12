@@ -1,0 +1,48 @@
+# IVTT GRU regularization ablation.
+#
+# Baseline (from ivtt_gru.yaml): hidden=400, dropout=0.2, weight_decay=0.0018,
+# cosine_decay=false, num_layers=2, lr=0.002, 250 epochs.
+#
+# Goal: every run in ivtt_new_archs overfit (train ~0.1 vs val ~0.9). Vary one
+# knob at a time around the baseline to see which regularizer closes the gap.
+# Plain GRU only (no y0_init) so the effect of each knob is isolated.
+
+study: ivtt_gru_reg
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  base_config: configs/ivtt_gru.yaml
+  jit_scripting: true
+  epochs: 150
+
+runs:
+  # ----- baseline (anchor for comparison) -----
+  # - {exp_name: baseline}
+
+  # ----- hidden size -----
+  - {exp_name: hidden256, hidden: 256}
+  - {exp_name: hidden128, hidden: 128}
+
+  # ----- dropout -----
+  - {exp_name: drop025, dropout: 0.25}
+  - {exp_name: drop030, dropout: 0.30}
+
+  # ----- weight decay (current 0.0018; bracket ~3× each side) -----
+  - {exp_name: wd0005, weight_decay: 0.0005}
+  - {exp_name: wd0050, weight_decay: 0.0050}
+
+  # ----- schedule -----
+  - {exp_name: cosine, cosine_decay: true}
+
+  # ----- same knobs, but stacked with y0_theta_init MLP -----
+  # tests whether the y0 bias is a complementary regularizer or already saturated
+  - {exp_name: hidden256_y0, hidden: 256, y0_theta_init: true}
+  - {exp_name: hidden128_y0, hidden: 128, y0_theta_init: true}
+  - {exp_name: drop025_y0,   dropout: 0.25, y0_theta_init: true}
+  - {exp_name: drop030_y0,   dropout: 0.30, y0_theta_init: true}
+  - {exp_name: wd0005_y0,    weight_decay: 0.0005, y0_theta_init: true}
+  - {exp_name: wd0050_y0,    weight_decay: 0.0050, y0_theta_init: true}
+  - {exp_name: cosine_y0,    cosine_decay: true,   y0_theta_init: true}

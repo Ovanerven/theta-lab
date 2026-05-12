@@ -1,14 +1,10 @@
-# Architecture sweep for mof_synthesis_6 at n=100.
-# Active: 3 architectures (LSTM, Mamba, Transformer) × seed 42 × 2 obs settings = 6 runs.
-#   d_y = n^x = 6  (full obs, no obs_idx)
-#   d_y = 2        (first_last, obs_idx: [0, 5])
-# GRU runs and seeds {0,1} are commented out (GRU comes from existing data-ablation sweep).
-# Baseline reference: A6_baseline_n100 (ode_rnn) ≈ 0.057 NRMSE.
+# Architecture sweep for mof_synthesis_6 at n100.
+# sLSTM-only re-run: lands in existing study folder alongside lstm/mamba/trans results.
 
 study: mof_synthesis_6_arch_sweep
 runs_per_job: 1
 time: "08:00:00"
-partition: gpu_h100
+partition: gpu_a100
 no_plot: false
 
 fixed:
@@ -21,37 +17,13 @@ fixed:
 
 runs:
   # ── d_y = n^x (full obs) ──────────────────────────────────────────────
-  # --- GRU (ode_rnn) --- already covered by data-ablation sweep; copy A6_baseline_n100 over manually.
-  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof6_n100_s42}
-  # - {base_config: configs/archs/gru.yaml,         seed: 0,  exp_name: gru_mof6_n100_s0}
-  # - {base_config: configs/archs/gru.yaml,         seed: 1,  exp_name: gru_mof6_n100_s1}
-  # --- LSTM ---
-  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n100_s42}
-  # - {base_config: configs/archs/lstm.yaml,        seed: 0,  exp_name: lstm_mof6_n100_s0}
-  # - {base_config: configs/archs/lstm.yaml,        seed: 1,  exp_name: lstm_mof6_n100_s1}
-  # --- Mamba ---
-  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n100_s42, env: mamba_env}
-  # - {base_config: configs/archs/mamba.yaml,       seed: 0,  exp_name: mamba_mof6_n100_s0,  env: mamba_env}
-  # - {base_config: configs/archs/mamba.yaml,       seed: 1,  exp_name: mamba_mof6_n100_s1,  env: mamba_env}
-  # --- Transformer ---
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_s42}
-  # - {base_config: configs/archs/transformer.yaml, seed: 0,  exp_name: trans_mof6_n100_s0}
-  # - {base_config: configs/archs/transformer.yaml, seed: 1,  exp_name: trans_mof6_n100_s1}
+  # - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n100_s42}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n100_s42, env: mamba_env}
+  # - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_s42}
+  - {base_config: configs/archs/slstm.yaml,       seed: 42, exp_name: slstm_mof6_n100_s42}
 
-  # ── d_y = 2 (first_last, obs_idx: [0, 5]) ─────────────────────────────
-  # --- GRU (ode_rnn) --- already covered by data-ablation sweep; copy A6_baseline_first_last_n100 over manually.
-  # - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof6_n100_fl_s42, obs_idx: [0, 5]}
-  # - {base_config: configs/archs/gru.yaml,         seed: 0,  exp_name: gru_mof6_n100_fl_s0,  obs_idx: [0, 5]}
-  # - {base_config: configs/archs/gru.yaml,         seed: 1,  exp_name: gru_mof6_n100_fl_s1,  obs_idx: [0, 5]}
-  # --- LSTM ---
-  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n100_fl_s42, obs_idx: [0, 5]}
-  # - {base_config: configs/archs/lstm.yaml,        seed: 0,  exp_name: lstm_mof6_n100_fl_s0,  obs_idx: [0, 5]}
-  # - {base_config: configs/archs/lstm.yaml,        seed: 1,  exp_name: lstm_mof6_n100_fl_s1,  obs_idx: [0, 5]}
-  # --- Mamba ---
-  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n100_fl_s42, env: mamba_env, obs_idx: [0, 5]}
-  # - {base_config: configs/archs/mamba.yaml,       seed: 0,  exp_name: mamba_mof6_n100_fl_s0,  env: mamba_env, obs_idx: [0, 5]}
-  # - {base_config: configs/archs/mamba.yaml,       seed: 1,  exp_name: mamba_mof6_n100_fl_s1,  env: mamba_env, obs_idx: [0, 5]}
-  # --- Transformer ---
-  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_fl_s42, obs_idx: [0, 5]}
-  # - {base_config: configs/archs/transformer.yaml, seed: 0,  exp_name: trans_mof6_n100_fl_s0,  obs_idx: [0, 5]}
-  # - {base_config: configs/archs/transformer.yaml, seed: 1,  exp_name: trans_mof6_n100_fl_s1,  obs_idx: [0, 5]}
+  # ── d_y = 2 (first_last, obs_idx: [0, 5]) ──────────────────────────
+  # - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n100_fl_s42, obs_idx: [0, 5]}
+  # - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n100_fl_s42, env: mamba_env, obs_idx: [0, 5]}
+  # - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n100_fl_s42, obs_idx: [0, 5]}
+  - {base_config: configs/archs/slstm.yaml,       seed: 42, exp_name: slstm_mof6_n100_fl_s42, obs_idx: [0, 5]}
