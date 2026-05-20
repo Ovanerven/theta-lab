@@ -27,7 +27,7 @@
 
 study: txtl_new_scaffolds_ofat
 runs_per_job: 1
-time: "04:00:00"
+time: "10:00:00"
 partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
@@ -65,7 +65,7 @@ runs:
   # V2 single-pass implementation.
   # ═══════════════════════════════════════════════════════════════════════
   # V1 = two-pass wrapper around OdeRNN (subsample dense θ post-hoc). JIT off.
-  - {exp_name: modeltype_sparse_v1_k6, seed: 1, model_class: ode_rnn_sparse_theta,    n_theta_anchors: 6, anchor_interp: piecewise, jit_scripting: false}
+  - {exp_name: modeltype_sparse_v1_k6, seed: 1, model_class: ode_rnn_sparse_theta,    n_theta_anchors: 6, anchor_interp: piecewise, jit_scripting: true}
   # V2 = single-pass (θ-head fires only K times). JIT on. Faster + faithful.
   - {exp_name: modeltype_sparse_v2_k6, seed: 1, model_class: ode_rnn_sparse_theta_v2, n_theta_anchors: 6}
 
@@ -73,11 +73,11 @@ runs:
   # AXIS 3 — DATASET (combined vs real-only vs real+legacy). Baseline scaffold
   # so dataset is the only varying knob.
   # ═══════════════════════════════════════════════════════════════════════
-  # Real NEW only (drop synth from txtl_combined.npz at load time)
-  - {exp_name: dataset_real_new_only, seed: 1, use_synthetic_data: false}
-  # Real NEW + LEGACY + synth (the merged combined+legacy file)
-  - {exp_name: dataset_combined_plus_legacy, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz}
-  # Real NEW + LEGACY only (synth ablated from the merged file)
-  - {exp_name: dataset_real_all, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz, use_synthetic_data: false}
-  # LEGACY real only (no NEW, no synth)
-  - {exp_name: dataset_legacy_only, seed: 1, dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz}
+  # Real NEW only (drop synth from txtl_combined.npz at load time). N=312 → 12.5%=39.
+  - {exp_name: dataset_real_new_only, seed: 1, use_synthetic_data: false, val_n: 39, test_n: 39}
+  # Real NEW + LEGACY + synth (the merged combined+legacy file). N=8491 → 12.5%=1061.
+  - {exp_name: dataset_combined_plus_legacy, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz, val_n: 1061, test_n: 1061}
+  # Real NEW + LEGACY only (synth ablated from the merged file). N=1003 → 12.5%=125.
+  - {exp_name: dataset_real_all, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz, use_synthetic_data: false, val_n: 125, test_n: 125}
+  # LEGACY real only (no NEW, no synth). N=691 → 12.5%=86.
+  - {exp_name: dataset_legacy_only, seed: 1, dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz, val_n: 86, test_n: 86}

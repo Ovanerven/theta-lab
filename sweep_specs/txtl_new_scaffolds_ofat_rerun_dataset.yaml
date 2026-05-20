@@ -1,0 +1,28 @@
+# Rerun of the three AXIS-3 dataset runs that failed in the original sweep
+# 22988xxx (jobs b8, b10, b11). Two failed on val_n+test_n >= N (because the
+# fixed 975/975 split was sized for combined N=7800 but these subsets are
+# 312–1003), and one failed because txtl_legacy_in_combined.npz hadn't been
+# built yet. Per-run val_n/test_n now follow the 12.5% rule on each subset's
+# actual N.
+
+study: txtl_new_scaffolds_ofat
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  stratify_z_expr: true
+  epochs: 100
+  batch_size: 100
+  endpoint_r2: true
+
+runs:
+  # Real NEW only (drop synth from txtl_combined.npz at load time). N=312 → 12.5%=39.
+  - {exp_name: dataset_real_new_only, seed: 1, use_synthetic_data: false, val_n: 39, test_n: 39}
+  # Real NEW + LEGACY only (synth ablated from the merged file). N=1003 → 12.5%=125.
+  - {exp_name: dataset_real_all, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz, use_synthetic_data: false, val_n: 125, test_n: 125}
+  # LEGACY real only (no NEW, no synth). N=691 → 12.5%=86.
+  - {exp_name: dataset_legacy_only, seed: 1, dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz, val_n: 86, test_n: 86}
