@@ -62,6 +62,11 @@ class OdeRNNBasalV2(nn.Module):
         head_weight_gain: float = 1.0,
         detach_y_prev: bool = True,
         detach_theta_prev: bool = True,              # detach theta_{k-1} into the basal MLP
+        basal_use_hidden: bool = True,               # feed GRU hidden state z_k into the basal MLP.
+                                                     # Gives the basal the full u/y_obs history (encoded by the GRU)
+                                                     # for free, while still being state-trajectory-independent.
+        detach_hidden_basal: bool = True,            # detach z_k before the basal MLP so basal training never
+                                                     # back-props gradients into the theta encoder.
         u_minmax_max: Optional[torch.Tensor] = None,
         u_minmax_cols: Optional[List[int]] = None,
         theta_head_transform: str = "log_gamma",
@@ -89,6 +94,8 @@ class OdeRNNBasalV2(nn.Module):
         self.theta_bounded = bool(theta_bounded)
         self.detach_y_prev = bool(detach_y_prev)
         self.detach_theta_prev = bool(detach_theta_prev)
+        self.basal_use_hidden = bool(basal_use_hidden)
+        self.detach_hidden_basal = bool(detach_hidden_basal)
         if theta_head_transform not in ("log_gamma", "gamma"):
             raise ValueError(f"theta_head_transform must be 'log_gamma' or 'gamma', got {theta_head_transform}")
         self.theta_head_transform = str(theta_head_transform)
@@ -229,8 +236,11 @@ class OdeRNNBasalV2(nn.Module):
             self.y0_mlp = None
 
         # Basal MLP --------------------------------------------------------
-        # Input: [u_k transformed, theta_prev (bounded), y_prev on basal_y slice transformed]
+        # Input: [u_k transformed, theta_prev (bounded), y_prev on basal_y slice transformed,
+        #         (optional) GRU hidden state z_k of size `hidden`].
         basal_in = gru_feat_dim + self.theta_dim + basal_y_dim
+        if self.basal_use_hidden:
+            basal_in += int(hidden)
         b_layers: list[nn.Module] = []
         prev = basal_in
         for _ in range(max(1, int(basal_layers) - 1)):
@@ -375,7 +385,15 @@ class OdeRNNBasalV2(nn.Module):
             y_in_basal = torch.index_select(y_in, dim=1, index=self.basal_y_idx) if self._has_basal_y_cols else y_in
             y_in_basal = self._apply_y_transform(y_in_basal, y_transform)
             theta_b = theta_prev.detach() if self.detach_theta_prev else theta_prev
-            basal_feat = torch.cat([u_gru_k_feat, theta_b, y_in_basal], dim=-1)
+            basal_parts = [u_gru_k_feat, theta_b, y_in_basal]
+            if self.basal_use_hidden:
+                # z is (B, 1, hidden) from this step's GRU update — it summarises
+                # the full u/y_obs history seen so far.
+                z_flat = z.squeeze(1)
+                if self.detach_hidden_basal:
+                    z_flat = z_flat.detach()
+                basal_parts.append(z_flat)
+            basal_feat = torch.cat(basal_parts, dim=-1)
             beta_raw = self.basal_mlp(basal_feat)
 
             # Bound β with tanh and a per-species max amplitude so its magnitude

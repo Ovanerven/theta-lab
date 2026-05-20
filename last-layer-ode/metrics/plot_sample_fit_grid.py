@@ -60,9 +60,16 @@ def pick_dataset_index(exp_dir: Path, sample_pos: int) -> int:
     return max(0, int(sample_pos))
 
 
-def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict = None):
-    y0, u_seq, y_seq = ds[dataset_idx]
+def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict = None, lift_info: dict | None = None):
+    item = ds[dataset_idx]
+    y0, u_seq, y_seq = item[0], item[1], item[2]
     dt = torch.tensor(ds.dt.astype(np.float32)).unsqueeze(0).to(device)
+    y0_b = y0.unsqueeze(0).to(device)
+    u_b = u_seq.unsqueeze(0).to(device)
+    y_seq_b = y_seq.unsqueeze(0).to(device)
+    if lift_info:
+        from plot_diagnostics import _maybe_lift
+        y0_b, _ = _maybe_lift(y0_b, y_seq_b, lift_info)
 
     import inspect
     forward_params = inspect.signature(model.forward).parameters
@@ -70,10 +77,12 @@ def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict 
 
     extra = {}
     if needs_obs_idx:
-        if cfg and cfg.get("obs_idx") is not None:
+        if lift_info:
+            obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=device, dtype=torch.long)
+        elif cfg and cfg.get("obs_idx") is not None:
             obs_idx = torch.tensor(cfg["obs_idx"], device=device, dtype=torch.long)
         else:
-            obs_idx = torch.arange(y0.shape[-1], device=device, dtype=torch.long)
+            obs_idx = torch.arange(y0_b.shape[-1], device=device, dtype=torch.long)
         extra["obs_idx"] = obs_idx
 
     base_kwargs = {
@@ -85,16 +94,21 @@ def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict 
 
     with torch.no_grad():
         out = model(
-            y0.unsqueeze(0).to(device),
-            u_seq.unsqueeze(0).to(device),
-            dt,
+            y0_b, u_b, dt,
             **extra,
             **_filter_model_kwargs(model, base_kwargs),
         )
 
     pred = out[0] if isinstance(out, (tuple, list)) else out
-    y_true = y_seq.cpu().numpy()
-    y_fit = pred[0].detach().cpu().numpy()
+    y_true = y_seq.cpu().numpy()                       # dataset layout
+    y_fit = pred[0].detach().cpu().numpy()             # scaffold layout (may differ)
+    if lift_info:
+        # Re-align both tensors to the observed channel pair so column j of
+        # y_true and y_fit refer to the same species (mRNA, then protein).
+        src = list(lift_info["dataset_obs_idx"])
+        dst = list(lift_info["scaffold_obs_idx"])
+        y_true = y_true[:, src]
+        y_fit = y_fit[:, dst]
     t = np.cumsum(ds.dt.astype(np.float32))
     return t, y_true, y_fit
 
@@ -133,15 +147,21 @@ def main():
         cfg = yaml.safe_load((exp_dir / "config.yaml").read_text())
         scaffold = str(cfg.get("scaffold", exp_dir.name))
 
-        model, ds, state_names, _ = rebuild_model_from_experiment(exp_dir, device)
-        snames = [s.upper() for s in state_names]
-        P = len(state_names)
+        model, ds, state_names, _, lift_info = rebuild_model_from_experiment(exp_dir, device)
+        if lift_info:
+            # After predict_sample slicing, both y_true and y_fit are 2-wide and
+            # carry only the observed species. Label them in scaffold order.
+            sub = [state_names[i] for i in lift_info["scaffold_obs_idx"]]
+            snames = [s.upper() for s in sub]
+        else:
+            snames = [s.upper() for s in state_names]
+        P = len(snames)
 
         dataset_idx = pick_dataset_index(exp_dir, args.sample_pos)
         if dataset_idx >= len(ds):
             continue
 
-        t, y_true, y_fit = predict_sample(model, ds, dataset_idx, device, cfg=cfg)
+        t, y_true, y_fit = predict_sample(model, ds, dataset_idx, device, cfg=cfg, lift_info=lift_info)
         panel_data.append({
             "exp_dir": exp_dir,
             "scaffold": scaffold,

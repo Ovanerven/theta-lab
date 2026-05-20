@@ -1,0 +1,101 @@
+# OFAT sweep covering every new feature added per next_steps/ + new_scaffolds.tex.
+#
+# Anchor: txtl_gru (model_class=ode_rnn, scaffold=txtl_resource_and_maturation_dna,
+# everything else off) — the current best txtl model.
+#
+# Each run flips ONE feature on top of the baseline so we can attribute any
+# effect to that feature in isolation. Multi-seed runs (seed=1,7,13) for the
+# baseline + a single seed=1 for every variant.
+#
+# Coverage map → new_scaffolds.tex / next_steps:
+#   Experiment A   normalized-time encoder input        (use_time variant)
+#   Experiment B   sparse-θ anchors (1, 3, 6; piecewise & linear interpolation)
+#                                                         (anchors_* variants)
+#   "gate the obs" subtract_channel_min                  (gate_obs variant)
+#   "gate the param" pin_theta                            (gate_param variant)
+#   Model 3        TXTLModel3_TwoStateScaffold           (scaffold variant)
+#   Model 4        TXTLModel4_ThreeStateScaffold         (scaffold variant)
+#   Model 7        TXTLModel7_BoundaryGatedScaffold +    (scaffold variant)
+#                  lambda_zero_traj (the no-go boundary loss)
+#   Model 8        TXTLModel8_ReagentResourceScaffold    (scaffold variant)
+#   Model 9        TXTLModel9_OxygenDarkProteinScaffold  (scaffold variant)
+#   Combined data  real + synthetic no-go dataset        (already in base_config
+#                                                         via dataset_path)
+#
+# Build the combined dataset once before launching:
+#   python scripts/build_txtl_combined_npz.py \
+#     --real-dir next_steps/real_data \
+#     --output datasets/cell-free/txtl_combined.npz \
+#     --dna-conc-multiplier 30.0 --mode randomized \
+#     --n-random-per-template 3 --seed 7
+
+study: txtl_new_scaffolds_ofat
+runs_per_job: 1
+time: "04:00:00"        # ≈ 131-161 s/epoch × 200 = 7-9 h; cushion for slow scaffolds
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  # 12.5% of N=7800 ≈ 975 each. With stratify_z_expr=true the budget is
+  # allocated proportionally between real (312) and synth (7488), so each
+  # split gets ≈ 39 real + 936 synth — enough real samples for a meaningful
+  # endpoint R² (which only scores real anyway; see endpoint_r2.py).
+  val_n: 975
+  test_n: 975
+  stratify_z_expr: true
+  epochs: 100
+  batch_size: 100
+  endpoint_r2: true
+
+runs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # COMMENTED-OUT: already running / launched in a prior submission. Keep them
+  # alive in SLURM; this re-launch only adds the missing + new V2 runs.
+  # ─────────────────────────────────────────────────────────────────────────
+  # ── Baselines (3 seeds, all new features OFF) ──
+  # - {exp_name: baseline_seed1,  seed: 1}
+  # - {exp_name: baseline_seed7,  seed: 7}
+  # - {exp_name: baseline_seed13, seed: 13}
+  #
+  # ── Experiment A: normalized time as encoder input ──
+  # - {exp_name: A_use_time_seed1, seed: 1, encoder_use_time: true}
+  #
+  # ── Experiment B (V1 two-pass wrapper, JIT off) ──
+  # - {exp_name: B_anchors1_pw_seed1,      seed: 1, model_class: ode_rnn_sparse_theta, n_theta_anchors: 1, anchor_interp: piecewise, jit_scripting: false}
+  # - {exp_name: B_anchors3_pw_seed1,      seed: 1, model_class: ode_rnn_sparse_theta, n_theta_anchors: 3, anchor_interp: piecewise, jit_scripting: false}
+  # - {exp_name: B_anchors6_pw_seed1,      seed: 1, model_class: ode_rnn_sparse_theta, n_theta_anchors: 6, anchor_interp: piecewise, jit_scripting: false}
+  # - {exp_name: B_anchors6_lin_seed1,     seed: 1, model_class: ode_rnn_sparse_theta, n_theta_anchors: 6, anchor_interp: linear,    jit_scripting: false}
+  #
+  # ── Gate-observation ──
+  # - {exp_name: gate_obs_seed1, seed: 1, subtract_channel_min: true, subtract_channel_min_cols: [3, 5]}
+  #
+  # ── Scaffold ablations (Models 3 / 4 / 7 already in flight) ──
+  # - {exp_name: model3_two_state_seed1,       seed: 1, scaffold: txtl_model3_two_state}
+  # - {exp_name: model4_three_state_seed1,     seed: 1, scaffold: txtl_model4_three_state}
+  # - {exp_name: model7_boundary_seed1,        seed: 1, scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ACTIVE: only the missing + newly-added runs are submitted now.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # V2 = single-pass sparse-θ. θ-head fires only K times (architectural
+  # K-vector constraint, no post-hoc subsampling). JIT on. Piecewise only.
+  - {exp_name: B_v2_anchors1_pw_seed1,   seed: 1, model_class: ode_rnn_sparse_theta_v2, n_theta_anchors: 1}
+  - {exp_name: B_v2_anchors3_pw_seed1,   seed: 1, model_class: ode_rnn_sparse_theta_v2, n_theta_anchors: 3}
+  - {exp_name: B_v2_anchors6_pw_seed1,   seed: 1, model_class: ode_rnn_sparse_theta_v2, n_theta_anchors: 6}
+
+  # ── "Gate the parameter" — previously failed with NaN (log_gamma can't rep
+  # exact 0). Fixed in train.py: pinned values now clamp to 1e-12 when
+  # transform=log_gamma. Re-running this one.
+  - {exp_name: gate_param_lambda0_seed1, seed: 1, pin_theta: {0: 0.0}}
+
+  # ── Scaffold ablations not yet launched (Models 8, 9) ──
+  - {exp_name: model8_reagent_resource_seed1, seed: 1, scaffold: txtl_model8_reagent_resource}
+  - {exp_name: model9_oxygen_dark_seed1,     seed: 1, scaffold: txtl_model9_oxygen_dark}
+
+  # ── Re-run Model 7 with the log1p-scaled zero-trajectory loss fix ──
+  # Previous run's train loss was dominated by raw-space boundary penalty;
+  # train.py now applies log1p to no-go preds so both terms are commensurate.
+  - {exp_name: model7_boundary_seed1, seed: 1, scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005, time: "04:00:00"}

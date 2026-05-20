@@ -1,0 +1,9 @@
+To Do
+
+Run different scaffolds
+Run continuous theta(t), 1 theta per experiment and 3 thetas per experiment and 6 thetas per experiment
+Integrate real and fake data
+
+Settings. I substracted the minimum value from each observed vector e.g. the lowest value for mRNA was 65 in the excel I substract that lowest value from all other values. same for protein. that way its close to 0. i.e. gate the observation
+
+gate the parameter

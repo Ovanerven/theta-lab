@@ -36,12 +36,23 @@ class ODEDataset(Dataset):
                 and collate_varlen pads each batch to its own max.
     """
 
-    def __init__(self, npz_path: str | Path):
+    def __init__(self, npz_path: str | Path, *, use_synthetic_data: bool = True):
         d = np.load(str(npz_path), allow_pickle=True)
+        # Optional ablation: drop synthetic no-go rows (z_expr == 0) before any
+        # other field is processed. Useful for A/B-testing whether the synth
+        # bulk helps or hurts (set via cfg.use_synthetic_data).
+        _filter_mask: np.ndarray | None = None
+        if not use_synthetic_data and "z_expr" in d.files:
+            _filter_mask = (d["z_expr"].astype(np.int64) == 1)
+            n_kept = int(_filter_mask.sum())
+            n_drop = int((~_filter_mask).sum())
+            print(f"ODEDataset: use_synthetic_data=False → dropping {n_drop} synth rows, keeping {n_kept} real.")
+        def _maybe_filter(arr: np.ndarray) -> np.ndarray:
+            return arr[_filter_mask] if _filter_mask is not None else arr
 
-        self.y0 = d["y0"].astype(np.float32)  # (N,P_obs)
-        self.u_seq = d["u_seq"].astype(np.float32)  # (N,K,U)
-        self.y_seq = d["y_seq"].astype(np.float32)  # (N,K,P_obs)
+        self.y0 = _maybe_filter(d["y0"].astype(np.float32))                # (N,P_obs)
+        self.u_seq = _maybe_filter(d["u_seq"].astype(np.float32))          # (N,K,U)
+        self.y_seq = _maybe_filter(d["y_seq"].astype(np.float32))          # (N,K,P_obs)
         t_obs = d["t_obs"].astype(np.float32)  # (K+1,)
         self.dt = np.diff(t_obs).astype(np.float32)  # (K,)
 
@@ -58,7 +69,8 @@ class ODEDataset(Dataset):
         # Optional mapping from this (possibly filtered) dataset back to the
         # original row indices in the source dataset. When present, callers
         # can remap hardcoded splits that refer to the original indexing.
-        self.original_indices = d["original_indices"].astype(np.int64) if "original_indices" in d else None
+        self.original_indices = (_maybe_filter(d["original_indices"].astype(np.int64))
+                                  if "original_indices" in d else None)
 
         # MinMax stats for u (per channel). Mirrors train_R.py so replot works
         # with models trained via either training script.
@@ -75,48 +87,126 @@ class ODEDataset(Dataset):
 
         # Variable-length support
         if "lengths" in d:
-            self.lengths = d["lengths"].astype(np.int64)  # (N,)
+            self.lengths = _maybe_filter(d["lengths"].astype(np.int64))    # (N,)
             self.variable_length = True
         else:
             self.lengths = None
             self.variable_length = False
 
+        # Optional Model 7 boundary label. 1 = real expression run, 0 = synthetic
+        # no-go. Written by scripts/build_txtl_combined_npz.py. Absent on legacy
+        # datasets, in which case the zero-trajectory loss is a no-op.
+        # After the optional filter above, this is either all-ones or absent.
+        self.z_expr = (_maybe_filter(d["z_expr"].astype(np.int64))
+                       if "z_expr" in d else None)
+
     def __len__(self) -> int:
         return self.y0.shape[0]
 
     def __getitem__(self, i: int):
+        # z_expr=1 default (real) when the dataset doesn't carry the label, so
+        # the boundary loss is a no-op on legacy datasets.
+        z_i = int(self.z_expr[i]) if self.z_expr is not None else 1
         if self.variable_length:
             L = int(self.lengths[i])
             return (
                 torch.from_numpy(self.y0[i]),          # (P_obs,)
                 torch.from_numpy(self.u_seq[i, :L]),   # (L,U)
                 torch.from_numpy(self.y_seq[i, :L]),   # (L,P_obs)
+                torch.tensor(z_i, dtype=torch.long),
             )
         return (
             torch.from_numpy(self.y0[i]),  # (P_obs,)
             torch.from_numpy(self.u_seq[i]),  # (K,U)
             torch.from_numpy(self.y_seq[i]),  # (K,P_obs)
+            torch.tensor(z_i, dtype=torch.long),
         )
 
 
 def collate(batch):
-    y0, u, y = zip(*batch)
-    return torch.stack(y0), torch.stack(u), torch.stack(y), None
+    y0, u, y, z = zip(*batch)
+    return torch.stack(y0), torch.stack(u), torch.stack(y), None, torch.stack(z)
 
 
 def collate_varlen(batch):
     """Pad each batch to its own max length; return lengths tensor."""
-    y0_list, u_list, y_list = zip(*batch)
+    y0_list, u_list, y_list, z_list = zip(*batch)
     lengths = torch.tensor([u.shape[0] for u in u_list], dtype=torch.long)
     y0 = torch.stack(y0_list)
     u_padded = torch.nn.utils.rnn.pad_sequence(u_list, batch_first=True)   # (B, K_batch, U)
     y_padded = torch.nn.utils.rnn.pad_sequence(y_list, batch_first=True)   # (B, K_batch, P)
-    return y0, u_padded, y_padded, lengths
+    z = torch.stack(z_list)
+    return y0, u_padded, y_padded, lengths, z
 
 
 def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> torch.Tensor:
     """Build (B, K) boolean mask: True for valid timesteps."""
     return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
+
+
+def _lift_to_scaffold_state(
+    y0: torch.Tensor,
+    y_seq: torch.Tensor,
+    dataset_obs_idx: list[int],
+    scaffold_obs_idx: list[int],
+    scaffold_P: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Re-pack dataset observations into a scaffold-shape state vector.
+
+    The dataset's y0 / y_seq are (B, P_obs) and (B, K, P_obs) in dataset layout
+    (e.g. txtl_combined.npz is laid out like the 7-state Model 5; mm/pm sit at
+    dataset_obs_idx = [3, 5]; the other cols are placeholder zeros).
+
+    For a partially-observed scaffold (different P, mm/pm at different cols), we:
+      1. Extract the observed channels: y0[:, dataset_obs_idx]  -> (B, n_obs)
+      2. Place them at scaffold_obs_idx in a zero-filled (B, scaffold_P) tensor.
+
+    Faithful to new_scaffolds.tex: latent scaffold states (R, O, P_imm, P_dark,
+    O2, waste, reagent trackers, …) start at zero and are evolved by the ODE.
+    """
+    if len(dataset_obs_idx) != len(scaffold_obs_idx):
+        raise ValueError(
+            f"dataset_obs_idx (len={len(dataset_obs_idx)}) must match "
+            f"scaffold_obs_idx (len={len(scaffold_obs_idx)})."
+        )
+    B = y0.shape[0]
+    K = y_seq.shape[1]
+    src = torch.as_tensor(dataset_obs_idx, device=y0.device, dtype=torch.long)
+    dst = torch.as_tensor(scaffold_obs_idx, device=y0.device, dtype=torch.long)
+
+    y0_obs    = y0.index_select(1, src)                 # (B, n_obs)
+    y_seq_obs = y_seq.index_select(2, src)              # (B, K, n_obs)
+
+    y0_full    = torch.zeros((B, scaffold_P),    device=y0.device,    dtype=y0.dtype)
+    y_seq_full = torch.zeros((B, K, scaffold_P), device=y_seq.device, dtype=y_seq.dtype)
+    y0_full.index_copy_(1, dst, y0_obs)
+    y_seq_full.index_copy_(2, dst, y_seq_obs)
+    return y0_full, y_seq_full
+
+
+def _apply_channel_min_gate(
+    y0: torch.Tensor,
+    y_seq: torch.Tensor,
+    cols: list[int] | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-sample, per-channel min-subtraction on (y0, y_seq) for a batch.
+
+    Lifts the lowest observed value of each (experiment, channel) to ~0 so
+    failure/baseline traces sit near zero ("gate the observation"). This is a
+    pure runtime op on the batch; the underlying npz is never modified.
+
+    cols=None applies to every channel; otherwise restrict to the listed indices.
+    """
+    if cols is None:
+        ch_min = y_seq.amin(dim=1, keepdim=True)            # (B,1,P)
+        return y0 - ch_min[:, 0, :], y_seq - ch_min
+    idx = torch.as_tensor(cols, device=y_seq.device, dtype=torch.long)
+    ch_min = y_seq.index_select(dim=2, index=idx).amin(dim=1, keepdim=True)  # (B,1,|cols|)
+    y0_out = y0.clone()
+    y_seq_out = y_seq.clone()
+    y0_out[:, idx] = y0[:, idx] - ch_min[:, 0, :]
+    y_seq_out[:, :, idx] = y_seq[:, :, idx] - ch_min
+    return y0_out, y_seq_out
 
 
 def _load_fixed_split_triples(
@@ -404,13 +494,56 @@ def _make_split_indices(
     stratified_split: bool,
     stratify_bins: int,
     stratify_targets: list[int] | None,
+    z_expr: np.ndarray | None = None,
+    stratify_z_expr: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Create train/val/test indices; optionally stratified by endpoint bins."""
+    """Create train/val/test indices; optionally stratified by endpoint bins
+    and/or by the dataset's z_expr (real vs synth no-go) class flag.
+    """
     if n_test + n_val >= N:
         raise ValueError(f"val_n={n_val} + test_n={n_test} >= N={N}")
 
     rng = np.random.default_rng(split_seed)
     all_idx = np.arange(N, dtype=np.int64)
+
+    # z_expr stratification: split real and synth pools separately and allocate
+    # n_val / n_test proportionally to each. This guarantees val/test contain
+    # both classes in roughly the dataset's ratio (so metrics like R² aren't
+    # computed on ~99% synthetic flat trajectories).
+    if stratify_z_expr:
+        if z_expr is None:
+            raise ValueError("stratify_z_expr=True but dataset has no z_expr label.")
+        real_idx = np.where(z_expr == 1)[0]
+        synth_idx = np.where(z_expr == 0)[0]
+        rng.shuffle(real_idx)
+        rng.shuffle(synth_idx)
+
+        # Allocate test count proportionally between real and synth pools.
+        n_test_real = int(round(n_test * len(real_idx) / max(N, 1)))
+        n_test_synth = max(0, n_test - n_test_real)
+        n_val_real = int(round(n_val * len(real_idx) / max(N, 1)))
+        n_val_synth = max(0, n_val - n_val_real)
+
+        # Don't over-draw from either pool.
+        n_test_real = min(n_test_real, len(real_idx))
+        n_test_synth = min(n_test_synth, len(synth_idx))
+        n_val_real = min(n_val_real, max(0, len(real_idx) - n_test_real))
+        n_val_synth = min(n_val_synth, max(0, len(synth_idx) - n_test_synth))
+
+        test_idx = np.concatenate([real_idx[:n_test_real], synth_idx[:n_test_synth]])
+        val_idx = np.concatenate([
+            real_idx[n_test_real:n_test_real + n_val_real],
+            synth_idx[n_test_synth:n_test_synth + n_val_synth],
+        ])
+        train_idx = np.concatenate([
+            real_idx[n_test_real + n_val_real:],
+            synth_idx[n_test_synth + n_val_synth:],
+        ])
+        rng.shuffle(test_idx); rng.shuffle(val_idx); rng.shuffle(train_idx)
+        print(f"stratify_z_expr: test={n_test_real} real + {n_test_synth} synth; "
+              f"val={n_val_real} real + {n_val_synth} synth; "
+              f"train={(z_expr[train_idx]==1).sum()} real + {(z_expr[train_idx]==0).sum()} synth")
+        return train_idx, val_idx, test_idx
 
     if not stratified_split:
         rng.shuffle(all_idx)
@@ -538,8 +671,13 @@ def _resolve_split(cfg, ds, N: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         stratified_split=bool(cfg.stratified_split),
         stratify_bins=int(cfg.stratify_bins),
         stratify_targets=cfg.stratify_targets,
+        z_expr=getattr(ds, "z_expr", None),
+        stratify_z_expr=bool(cfg.stratify_z_expr),
     )
-    kind = "stratified" if cfg.stratified_split else "random"
+    kind = ("stratified+z_expr" if cfg.stratify_z_expr and cfg.stratified_split
+            else "stratified" if cfg.stratified_split
+            else "z_expr" if cfg.stratify_z_expr
+            else "random")
     extra = (f" | bins={int(cfg.stratify_bins)}"
              f" | targets={cfg.stratify_targets if cfg.stratify_targets is not None else 'auto'}"
              if cfg.stratified_split else "")
@@ -586,6 +724,15 @@ class TrainConfig:
     stratified_split: bool = False
     stratify_bins: int = 5
     stratify_targets: list[int] | None = None
+    # Stratify train/val/test by the dataset's `z_expr` flag (real vs synth no-go).
+    # When True, val_n and test_n are allocated proportionally between real and
+    # synthetic samples so each split preserves the dataset's class ratio. This
+    # is what you want for txtl_combined.npz so val/test aren't ~99% synthetics.
+    stratify_z_expr: bool = False
+    # Ablation knob: drop synthetic no-go rows from the dataset before training.
+    # Default True (keep them — matches existing behavior). Set False to A/B test
+    # whether the synth bulk + lambda_zero_traj loss actually helps real-data fit.
+    use_synthetic_data: bool = True
 
     num_workers: int = 0
     pin_memory: bool = True
@@ -642,6 +789,8 @@ class TrainConfig:
     gru_init: str = "default"             # "default" | "supervisor" (orthogonal_ + xavier_ + zeros)
     head_init: str = "default"            # "default" | "supervisor" (xavier_ + zeros, unconditional)
     y0_theta_init: bool = False           # ode_rnn: add MLP(y0) bias to theta-head logits at every step
+    encoder_use_time: bool = False        # ode_rnn: concat τ_k = k/(K-1) ∈ [0,1] to encoder feat (Experiment A
+                                          # in new_scaffolds.tex §3.1 — "normalized time as encoder input").
     theta_head_transform: str = "log_gamma"  # "log_gamma" | "gamma"
     theta_head_tau: float = 1.0           # log_gamma sigmoid temperature (Bob: 2.3)
     u_transform: str = "none"             # forward-time u feature transform ("none" | "sqrt" | "cumsum" | …)
@@ -709,6 +858,34 @@ class TrainConfig:
     # Pre-normalise y0/y_seq before training. Options: "log", "sqrt", "zscore", null.
     # When set, the internal log1p loss is replaced with plain MSE.
     obs_normalization: str | None = None
+
+    # --- new-feature options (defaults preserve all previous behaviour) ---
+
+    # Bob's "gate the observation": per-sample, per-channel min-subtraction on
+    # y0/y_seq so failure/baseline traces sit near 0. Applied once at dataset
+    # load (Dataset.__init__), no per-batch overhead. False = unchanged.
+    subtract_channel_min: bool = False
+    # Channels to gate when subtract_channel_min=True. None = all P channels.
+    # Typical for the IVTT 7-state layout: [3, 5] (mm = Broccoli, pm = mCherry/2).
+    subtract_channel_min_cols: list[int] | None = None
+
+    # "Gate the parameter" (Bob's ablation knob): pin chosen entries of θ(t) to
+    # constant values by collapsing their (theta_lo, theta_hi) box to a single
+    # point. Dict of {theta_idx: value}. Empty/None = no pinning (default).
+    # Example:  pin_theta: {0: 0.0}  pins θ[0] to 0.
+    pin_theta: dict[int, float] | None = None
+
+    # K-anchor sparse-θ readout (tex Models B2/B3). When using model_class
+    # "ode_rnn_sparse_theta", set n_theta_anchors (typical 1, 3, or 6). None =
+    # dense per-step θ (default; pair with the regular ode_rnn / ode_rnn_basal_v2).
+    n_theta_anchors: int | None = None
+    # Interpolation between anchors: "piecewise" (B2) or "linear" (B3).
+    anchor_interp: str = "piecewise"
+
+    # Model 7 zero-trajectory boundary loss weight. Penalises predicted observed
+    # values on samples with z_expr == 0 (synthetic no-go) toward zero. 0 =
+    # disabled (default). Typical range 1e-3 – 1e-1. No-op on legacy datasets.
+    lambda_zero_traj: float = 0.0
 
 
 def load_cfg(path: str | Path) -> TrainConfig:
@@ -865,7 +1042,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     wandb, wandb_run = init_wandb(cfg, cfg_dict, run_id=run_id, exp_dir=exp_dir)
 
-    ds = ODEDataset(cfg.dataset_path)
+    ds = ODEDataset(cfg.dataset_path, use_synthetic_data=bool(cfg.use_synthetic_data))
 
     if cfg.dataset_species_subset is not None:
         idx = np.array(cfg.dataset_species_subset, dtype=np.int64)
@@ -934,7 +1111,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         )
 
     # infer dims
-    y0_ex, u_ex, _ = ds[0]
+    y0_ex, u_ex, _, _ = ds[0]
     P_obs = int(y0_ex.shape[0])
     U = int(u_ex.shape[-1])
 
@@ -944,13 +1121,97 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             raise ValueError(f"Unknown scaffold '{cfg.scaffold}'. Available: {list(SCAFFOLDS.keys())}")
         scaffold = SCAFFOLDS[cfg.scaffold]
 
-        if scaffold.P != P_obs:
-            raise ValueError(f"Scaffold {cfg.scaffold} expects P={scaffold.P}, but dataset has P_obs={P_obs}.")
+        # "Gate the parameter" (cfg.pin_theta): collapse (lo, hi) box of selected
+        # θ entries to a single point so the bounded readout returns the constant.
+        # Copy the vectors so we don't mutate the shared SCAFFOLDS dict instance.
+        if cfg.pin_theta:
+            lo_vec = list(scaffold.theta_lo_vec) if scaffold.theta_lo_vec is not None \
+                else [float(cfg.theta_lo)] * scaffold.theta_dim
+            hi_vec = list(scaffold.theta_hi_vec) if scaffold.theta_hi_vec is not None \
+                else [float(cfg.theta_hi)] * scaffold.theta_dim
+            # log_gamma(x, lo, hi) = lo·exp(log(hi/lo)·σ(x)) can't represent
+            # exactly 0 (log(0/0) = NaN). Clamp pinned values to a tiny epsilon
+            # when log_gamma is the active transform — for ODE kinetics, 1e-12
+            # is effectively zero over any realistic time horizon.
+            _pin_eps = 1e-12 if str(cfg.theta_head_transform) == "log_gamma" else 0.0
+            _pin_applied: dict[int, float] = {}
+            for k, v in cfg.pin_theta.items():
+                idx = int(k)
+                if not (0 <= idx < scaffold.theta_dim):
+                    raise ValueError(
+                        f"pin_theta index {idx} out of range for scaffold "
+                        f"'{cfg.scaffold}' (theta_dim={scaffold.theta_dim})"
+                    )
+                v_clamped = max(float(v), _pin_eps) if _pin_eps > 0 else float(v)
+                lo_vec[idx] = v_clamped
+                hi_vec[idx] = v_clamped
+                _pin_applied[idx] = v_clamped
+            scaffold.theta_lo_vec = lo_vec
+            scaffold.theta_hi_vec = hi_vec
+            if _pin_eps > 0 and any(float(v) < _pin_eps for v in cfg.pin_theta.values()):
+                print(f"pin_theta: log_gamma can't represent exact 0; pinned values "
+                      f"clamped at eps={_pin_eps:.0e}. Applied: {_pin_applied}")
+            else:
+                print(f"pin_theta: collapsed θ entries {sorted(cfg.pin_theta)} to constants {[cfg.pin_theta[k] for k in sorted(cfg.pin_theta)]}")
 
-    u_to_y_jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)  # (U,P_obs)
+        if scaffold.P != P_obs and (
+            getattr(scaffold, "obs_state_idx", None) is None
+            or getattr(scaffold, "control_state_map", None) is None
+        ):
+            raise ValueError(
+                f"Scaffold {cfg.scaffold} expects P={scaffold.P}, but dataset has P_obs={P_obs}, "
+                "and the scaffold did not declare obs_state_idx/control_state_map for the lift."
+            )
+
+    # Build u_to_y_jump:
+    #   - If scaffold matches dataset (P == P_obs): use dataset's native indices.
+    #   - If scaffold is partially observed: build a (U, scaffold.P) jump matrix
+    #     by looking up each dataset control_name in scaffold.control_state_map.
+    if scaffold.P == P_obs:
+        u_to_y_jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)  # (U,P_obs)
+    else:
+        U_total = int(ds.control_indices.shape[0])
+        u_to_y_jump = torch.zeros((U_total, scaffold.P), dtype=torch.float32, device=device)
+        if ds.control_names is None:
+            raise ValueError("Partial-observability lift requires dataset control_names; rebuild the npz.")
+        for j, name in enumerate(list(ds.control_names)):
+            target = scaffold.control_state_map.get(str(name).strip())
+            if target is not None:
+                u_to_y_jump[j, int(target)] = 1.0
+        print(f"Partial-observability lift: scaffold.P={scaffold.P}, P_obs={P_obs}, "
+              f"obs_state_idx={scaffold.obs_state_idx}, "
+              f"control_state_map={scaffold.control_state_map}")
 
     if cfg.model_class not in MODELS:
         raise ValueError(f"Unknown model_class '{cfg.model_class}'. Available: {list(MODELS.keys())}")
+    # Any of the K-anchor sparse-θ wrappers accepts two extra kwargs. Only pass
+    # them to those models so the other model classes' signatures stay untouched.
+    SPARSE_THETA_MODELS = {
+        "ode_rnn_sparse_theta",
+        "ode_slstm_sparse_theta",
+        "ode_rnn_basal_v2_sparse_theta",
+    }
+    # V2 is the single-pass sparse-θ model (piecewise interp only — its θ-head
+    # fires K times instead of K-times-then-subsampled, so it's JIT-scriptable
+    # and ~2× faster than the V1 two-pass wrapper).
+    SPARSE_THETA_V2_MODELS = {"ode_rnn_sparse_theta_v2"}
+    sparse_theta_kwargs = {}
+    if cfg.model_class in SPARSE_THETA_MODELS:
+        if cfg.n_theta_anchors is None:
+            raise ValueError(
+                f"model_class='{cfg.model_class}' requires cfg.n_theta_anchors (e.g. 1, 3, or 6)."
+            )
+        sparse_theta_kwargs = dict(
+            n_theta_anchors=int(cfg.n_theta_anchors),
+            anchor_interp=str(cfg.anchor_interp),
+        )
+    elif cfg.model_class in SPARSE_THETA_V2_MODELS:
+        if cfg.n_theta_anchors is None:
+            raise ValueError(
+                f"model_class='{cfg.model_class}' requires cfg.n_theta_anchors (e.g. 1, 3, or 6)."
+            )
+        # anchor_interp is fixed at piecewise for V2 (linear needs lookahead).
+        sparse_theta_kwargs = dict(n_theta_anchors=int(cfg.n_theta_anchors))
     model = MODELS[cfg.model_class](
         U=U,
         rhs=scaffold,
@@ -973,15 +1234,22 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
-        gru_y_cols=cfg.gru_y_cols,
+        # Partial-observability: override the dataset-space gru_y_cols with the
+        # scaffold's obs positions, so the encoder reads mm/pm at scaffold cols
+        # regardless of how cfg.gru_y_cols was written.
+        gru_y_cols=(scaffold.obs_state_idx
+                    if (scaffold.P != P_obs and getattr(scaffold, "obs_state_idx", None) is not None)
+                    else cfg.gru_y_cols),
         gru_u_cols=cfg.gru_u_cols,
         lift_skip=cfg.lift_skip,
         gru_variant=cfg.gru_variant,
         gru_init=cfg.gru_init,
         head_init=cfg.head_init,
         y0_theta_init=cfg.y0_theta_init,
+        encoder_use_time=cfg.encoder_use_time,
         theta_head_transform=cfg.theta_head_transform,
         theta_head_tau=cfg.theta_head_tau,
+        **sparse_theta_kwargs,
     ).to(device)
 
     # DIAGNOSTIC ONLY — safe to remove once confirmed Flash Attention works on your GPU.
@@ -1077,11 +1345,33 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             path,
         )
 
-    if cfg.obs_idx is not None:
+    # When the scaffold is wider than the dataset, observations get lifted into
+    # scaffold space at scaffold.obs_state_idx; obs_idx must point there so the
+    # loss-time `pred[..., obs_idx]` / `y_seq[..., obs_idx]` picks the right cols.
+    _lift_partial = scaffold.P != P_obs and getattr(scaffold, "obs_state_idx", None) is not None
+    if _lift_partial:
+        # Source positions (where mm/pm live in the dataset) — use cfg.obs_idx
+        # if set, otherwise default to scaffold's obs_state_idx assuming the
+        # dataset uses the same layout.
+        _dataset_obs_idx = (
+            list(cfg.obs_idx) if cfg.obs_idx is not None
+            else list(scaffold.obs_state_idx)
+        )
+        if len(_dataset_obs_idx) != len(scaffold.obs_state_idx):
+            raise ValueError(
+                f"cfg.obs_idx (len={len(_dataset_obs_idx)}) must have the same "
+                f"length as scaffold.obs_state_idx (len={len(scaffold.obs_state_idx)})."
+            )
+        obs_idx = torch.tensor(scaffold.obs_state_idx, device=device, dtype=torch.long)
+        print(f"Partial-observability lift active: dataset_obs_idx={_dataset_obs_idx} "
+              f"→ scaffold_obs_idx={scaffold.obs_state_idx}.")
+    elif cfg.obs_idx is not None:
         obs_idx = torch.tensor(cfg.obs_idx, device=device, dtype=torch.long)
         print(f"Supervising only species indices: {cfg.obs_idx}")
     else:
         obs_idx = torch.arange(P_obs, device=device, dtype=torch.long)
+    if not _lift_partial:
+        _dataset_obs_idx = None  # unused on the non-lift code path
 
     dt_tensor = torch.from_numpy(ds.dt).to(device)
     grouped_model = cfg.model_class == "ode_transformer_grouped"
@@ -1104,7 +1394,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         tr_total = 0.0
         tr_batches = 0
 
-        for y0, u_seq, y_seq, batch_lengths in train_loader:
+        for y0, u_seq, y_seq, batch_lengths, z_expr_batch in train_loader:
             K_batch = u_seq.shape[1]
             dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
 
@@ -1114,6 +1404,13 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             dt_seq = dt_seq.to(device)
             if batch_lengths is not None:
                 batch_lengths = batch_lengths.to(device)
+
+            # "Gate the observation": per-batch min-subtract on y0/y_seq. No-op
+            # when the flag is off, so the same .npz file can be used in both modes.
+            if cfg.subtract_channel_min:
+                y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+            if _lift_partial:
+                y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
 
             opt.zero_grad(set_to_none=True)
             model_kwargs = {
@@ -1147,6 +1444,34 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                 else:
                     loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+
+            # Model 7 zero-trajectory boundary loss for synthetic no-go samples
+            # (z_expr == 0). Pushes pred (mm, pm) toward zero on those samples
+            # so the encoder/scaffold learns the infeasible-expression region.
+            # No-op when lambda_zero_traj=0 (default) or no z=0 samples in batch.
+            if float(cfg.lambda_zero_traj) > 0.0:
+                z_batch = z_expr_batch.to(device)
+                no_go_mask = (z_batch == 0)
+                if no_go_mask.any():
+                    no_go_pred = pred[no_go_mask]
+                    # Apply the same log1p scale as the trajectory loss when
+                    # use_log_loss is on. log1p(0)=0 so the "push pred → 0"
+                    # target is still 0; this just normalises the magnitudes so
+                    # lambda_zero_traj is comparable to the trajectory MSE.
+                    # Without this, raw-space (75² = 5625) swamps log1p-space
+                    # trajectory MSE (~0.1) by 250× per sample.
+                    if use_log_loss:
+                        no_go_pred = torch.log1p(no_go_pred.clamp_min(0.0))
+                    if batch_lengths is not None:
+                        ng_lengths = batch_lengths[no_go_mask]
+                        K_b = no_go_pred.shape[1]
+                        time_mask = _build_loss_mask(ng_lengths, K_b, device)
+                        sq = no_go_pred.pow(2) * time_mask.unsqueeze(-1)
+                        denom = time_mask.sum().clamp_min(1) * no_go_pred.shape[-1]
+                        zero_loss = sq.sum() / denom
+                    else:
+                        zero_loss = no_go_pred.pow(2).mean()
+                    loss = loss + float(cfg.lambda_zero_traj) * zero_loss
 
             if cfg.l1_regularization:
                 reg_loss = torch.mean(torch.abs(theta[:,1:,:] - theta[:,:-1,:]))
@@ -1183,7 +1508,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_total = None
 
             with torch.no_grad():
-                for y0, u_seq, y_seq, batch_lengths in val_loader:
+                for y0, u_seq, y_seq, batch_lengths, z_expr_batch in val_loader:
                     K_batch = u_seq.shape[1]
                     dt_seq = torch.from_numpy(ds.dt[:K_batch])
                     dt_seq = dt_seq[None, :].expand(y0.shape[0], -1)
@@ -1194,6 +1519,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     dt_seq = dt_seq.to(device)
                     if batch_lengths is not None:
                         batch_lengths = batch_lengths.to(device)
+
+                    if cfg.subtract_channel_min:
+                        y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+                    if _lift_partial:
+                        y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
 
                     if cfg.use_ivtt_mse_loss:
                         model_kwargs = {"teacher_forcing": False, "tf_every": int(cfg.tf_every)}
@@ -1309,7 +1639,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_batches = 0
         sp_total = None
         with torch.no_grad():
-            for y0, u_seq, y_seq, batch_lengths in test_loader:
+            for y0, u_seq, y_seq, batch_lengths, z_expr_batch in test_loader:
                 K_batch = u_seq.shape[1]
                 dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
                 y0 = y0.to(device)
@@ -1318,6 +1648,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 dt_seq = dt_seq.to(device)
                 if batch_lengths is not None:
                     batch_lengths = batch_lengths.to(device)
+                if cfg.subtract_channel_min:
+                    y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+                if _lift_partial:
+                    y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
                 model_kwargs = {"y_seq": None, "teacher_forcing": False}
                 _inject_feat_transforms(model_kwargs)
                 if grouped_model and batch_lengths is not None:

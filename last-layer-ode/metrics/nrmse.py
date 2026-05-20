@@ -58,13 +58,24 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
     scaffold = cfg.get("scaffold", exp_dir.name)
     P = SCAFFOLDS[scaffold].P if scaffold in SCAFFOLDS else 0
 
-    model, ds, obs_names, _ = rebuild_model_from_experiment(exp_dir, device)
+    model, ds, obs_names, _, lift_info = rebuild_model_from_experiment(exp_dir, device)
     test_subset = ds if no_split else _test_subset(ds, exp_dir)
 
     model.eval()
     dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
 
-    species_vals: dict[str, list[float]] = {s: [] for s in obs_names}
+    # When lifting, restrict species accounting to the actually-observed pair
+    # (mRNA, protein). Labels come from the scaffold's state_names at those
+    # positions; ground truth from the dataset at its obs positions.
+    if lift_info:
+        scaffold_obs = list(lift_info["scaffold_obs_idx"])
+        dataset_obs = list(lift_info["dataset_obs_idx"])
+        species_labels = [obs_names[i] if i < len(obs_names) else f"y{i}" for i in scaffold_obs]
+    else:
+        scaffold_obs = list(range(len(obs_names)))
+        dataset_obs = list(range(len(obs_names)))
+        species_labels = list(obs_names)
+    species_vals: dict[str, list[float]] = {s: [] for s in species_labels}
 
     base_kwargs = {
         "y_seq": None,
@@ -75,18 +86,27 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
 
     with torch.no_grad():
         for i in range(len(test_subset)):
-            y0, u_seq, y_seq = test_subset[i]
+            item = test_subset[i]
+            y0, u_seq, y_seq = item[0], item[1], item[2]
+            y0_b = y0.unsqueeze(0).to(device)
+            u_b = u_seq.unsqueeze(0).to(device)
+            y_seq_b = y_seq.unsqueeze(0).to(device)
+            if lift_info:
+                from plot_diagnostics import _maybe_lift
+                y0_b, _ = _maybe_lift(y0_b, y_seq_b, lift_info)
+                obs_idx_t = torch.tensor(scaffold_obs, device=device, dtype=torch.long)
+            else:
+                obs_idx_t = torch.arange(len(obs_names), device=device)
             pred, _, _ = model(
-                y0.unsqueeze(0).to(device),
-                u_seq.unsqueeze(0).to(device),
-                dt.unsqueeze(0),
-                torch.arange(len(obs_names), device=device),
+                y0_b, u_b, dt.unsqueeze(0), obs_idx_t,
                 **_filter_model_kwargs(model, base_kwargs),
             )
-            y_np = y_seq.cpu().numpy()
-            p_np = pred[0].cpu().numpy()
-            for j, sp in enumerate(obs_names):
-                species_vals[sp].append(nrmse(y_np[:, j], p_np[:, j]))
+            y_np = y_seq.cpu().numpy()             # dataset layout
+            p_np = pred[0].cpu().numpy()           # scaffold layout
+            for k, sp in enumerate(species_labels):
+                d_col = dataset_obs[k] if k < len(dataset_obs) else k
+                s_col = scaffold_obs[k] if k < len(scaffold_obs) else k
+                species_vals[sp].append(nrmse(y_np[:, d_col], p_np[:, s_col]))
 
     rows = []
     for sp, vals in species_vals.items():

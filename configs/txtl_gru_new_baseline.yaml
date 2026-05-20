@@ -1,0 +1,85 @@
+# Clean txtl_gru baseline used as the anchor for the new_scaffolds OFAT sweep
+# (sweep_specs/txtl_new_scaffolds_ofat.yaml).
+#
+# Everything below mirrors the current best txtl_gru setup. Each new feature
+# (sparse θ, subtract_channel_min, pin_theta, lambda_zero_traj, encoder_use_time,
+# Model 3/4/7/8/9 scaffolds, etc.) is left OFF here so the sweep can flip them
+# on one at a time.
+
+dataset_path: datasets/cell-free/txtl_combined.npz
+study: txtl_new_scaffolds_ofat
+tags: [new_scaffolds_ofat]
+exp_name: txtl_gru_new_baseline
+out_root: experiments
+
+save_model_name: model.pt
+save_last_name: model_last.pt
+save_curves_name: loss_curves.npz
+
+epochs: 200
+batch_size: 100
+lr: 0.002
+weight_decay: 0.0018
+warmup_epochs: 0
+cosine_decay: false
+
+val_n: 975          # ≈ 12.5% of N=7800 (combined real+synth)
+test_n: 975
+stratify_z_expr: true   # allocate real vs synth proportionally to each split
+val_frac: 0.0
+seed: 42
+split_seed: 42
+
+stratified_split: false
+stratify_bins: 5
+stratify_targets: null
+
+num_workers: 0
+pin_memory: true
+
+# ── Model: dense per-step θ GRU (the current best txtl_gru) ──
+model_class: ode_rnn
+scaffold: txtl_resource_and_maturation_dna     # Model 5 (7-state TXTL)
+
+hidden: 400
+lift_dim: 32
+num_layers: 2
+dropout: 0.2
+lift_skip: true
+gru_variant: stacked_cell
+gru_init: supervisor
+head_init: supervisor
+
+theta_lo: 1.0e-06
+theta_hi: 2.0
+theta_bounded: true
+theta_head_transform: log_gamma
+theta_head_tau: 2.3
+n_substeps: 1
+
+gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+gru_y_cols: [3, 5]
+u_transform: sqrt
+y_transform: sqrt_clamp1
+
+# Loss: generic MSE on (mm, pm). use_ivtt_mse_loss is IVTT-only (hardcodes a
+# 6-element theta layout and crashes on any other scaffold).
+obs_normalization: null
+use_ivtt_mse_loss: false
+obs_idx: [3, 5]
+
+teacher_forcing: true
+tf_every: 200
+tf_drop_epoch: 100
+grad_clip: 1.0
+jit_scripting: true
+endpoint_r2: true
+
+# ── New-features flags, all OFF for the baseline ──
+subtract_channel_min: false
+subtract_channel_min_cols: [3, 5]
+pin_theta: null
+n_theta_anchors: null
+anchor_interp: piecewise
+lambda_zero_traj: 0.0
+encoder_use_time: false

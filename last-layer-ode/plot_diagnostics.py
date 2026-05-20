@@ -53,6 +53,21 @@ def _filter_model_kwargs(model: torch.nn.Module, kwargs: dict) -> dict:
         return kwargs
 
 
+def _maybe_lift(y0: torch.Tensor, y_seq: torch.Tensor, lift_info: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mirror of train._lift_to_scaffold_state. No-op if lift_info is empty."""
+    if not lift_info:
+        return y0, y_seq
+    B, K = y0.shape[0], y_seq.shape[1]
+    src = torch.as_tensor(lift_info["dataset_obs_idx"], device=y0.device, dtype=torch.long)
+    dst = torch.as_tensor(lift_info["scaffold_obs_idx"], device=y0.device, dtype=torch.long)
+    sP = int(lift_info["scaffold_P"])
+    y0_full = torch.zeros((B, sP), device=y0.device, dtype=y0.dtype)
+    y_seq_full = torch.zeros((B, K, sP), device=y_seq.device, dtype=y_seq.dtype)
+    y0_full.index_copy_(1, dst, y0.index_select(1, src))
+    y_seq_full.index_copy_(2, dst, y_seq.index_select(2, src))
+    return y0_full, y_seq_full
+
+
 def _test_subset(ds: ODEDataset, exp_dir: Path) -> ODEDataset | torch.utils.data.Subset:
     """Return the test split subset if split.npz exists, else the full dataset."""
     split_path = exp_dir / "split.npz"
@@ -119,15 +134,45 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
     scaffold_name = cfg.get("scaffold", "reduced5")
     scaffold = SCAFFOLDS[scaffold_name]
 
-    # infer dims
-    y0_ex, u_ex, _ = ds[0]
+    # infer dims (ds.__getitem__ returns (y0, u, y, z_expr) in the current schema)
+    item = ds[0]
+    y0_ex, u_ex = item[0], item[1]
     P_obs = int(y0_ex.shape[0])
     U = int(u_ex.shape[-1])
 
-    if scaffold.P != P_obs:
-        raise ValueError(f"Scaffold {scaffold_name} expects P={scaffold.P}, but dataset has P_obs={P_obs}.")
-
-    jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
+    # Partial-observability lift mirror of train.py: when scaffold.P != P_obs,
+    # build u_to_y_jump from the scaffold's control_state_map (name-based) and
+    # mark the dataset/scaffold obs index pair for later re-packing of y0/y_seq.
+    lift_info: dict = {}  # populated when partial-obs lift is active
+    if scaffold.P == P_obs:
+        jump = make_u_to_y_jump(ds.control_indices, ds.obs_indices, device=device)
+    else:
+        if (getattr(scaffold, "obs_state_idx", None) is None
+                or getattr(scaffold, "control_state_map", None) is None):
+            raise ValueError(
+                f"Scaffold {scaffold_name} expects P={scaffold.P}, but dataset has P_obs={P_obs}, "
+                "and the scaffold did not declare obs_state_idx/control_state_map for the lift."
+            )
+        if ds.control_names is None:
+            raise ValueError("Partial-observability lift needs dataset control_names; rebuild npz.")
+        jump = torch.zeros((U, scaffold.P), dtype=torch.float32, device=device)
+        for j, name in enumerate(list(ds.control_names)):
+            target = scaffold.control_state_map.get(str(name).strip())
+            if target is not None:
+                jump[j, int(target)] = 1.0
+        dataset_obs_idx = list(cfg.get("obs_idx") or scaffold.obs_state_idx)
+        if len(dataset_obs_idx) != len(scaffold.obs_state_idx):
+            raise ValueError(
+                f"cfg.obs_idx (len={len(dataset_obs_idx)}) must match "
+                f"scaffold.obs_state_idx (len={len(scaffold.obs_state_idx)})."
+            )
+        lift_info = {
+            "dataset_obs_idx": dataset_obs_idx,
+            "scaffold_obs_idx": list(scaffold.obs_state_idx),
+            "scaffold_P": int(scaffold.P),
+        }
+        print(f"[rebuild] partial-obs lift: dataset_obs_idx={dataset_obs_idx} "
+              f"→ scaffold_obs_idx={scaffold.obs_state_idx} (P={scaffold.P})")
 
     # Recompute gru_u_cols / gru_y_cols from config (same logic as train_R.py)
     gru_u_cols = None
@@ -139,7 +184,12 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         gru_u_cols = list(cfg["gru_u_cols"])
 
     gru_y_cols = None
-    if cfg.get("gru_y_obs_only", False):
+    if lift_info:
+        # Partial-obs scaffolds override cfg.gru_y_cols with scaffold.obs_state_idx
+        # at train time (so the encoder reads mm/pm at the scaffold's positions).
+        # Mirror that here so encoder weights line up with the checkpoint.
+        gru_y_cols = list(lift_info["scaffold_obs_idx"])
+    elif cfg.get("gru_y_obs_only", False):
         obs_idx_cfg = cfg.get("obs_idx")
         gru_y_cols = list(obs_idx_cfg) if obs_idx_cfg is not None else list(range(scaffold.P))
     elif cfg.get("gru_y_cols") is not None:
@@ -266,10 +316,15 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         print("  → eval will use RANDOM weights for missing keys. Check rebuild_model_from_experiment kwargs vs train.py.")
     model.eval()
 
-    state_names = ds.obs_names.tolist() if ds.obs_names is not None else [f"y{i}" for i in range(P_obs)]
+    # state_names: use scaffold-side names when lifting (scaffold layout differs
+    # from dataset layout); otherwise prefer dataset obs_names.
+    if lift_info and getattr(scaffold, "state_names", None):
+        state_names = list(scaffold.state_names)
+    else:
+        state_names = ds.obs_names.tolist() if ds.obs_names is not None else [f"y{i}" for i in range(P_obs)]
     param_names = scaffold.param_names() if hasattr(scaffold, "param_names") else [f"θ{i}" for i in range(scaffold.theta_dim)]
 
-    return model, ds, state_names, param_names
+    return model, ds, state_names, param_names, lift_info
 
 
 def plot_loss_curves(loss_npz: Path, out_dir: Path):
@@ -444,7 +499,7 @@ def _save_event_driven_dashboard(t, y_true, y_pred, u_val, theta_val, state_name
     plt.close(fig)
 
 
-def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", param_names: list[str] | None = None):
+def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", param_names: list[str] | None = None, lift_info: dict | None = None):
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     n_samples = min(int(n_samples), len(plot_ds))
@@ -457,7 +512,9 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     else:
         plotted_indices = list(range(n_samples))
 
-    y0, u_seq, y_seq, batch_lengths = next(iter(loader))
+    batch = next(iter(loader))
+    # collate / collate_varlen now return (y0, u, y, lengths_or_None, z_expr)
+    y0, u_seq, y_seq, batch_lengths = batch[0], batch[1], batch[2], batch[3]
     K_batch = u_seq.shape[1]
     dt_seq = torch.from_numpy(raw_ds.dt[:K_batch])[None, :].expand(y0.shape[0], -1)
 
@@ -467,12 +524,19 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     dt_seq = dt_seq.to(device)
     if batch_lengths is not None:
         batch_lengths = batch_lengths.to(device)
+    # Lift dataset y0/y_seq into scaffold-state space when partial-obs.
+    y0, y_seq = _maybe_lift(y0, y_seq, lift_info or {})
 
     # Diagnostic info before calling model
     print(f"[plot_predictions] n_samples={n_samples}, plot_ds_len={len(plot_ds)}")
     print(f"[plot_predictions] y0.shape={tuple(y0.shape)}, u_seq.shape={tuple(u_seq.shape)}, y_seq.shape={tuple(y_seq.shape)}, dt_seq.shape={tuple(dt_seq.shape)}")
     with torch.no_grad():
-        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
+        # When lifting, model emits in scaffold layout; obs_idx points to the
+        # scaffold's obs positions so downstream slicing extracts the right cols.
+        if lift_info:
+            obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=y0.device, dtype=torch.long)
+        else:
+            obs_idx = torch.arange(y0.shape[-1], device=y0.device)
         cfg_local = load_yaml(exp_dir / "config.yaml") if exp_dir else {}
         y_transform = str(cfg_local.get("y_transform", "none"))
         model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform, "y_transform": y_transform}
@@ -595,22 +659,29 @@ def _save_theta_panel(
     plt.close(fig)
 
 
-def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none"):
+def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, sample_idx: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", lift_info: dict | None = None):
     """Plot the learned beta(t) residual terms."""
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
-    y0, u_seq, _ = plot_ds[sample_idx]
+    item = plot_ds[sample_idx]
+    y0, u_seq = item[0], item[1]
     K = int(u_seq.shape[0])
     dt_seq = torch.from_numpy(raw_ds.dt[:K])
 
     y0 = y0.unsqueeze(0).to(device)
     u_seq = u_seq.unsqueeze(0).to(device)
     dt_seq = dt_seq.unsqueeze(0).to(device)
+    if lift_info:
+        y0_dummy_y = torch.zeros(1, u_seq.shape[1], y0.shape[-1], device=device)
+        y0, _ = _maybe_lift(y0, y0_dummy_y, lift_info)
 
     print(f"[plot_beta] sample_idx={sample_idx}, y0.shape={tuple(y0.shape)}, u_seq.shape={tuple(u_seq.shape)}, dt_seq.shape={tuple(dt_seq.shape)}")
     with torch.no_grad():
-        obs_idx = torch.arange(y0.shape[-1], device=y0.device)
+        if lift_info:
+            obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=y0.device, dtype=torch.long)
+        else:
+            obs_idx = torch.arange(y0.shape[-1], device=y0.device)
         cfg_local = load_yaml(exp_dir / "config.yaml") if exp_dir else {}
         y_transform = str(cfg_local.get("y_transform", "none"))
         model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform, "y_transform": y_transform}
@@ -654,11 +725,16 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
     out_dir.mkdir(parents=True, exist_ok=True)
 
     device = device_auto()
-    model, ds, state_names, param_names = rebuild_model_from_experiment(exp_dir, device=device, ckpt_path=ckpt_path)
+    model, ds, state_names, param_names, lift_info = rebuild_model_from_experiment(exp_dir, device=device, ckpt_path=ckpt_path)
 
     cfg = load_yaml(exp_dir / "config.yaml")
     # cfg.get("obs_idx") can be None (explicit null in YAML). Coerce safely.
-    obs_idx = list(cfg.get("obs_idx") or []) or None
+    # For partial-obs runs, the val_species heatmap was logged in scaffold layout
+    # at the scaffold's obs positions; map labels accordingly.
+    if lift_info:
+        obs_idx = list(lift_info["scaffold_obs_idx"])
+    else:
+        obs_idx = list(cfg.get("obs_idx") or []) or None
     u_transform = str(cfg.get("u_transform", "none"))
 
     loss_npz = exp_dir / "logs" / "loss_curves.npz"
@@ -666,10 +742,10 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
         plot_loss_curves(loss_npz, out_dir)
         plot_val_species_losses(loss_npz, out_dir, state_names=state_names, obs_idx=obs_idx)
 
-    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names)
+    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names, lift_info=lift_info)
 
     if cfg.get("use_basal", False) or cfg.get("model_class", "") == "ode_rnn_basal_v2":
-        plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform)
+        plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform, lift_info=lift_info)
 
     print(f"Saved plots to {out_dir}")
     return out_dir
@@ -691,7 +767,7 @@ def plot_epoch_prediction_overlays(
 
     device = device_auto()
 
-    model, ds, state_names, _param_names = rebuild_model_from_experiment(exp_dir, device=device)
+    model, ds, state_names, _param_names, lift_info = rebuild_model_from_experiment(exp_dir, device=device)
     cfg_overlay = load_yaml(exp_dir / "config.yaml")
     u_transform_overlay = str(cfg_overlay.get("u_transform", "none"))
     y_transform_overlay = str(cfg_overlay.get("y_transform", "none"))
@@ -731,7 +807,8 @@ def plot_epoch_prediction_overlays(
 
     sample_idx = int(sample_idx)
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
-    y0, u_seq, y_seq = ds[sample_idx]
+    item = ds[sample_idx]
+    y0, u_seq, y_seq = item[0], item[1], item[2]
     K = int(u_seq.shape[0])
     dt = raw_ds.dt[:K].astype(np.float32)
     t = np.cumsum(dt)
@@ -739,8 +816,11 @@ def plot_epoch_prediction_overlays(
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
     dt_b = torch.from_numpy(raw_ds.dt[:K]).unsqueeze(0).to(device)
+    y_seq_b = y_seq.unsqueeze(0).to(device)
+    # Lift dataset (y0, y_seq) into scaffold layout for partial-obs runs.
+    y0_b, y_seq_b = _maybe_lift(y0_b, y_seq_b, lift_info or {})
 
-    y_true = y_seq.cpu().numpy()
+    y_true = y_seq_b[0].cpu().numpy()
     P = int(y_true.shape[1])
 
     preds: dict[int, np.ndarray] = {}
@@ -753,7 +833,10 @@ def plot_epoch_prediction_overlays(
         model.load_state_dict(ckpt["state_dict"], strict=False)
         model.eval()
         with torch.no_grad():
-            obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
+            if lift_info:
+                obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=y0_b.device, dtype=torch.long)
+            else:
+                obs_idx = torch.arange(y0_b.shape[-1], device=y0_b.device)
             model_kwargs = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform_overlay, "y_transform": y_transform_overlay}
             if model.__class__.__name__ == "OdeTransformerGrouped":
                 model_kwargs["lengths"] = torch.tensor([K], device=y0_b.device, dtype=torch.long)

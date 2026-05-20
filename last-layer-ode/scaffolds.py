@@ -38,6 +38,18 @@ class MechanisticScaffold(nn.Module):
         self.theta_lo_vec: "list[float] | None" = None
         self.theta_hi_vec: "list[float] | None" = None
 
+        # Partial-observability hooks — set by subclasses when scaffold.P differs
+        # from dataset.P_obs (e.g. Model 3 has P=3 but the dataset carries P=7
+        # columns; mm/pm sit at scaffold state indices 0/1, not 3/5).
+        # None = identity mapping (assume every state is observed in scaffold order).
+        #
+        # `obs_state_idx[j]` = scaffold state index that maps to the j-th
+        # observed column in the dataset's y_seq (in dataset order).
+        # `control_state_map` = {control_name: scaffold_state_index} for bolus
+        # additions; the trainer rebuilds u_to_y_jump from this.
+        self.obs_state_idx: "list[int] | None" = None
+        self.control_state_map: "dict[str, int] | None" = None
+
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
@@ -859,6 +871,379 @@ class TXTLSimpleDNAScaffold(MechanisticScaffold):
         dDNA = torch.zeros_like(DNA)
 
         return torch.stack((dmm, dpm, dDNA), dim=-1)
+
+# =============================================================================
+# Scaffolds from new_scaffolds.tex (Models 3, 4, 7, 8, 9). Model 5 in the tex
+# is already implemented above as TXTLResourceandMaturationDNAScaffold.
+#
+# Wiring convention (matches the rest of the TXTL scaffolds in this file):
+#   - DNA and every other bolus-driven reagent state is fed by the dataset's
+#     `u_to_y_jump` step, which adds the per-step input concentration delta
+#     onto its designated state column. No source term inside forward().
+#   - The scaffold itself only carries consumption / depletion / reaction terms.
+#   - For Model 9, the tube-opening event is wired the same way: a `tube_opened`
+#     tracker state jumps from 0 -> 1 at the opening time, and the O2 sink
+#     terms are multiplied by (1 - tube_opened). Result: post-opening O2 is
+#     effectively pinned (never depletes), matching the user's instruction.
+# =============================================================================
+
+
+class TXTLModel3_TwoStateScaffold(MechanisticScaffold):
+    """
+    Model 3 (two-state observable ODE) from new_scaffolds.tex.
+
+        dM/dt = v_TX * DNA - k_M * M
+        dP/dt = v_TL * M   - k_P * P
+
+    The tex writes v_TX(t) and v_TL(t) as time-varying drives produced by the
+    encoder, so they live in theta. DNA is kept as a bolus-driven tracker
+    state so existing data wiring works unchanged.
+
+    States (3): M, P, DNA
+    theta (4): v_TX, v_TL, k_M, k_P
+    Observed indices: [0, 1]   (M = mRNA, P = protein)
+    """
+    def __init__(self):
+        super().__init__(P=3, theta_dim=4)
+        self.state_names = ["M", "P", "DNA"]
+        # Same order-of-magnitude box as TXTLMaturationDNAScaffold.
+        self.theta_lo_vec = [3e-5, 3e-5, 1e-5, 1e-5]
+        self.theta_hi_vec = [1.2e-1, 8e-2, 1e-2, 1e-2]
+        # Dataset y_seq carries (mm, pm) at dataset cols 3, 5; in this scaffold
+        # they correspond to M (idx 0) and P (idx 1).
+        self.obs_state_idx = [0, 1]
+        self.control_state_map = {"DNA c": 2}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        M, P, DNA = y.unbind(dim=-1)
+        v_TX, v_TL, k_M, k_P = theta.unbind(dim=-1)
+
+        M_p   = torch.clamp_min(M,   0.0)
+        P_p   = torch.clamp_min(P,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        dM   = v_TX * DNA_p - k_M * M_p
+        dP   = v_TL * M_p   - k_P * P_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dM, dP, dDNA), dim=-1)
+
+
+class TXTLModel4_ThreeStateScaffold(MechanisticScaffold):
+    """
+    Model 4 (three-state TX-TL-maturation ODE) from new_scaffolds.tex.
+
+        dM/dt        = v_TX * DNA - k_M * M
+        dP_imm/dt    = v_TL * M   - k_mat * P_imm - k_degp * P_imm
+        dP_fluor/dt  = k_mat * P_imm
+
+    States (4): M, P_imm, P_fluor, DNA
+    theta (5): v_TX, v_TL, k_M, k_mat, k_degp
+    Observed indices: [0, 2]   (M, P_fluor)
+    """
+    def __init__(self):
+        super().__init__(P=4, theta_dim=5)
+        self.state_names = ["M", "P_imm", "P_fluor", "DNA"]
+        self.theta_lo_vec = [3e-5, 3e-5, 1e-5, 1e-5, 1e-7]
+        self.theta_hi_vec = [1.2e-1, 8e-2, 1e-2, 3.5e-4, 1e-3]
+        # (mm, pm) -> (M, P_fluor)
+        self.obs_state_idx = [0, 2]
+        self.control_state_map = {"DNA c": 3}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        M, P_imm, P_fluor, DNA = y.unbind(dim=-1)
+        v_TX, v_TL, k_M, k_mat, k_degp = theta.unbind(dim=-1)
+
+        M_p     = torch.clamp_min(M,     0.0)
+        P_imm_p = torch.clamp_min(P_imm, 0.0)
+        DNA_p   = torch.clamp_min(DNA,   0.0)
+
+        dM       = v_TX * DNA_p - k_M * M_p
+        dP_imm   = v_TL * M_p   - (k_mat + k_degp) * P_imm_p
+        dP_fluor = k_mat * P_imm_p
+        dDNA     = torch.zeros_like(DNA)
+
+        return torch.stack((dM, dP_imm, dP_fluor, dDNA), dim=-1)
+
+
+class TXTLModel7_BoundaryGatedScaffold(MechanisticScaffold):
+    """
+    Model 7 (boundary-aware no-expression model) from new_scaffolds.tex.
+
+    Builds on the 7-state TXTL scaffold but multiplies each production channel
+    by g_expr(t) = prod_j  X_j / (K_j + X_j),  where X_j are bolus-tracked
+    reagent states. The K_j are learned alongside the kinetic vector.
+
+    Reagent gates implemented (j in {T7, NTP, AA, Mg, K_ion}). DNA is already a
+    state in the base scaffold, so its gate is folded into the existing
+    `R * V_TX * DNA` term naturally (i.e. when DNA = 0, production is 0).
+
+    States (12):
+        [R, O, m, mm, p, pm, T7, NTP, AA, Mg, K_ion, DNA]
+        The five reagent trackers (T7..K_ion) accumulate via u_to_y_jump.
+
+    theta (12): [lam, lam_O, V_TX, k_dm, V_TL, k_mt, k_matm,
+                  K_T7, K_NTP, K_AA, K_Mg, K_K]
+    Observed indices: [2, 4]   (mm = mature mRNA, pm = mature protein)
+    """
+    def __init__(self):
+        super().__init__(P=12, theta_dim=12)
+        self.state_names = [
+            "R", "O", "m", "mm", "p", "pm",
+            "T7", "NTP", "AA", "Mg", "K_ion", "DNA",
+        ]
+        # First 7 bounds match TXTLResourceandMaturationDNAScaffold; the last
+        # 5 are Michaelis constants on reagent concentrations.
+        self.theta_lo_vec = [1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5,
+                             1e-4, 1e-4, 1e-4, 1e-4, 1e-4]
+        self.theta_hi_vec = [5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3,
+                             1e2,  1e2,  1e2,  1e2,  1e2]
+        # (mm, pm) -> (mm, pm) at scaffold idx 3, 5
+        self.obs_state_idx = [3, 5]
+        self.control_state_map = {
+            "DNA c": 11, "T7RNAP": 6, "NTPs": 7, "AA": 8,
+            "Mg-Glut": 9, "K-Glut": 10,
+        }
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, T7, NTP, AA, Mg, K_ion, DNA = y.unbind(dim=-1)
+        (lam, lam_O, V_TX, kdm, V_TL, kmt, kmatm,
+         K_T7, K_NTP, K_AA, K_Mg, K_K) = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O_p   = torch.clamp_min(O,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+        T7_p  = torch.clamp_min(T7,  0.0)
+        NTP_p = torch.clamp_min(NTP, 0.0)
+        AA_p  = torch.clamp_min(AA,  0.0)
+        Mg_p  = torch.clamp_min(Mg,  0.0)
+        K_p   = torch.clamp_min(K_ion, 0.0)
+
+        eps = 1e-12
+        g_T7  = T7_p  / (K_T7  + T7_p  + eps)
+        g_NTP = NTP_p / (K_NTP + NTP_p + eps)
+        g_AA  = AA_p  / (K_AA  + AA_p  + eps)
+        g_Mg  = Mg_p  / (K_Mg  + Mg_p  + eps)
+        g_K   = K_p   / (K_K   + K_p   + eps)
+        g_expr = g_T7 * g_NTP * g_AA * g_Mg * g_K  # DNA gating implicit via R*V_TX*DNA
+
+        dR   = -lam * R_p
+        dO   = -lam_O * O_p
+        dm   = g_expr * R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = g_expr * R_p * V_TL * (m_p + mm_p) - kmt * p_p
+        dpm  = g_expr * O_p * kmt * p_p
+
+        zero = torch.zeros_like(DNA)
+        return torch.stack(
+            (dR, dO, dm, dmm, dp, dpm, zero, zero, zero, zero, zero, zero),
+            dim=-1,
+        )
+
+
+class TXTLModel8_ReagentResourceScaffold(MechanisticScaffold):
+    """
+    Model 8 (explicit reagent-resource model) from new_scaffolds.tex Section 8.
+
+    States (12):  [E, A, T, Mg, K_ion, C, W, m, mm, p, pm, DNA]
+        E       energy / NTP / feed capacity (bolused by NTP, feed, maltose)
+        A       amino-acid capacity         (bolused by AA)
+        T       active T7 polymerase        (bolused by T7)
+        Mg      magnesium                   (bolused by Mg-Glut)
+        K_ion   potassium                   (bolused by K-Glut)
+        C       crowding / PEG              (bolused by PEG)
+        W       waste / inhibitor           (no bolus; generated by reactions)
+        m, mm   immature / mature mRNA
+        p, pm   immature / mature protein
+        DNA     DNA template                (bolused by DNA column)
+
+    Reaction rates (tex eqs (5)-(10)):
+        v_TX = alpha_TX * DNA * T * f_E(E) * f_Mg(Mg) * f_K(K) * f_C(C) * f_W(W)
+        v_TL = alpha_TL * (m + mm) * f_A(A) * f_E(E) * f_Mg(Mg) * f_K(K) * f_C(C) * f_W(W)
+        f_X(X) = X / (K_X + X)   for required terms
+        f_W(W) = 1 / (1 + W/K_W) for inhibitory waste
+
+    theta (16):
+        [alpha_TX, alpha_TL,
+         k_E, k_A, k_T, k_W,
+         K_E, K_A, K_Mg, K_K, K_C, K_W,
+         k_dm, k_matm, k_mt,
+         beta_W]
+        beta_W = combined waste-production stoichiometry (one knob).
+    """
+    def __init__(self):
+        super().__init__(P=12, theta_dim=16)
+        self.state_names = [
+            "E", "A", "T", "Mg", "K_ion", "C", "W",
+            "m", "mm", "p", "pm", "DNA",
+        ]
+        self.theta_lo_vec = [
+            3e-5, 3e-5,                           # alpha_TX, alpha_TL
+            1e-7, 1e-7, 1e-7, 1e-7,               # k_E..k_W
+            1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4,   # K_E..K_W (saturation constants)
+            1e-5, 5e-5, 1e-5,                     # k_dm, k_matm, k_mt
+            1e-6,                                 # beta_W
+        ]
+        self.theta_hi_vec = [
+            1.2e-1, 8e-2,
+            1e-3, 1e-3, 1e-3, 1e-3,
+            1e2, 1e2, 1e2, 1e2, 1e2, 1e2,
+            1e-2, 3.5e-3, 3.5e-4,
+            1e-2,
+        ]
+        # mm at scaffold idx 8, pm at scaffold idx 10
+        self.obs_state_idx = [8, 10]
+        self.control_state_map = {
+            "DNA c": 11, "NTPs": 0, "FB": 0, "Maltose": 0,
+            "AA": 1, "T7RNAP": 2, "Mg-Glut": 3, "K-Glut": 4, "PEG8000": 5,
+        }
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        E, A, T, Mg, K_ion, C, W, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        (alpha_TX, alpha_TL,
+         k_E, k_A, k_T, k_W,
+         K_E, K_A, K_Mg, K_K, K_C, K_W,
+         kdm, kmatm, kmt, beta_W) = theta.unbind(dim=-1)
+
+        E_p   = torch.clamp_min(E,   0.0)
+        A_p   = torch.clamp_min(A,   0.0)
+        T_p   = torch.clamp_min(T,   0.0)
+        Mg_p  = torch.clamp_min(Mg,  0.0)
+        K_p   = torch.clamp_min(K_ion, 0.0)
+        C_p   = torch.clamp_min(C,   0.0)
+        W_p   = torch.clamp_min(W,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+
+        eps = 1e-12
+        f_E  = E_p  / (K_E  + E_p  + eps)
+        f_A  = A_p  / (K_A  + A_p  + eps)
+        f_Mg = Mg_p / (K_Mg + Mg_p + eps)
+        f_K  = K_p  / (K_K  + K_p  + eps)
+        f_C  = C_p  / (K_C  + C_p  + eps)
+        f_W  = 1.0  / (1.0  + W_p / (K_W + eps))
+
+        v_TX = alpha_TX * DNA_p * T_p * f_E * f_Mg * f_K * f_C * f_W
+        v_TL = alpha_TL * (m_p + mm_p) * f_A * f_E * f_Mg * f_K * f_C * f_W
+
+        # Resource depletion (sources are bolus jumps from u_to_y_jump)
+        dE  = -k_E * E_p   # NTP/feed/maltose enter as boluses; reaction draw is folded into beta_W
+        dA  = -k_A * A_p
+        dT  = -k_T * T_p
+        dMg = torch.zeros_like(Mg)
+        dK  = torch.zeros_like(K_ion)
+        dC  = torch.zeros_like(C)
+        dW  = beta_W * (v_TX + v_TL) - k_W * W_p
+
+        # TXTL species
+        dm   = v_TX - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = v_TL - kmt * p_p
+        dpm  = kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack(
+            (dE, dA, dT, dMg, dK, dC, dW, dm, dmm, dp, dpm, dDNA),
+            dim=-1,
+        )
+
+
+class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
+    """
+    Model 9 (oxygen-limited dark-protein maturation) from new_scaffolds.tex.
+
+    Implements the dark/fluorescent protein split and oxygen-gated maturation.
+    The "tube opens -> O2 effectively unlimited" behaviour the user asked for
+    is implemented via a `tube_opened` tracker state that the dataset flips
+    from 0 -> 1 (via u_to_y_jump) at the detected opening time. All O2 sink
+    terms are multiplied by (1 - tube_opened), so post-opening O2 is pinned
+    at whatever value it carries (effectively unlimited supply).
+
+    Continuous dynamics (pre-opening; post-opening O2 sinks are gated off):
+        dR/dt        = -lam * R
+        dm/dt        =  R * V_TX * DNA - (k_dm + k_matm) * m
+        dmm/dt       =  k_matm * m - k_dm * mm
+        dp/dt        =  R * V_TL * (m + mm) - k_fold * p - k_degp * p
+        dPdark/dt    =  k_fold * p - k_ox * O2 * Pdark - k_deg_dark * Pdark
+        dPfluor/dt   =  k_ox * O2 * Pdark
+        dO2/dt       =  -(1 - tube_opened) * ( c_ox * k_ox * O2 * Pdark + c_met * O2 )
+        dDNA/dt      = 0   (bolus-driven)
+        dtube_opened/dt = 0   (bolus-driven; jumps 0 -> 1 at opening)
+
+    L_met(t) is taken as 1 (the simple form in tex eq. (32)); the dynamic
+    L_met variant is left for a follow-up scaffold.
+
+    States (9): [R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened]
+    theta (11): [lam, V_TX, V_TL, k_dm, k_matm,
+                  k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met]
+    Observed indices: [3, 6]   (mm = mature mRNA, P_fluor = measured protein)
+    """
+    def __init__(self):
+        super().__init__(P=9, theta_dim=11)
+        self.state_names = [
+            "R", "O2", "m", "mm", "p", "P_dark", "P_fluor",
+            "DNA", "tube_opened",
+        ]
+        self.theta_lo_vec = [
+            1e-6,                   # lam
+            3e-5, 3e-5,             # V_TX, V_TL
+            1e-5, 5e-5,             # k_dm, k_matm
+            1e-5, 1e-7, 1e-7,       # k_fold, k_degp, k_deg_dark
+            1e-5,                   # k_ox
+            1e-3, 1e-7,             # c_ox, c_met
+        ]
+        self.theta_hi_vec = [
+            5e-4,
+            1.2e-1, 8e-2,
+            1e-2, 3.5e-3,
+            3.5e-3, 1e-3, 1e-3,
+            1e-1,
+            1e2, 1e-3,
+        ]
+        # (mm, pm) -> (mm @ idx 3, P_fluor @ idx 6)
+        self.obs_state_idx = [3, 6]
+        # tube_opened currently has no dataset column (Excel doesn't carry it);
+        # if/when added, point its control_name here.
+        self.control_state_map = {"DNA c": 7}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)
+        (lam, V_TX, V_TL, kdm, kmatm,
+         k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met) = theta.unbind(dim=-1)
+
+        R_p     = torch.clamp_min(R,      0.0)
+        O2_p    = torch.clamp_min(O2,     0.0)
+        m_p     = torch.clamp_min(m,      0.0)
+        mm_p    = torch.clamp_min(mm,     0.0)
+        p_p     = torch.clamp_min(p,      0.0)
+        Pdark_p = torch.clamp_min(P_dark, 0.0)
+        DNA_p   = torch.clamp_min(DNA,    0.0)
+
+        # 0 before opening, 1 after; clamped just in case the tracker
+        # overshoots during integration.
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+        sink_mask = 1.0 - open_gate  # O2 sinks are off post-opening
+
+        dR        = -lam * R_p
+        dm        = R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm       = kmatm * m_p - kdm * mm_p
+        dp        = R_p * V_TL * (m_p + mm_p) - k_fold * p_p - k_degp * p_p
+        dPdark    = k_fold * p_p - k_ox * O2_p * Pdark_p - k_deg_dark * Pdark_p
+        dPfluor   = k_ox * O2_p * Pdark_p
+        dO2       = -sink_mask * (c_ox * k_ox * O2_p * Pdark_p + c_met * O2_p)
+        dDNA      = torch.zeros_like(DNA)
+        dtube     = torch.zeros_like(tube_opened)
+
+        return torch.stack(
+            (dR, dO2, dm, dmm, dp, dPdark, dPfluor, dDNA, dtube),
+            dim=-1,
+        )
+
 
 class MethaneGlobal4Step_NO_Scaffold(MechanisticScaffold):
     """
@@ -1958,6 +2343,13 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "kovacs_7": KovacsMethaneSRPScaffold(),
     "txtl_resource_and_maturation_dna_bleach": TXTLResourceandMaturationDNABleachScaffold(),
     "txtl_maturation_only_dna": TXTLMaturationOnly7Scaffold(),
+    # Scaffolds from new_scaffolds.tex (Models 3, 4, 7, 8, 9; Model 5 is
+    # already the txtl_resource_and_maturation_dna entry above).
+    "txtl_model3_two_state":        TXTLModel3_TwoStateScaffold(),
+    "txtl_model4_three_state":      TXTLModel4_ThreeStateScaffold(),
+    "txtl_model7_boundary_gated":   TXTLModel7_BoundaryGatedScaffold(),
+    "txtl_model8_reagent_resource": TXTLModel8_ReagentResourceScaffold(),
+    "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),

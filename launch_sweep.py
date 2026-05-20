@@ -60,11 +60,19 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import os
 import subprocess
+import time
 from collections import defaultdict
 from pathlib import Path
 
 import yaml
+
+try:
+    import psutil  # type: ignore
+    _has_psutil = True
+except ImportError:
+    _has_psutil = False
 
 
 RESERVED_RUN_KEYS = {"base_config", "env", "exp_name", "time", "train_script"}
@@ -155,9 +163,13 @@ def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
         # which YAML parses as float, unlike JSON's "1e-08" which YAML reads as
         # string), strip internal whitespace, and single-quote so the shell
         # passes them through as one --set arg.
-        if isinstance(val, (list, tuple)):
-            s = yaml.safe_dump(list(val), default_flow_style=True).strip()
-            return "'" + s.replace(" ", "") + "'"
+        if isinstance(val, (list, tuple, dict)):
+            # Single-quote the whole flow-style YAML so the shell passes it as one
+            # arg. Don't strip internal spaces — YAML needs "key: value" with a
+            # space after the colon to parse dicts correctly.
+            payload = list(val) if isinstance(val, tuple) else val
+            s = yaml.safe_dump(payload, default_flow_style=True).strip()
+            return "'" + s + "'"
         return str(val)
 
     # Fixed params from spec (not already in run)
@@ -244,7 +256,9 @@ def submit_batch(
 
 def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env: str = DEFAULT_ENV, endpoint_r2: bool = False) -> str:
     dep = ":".join(job_ids)
-    export = f"ALL,STUDY={study},ENV={env}"
+    # Always send compare to thesis_env — compare/metric scripts live in the
+    # thesis_env install (matplotlib, numpy, etc.); mamba_env is training-only.
+    export = f"ALL,STUDY={study},ENV=thesis_env"
     if endpoint_r2:
         export += ",ENDPOINT_R2=1"
     args = [
@@ -265,6 +279,78 @@ def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env
     return result.stdout.strip().split()[-1]
 
 
+# ── local runner ──────────────────────────────────────────────────────────────
+
+def _free_gb() -> float:
+    if not _has_psutil:
+        return float("inf")
+    return psutil.virtual_memory().available / (1024 ** 3)
+
+
+def run_local(
+    runs: list[dict],
+    spec: dict,
+    out_root: str,
+    study: str,
+    max_parallel: int,
+    min_free_gb: float,
+    poll_seconds: float = 2.0,
+) -> int:
+    """Run training commands on this machine, keeping <=max_parallel concurrent.
+
+    If psutil is installed and min_free_gb > 0, also blocks new launches until
+    available RAM exceeds min_free_gb. The conda env must already be active in
+    the parent shell (we just `os.execvp`-style invoke `python ...`).
+    """
+    log_dir = Path(f"slurm_outputs/{study}")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    queue = [(build_train_cmd(spec, run, out_root), exp_label(build_train_cmd(spec, run, out_root))) for run in runs]
+    running: list[tuple[subprocess.Popen, str, "object"]] = []
+    failures = 0
+    done = 0
+    total = len(queue)
+
+    print(f"Local mode: {total} run(s), max_parallel={max_parallel}, "
+          f"min_free_gb={min_free_gb} (psutil={'yes' if _has_psutil else 'no'})")
+    print()
+
+    while queue or running:
+        # Reap finished.
+        still = []
+        for p, label, log in running:
+            rc = p.poll()
+            if rc is None:
+                still.append((p, label, log))
+                continue
+            log.close()
+            done += 1
+            mark = "✓" if rc == 0 else "✗"
+            if rc != 0:
+                failures += 1
+            print(f"  {mark}  {label}  rc={rc}  ({done}/{total} done, {failures} failed)")
+        running = still
+
+        # Start as many as the slots/RAM allow.
+        while queue and len(running) < max_parallel:
+            if min_free_gb > 0 and _free_gb() < min_free_gb:
+                break  # wait for more RAM before starting another
+            cmd, label = queue.pop(0)
+            log_path = log_dir / f"local_{label}.log"
+            log = open(log_path, "w")
+            log.write(f"$ {cmd}\n\n"); log.flush()
+            p = subprocess.Popen(cmd, shell=True, stdout=log, stderr=subprocess.STDOUT)
+            running.append((p, label, log))
+            print(f"  →  started {label}  (pid {p.pid})  log: {log_path}")
+
+        if running:
+            time.sleep(poll_seconds)
+
+    print()
+    print(f"Done. {done - failures}/{total} succeeded, {failures} failed. Logs in {log_dir}/")
+    return failures
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -273,6 +359,20 @@ def main() -> None:
     parser.add_argument("--out-root", default="experiments")
     parser.add_argument("--dry-run", action="store_true", help="Print without submitting")
     parser.add_argument("--no-compare", action="store_true", help="Skip the NRMSE compare job")
+    parser.add_argument(
+        "--local", action="store_true",
+        help="Run on this machine (no SLURM). Useful for Mac/MPS. "
+             "Activate your conda env first; this just spawns `python ...`."
+    )
+    parser.add_argument(
+        "--max-parallel", type=int, default=2,
+        help="Local mode: how many runs to keep going at once (default: 2)."
+    )
+    parser.add_argument(
+        "--min-free-gb", type=float, default=0.0,
+        help="Local mode: wait to start a new run until available RAM "
+             "exceeds this (GB). 0 disables. Needs `pip install psutil`."
+    )
     args = parser.parse_args()
 
     spec = load_spec(args.spec)
@@ -280,6 +380,24 @@ def main() -> None:
     runs_per_job = int(spec.get("runs_per_job", 3))
 
     runs = get_runs(spec)
+
+    if args.local:
+        if args.dry_run:
+            print(f"Study      : {study}")
+            print(f"Spec       : {args.spec}  (local mode, dry run)")
+            print(f"Runs       : {len(runs)}  max_parallel={args.max_parallel}  min_free_gb={args.min_free_gb}")
+            print()
+            for run in runs:
+                cmd = build_train_cmd(spec, run, args.out_root)
+                print(f"  {exp_label(cmd)}: {cmd}")
+            return
+        rc = run_local(
+            runs, spec, args.out_root, study,
+            max_parallel=int(args.max_parallel),
+            min_free_gb=float(args.min_free_gb),
+        )
+        raise SystemExit(0 if rc == 0 else 1)
+
     batches = make_batches(runs, runs_per_job)
 
     n_runs = sum(len(b) for b in batches)

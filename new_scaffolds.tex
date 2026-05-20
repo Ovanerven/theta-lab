@@ -1,0 +1,1233 @@
+\documentclass[11pt]{article}
+
+% -----------------------------------------------------------------------------
+% TXTL MODEL LADDER DOCUMENT
+% -----------------------------------------------------------------------------
+% Purpose:
+% This document defines a practical sequence of TXTL models, from simple
+% baselines to oxygen-aware mechanistic encoders. It is written as an
+% implementation guide for students running AI/model-selection experiments.
+% -----------------------------------------------------------------------------
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{multirow}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\TX}{\mathrm{TX}}
+\newcommand{\TL}{\mathrm{TL}}
+\newcommand{\degm}{\mathrm{deg,m}}
+\newcommand{\degp}{\mathrm{deg,p}}
+\newcommand{\dark}{\mathrm{dark}}
+\newcommand{\fluor}{\mathrm{fluor}}
+\newcommand{\obs}{\mathrm{obs}}
+\newcommand{\open}{\mathrm{open}}
+\newcommand{\met}{\mathrm{met}}
+\newcommand{\expr}{\mathrm{expr}}
+\newcommand{\BCE}{\mathrm{BCE}}
+\newcommand{\summary}{\mathrm{summary}}
+
+\title{A Stepwise Model Ladder for Time-Programmed TXTL Experiments}
+\author{Working document}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+This document defines a practical sequence of nine models for time-programmed cell-free transcription--translation (TXTL) experiments. The goal is to start from very simple baselines and gradually add the mechanisms needed to explain the data. Each model should be implemented as written before moving to the next model.
+
+The central question is:
+\begin{quote}
+Which level of model complexity is needed to explain mRNA production, protein production, reaction shutdown, no-expression boundaries, and oxygen-dependent protein maturation?
+\end{quote}
+
+The nine models are:
+\begin{enumerate}[leftmargin=*]
+    \item Static endpoint baseline.
+    \item Direct sequence-to-trajectory baseline.
+    \item Two-state observable ODE.
+    \item Three-state transcription--translation--maturation ODE.
+    \item Seven-state reduced TXTL ODE.
+    \item History-conditioned seven-state mechanistic encoder.
+    \item Boundary-aware no-expression model.
+    \item Explicit reagent-resource model.
+    \item Oxygen-limited dark-protein maturation model.
+\end{enumerate}
+
+Models 1--2 are non-mechanistic baselines. Models 3--5 are increasingly detailed ODE baselines. Model 6 is the current mechanistic-encoder style model. Model 7 uses synthetic no-expression examples. Model 8 connects the supplied reagents to resource states. Model 9 uses the tube-opening data to separate protein synthesis from fluorescence maturation.
+
+\section{Shared data notation}
+
+For each experiment $i$, the data consist of an input trajectory and two measured output trajectories:
+\begin{equation}
+    u_i(t) \in \mathbb{R}^{d_u},
+    \qquad
+    y_i(t)=
+    \begin{bmatrix}
+        M_{\obs,i}(t) \\
+        P_{\obs,i}(t)
+    \end{bmatrix}.
+\end{equation}
+Here $M_{\obs}(t)$ is the measured mRNA reporter signal and $P_{\obs}(t)$ is the measured fluorescent protein signal.
+
+The input vector $u(t)$ contains the time-programmed additions. In the current TXTL setting these include some or all of:
+\begin{equation}
+    u(t)=
+    \begin{bmatrix}
+        u_{\mathrm{PEG}}(t),
+        u_{\mathrm{AA}}(t),
+        u_{\mathrm{NTP}}(t),
+        u_{\mathrm{Mg}}(t),
+        u_{\mathrm{K}}(t),
+        u_{\mathrm{T7}}(t),
+        u_{\mathrm{feed}}(t),
+        u_{\mathrm{maltose}}(t),
+        u_{\mathrm{DNA}}(t),
+        u_{\open}(t)
+    \end{bmatrix}^{\top}.
+\end{equation}
+The opening-tube input $u_{\open}(t)$ is only used for the oxygen experiments. It is zero unless the tube is opened.
+
+For all ODE models, bolus additions can be represented in either of two equivalent ways:
+\begin{enumerate}[leftmargin=*]
+    \item as narrow pulses in $u(t)$, or
+    \item as instantaneous state jumps.
+\end{enumerate}
+For a state $X$ that receives a bolus input at time $t_b$, the jump form is
+\begin{equation}
+    X(t_b^+) = X(t_b^-) + u_X(t_b).
+\end{equation}
+
+\section{Global encoder experiments}
+\label{sec:global_encoder_experiments}
+
+All encoder-based models should be run with the same two implementation experiments. These are not separate biological models; they are architectural checks.
+
+\subsection{Experiment A: include normalized time as an encoder input}
+
+The encoder normally receives the input and observed-output history:
+\begin{equation}
+    h_n = F_\phi\left(u_{0:n},y_{0:n}\right).
+\end{equation}
+In the time-aware version, concatenate normalized time
+\begin{equation}
+    \tau_n = \frac{t_n}{T}\in[0,1]
+\end{equation}
+to the encoder input:
+\begin{equation}
+    h_n = F_\phi\left(u_{0:n},y_{0:n},\tau_{0:n}\right).
+\end{equation}
+This tests whether the model benefits from knowing the age of the reaction explicitly.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Encoder input at time $t_n$ & Output & Purpose \\
+\midrule
+A1 & $[u_n,y_n]$ & model-specific kinetic vector & Tests history alone. \\
+A2 & $[u_n,y_n,\tau_n]$ & model-specific kinetic vector & Tests explicit reaction age. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Experiment B: output only six kinetic vectors over the experiment}
+
+The dense encoder version outputs a kinetic vector at every time point:
+\begin{equation}
+    \theta_n = r_\psi(h_n),
+    \qquad n=0,\ldots,N.
+\end{equation}
+This can be very flexible. The sparse version forces the model to output only $K$ kinetic vectors for the full experiment. Use $K=6$ as the default.
+
+Choose six anchor times:
+\begin{equation}
+    0=s_1<s_2<s_3<s_4<s_5<s_6=T.
+\end{equation}
+For a 12 hour experiment, use for example
+\begin{equation}
+    s=(0,2.4,4.8,7.2,9.6,12.0)\ \mathrm{h}.
+\end{equation}
+The model outputs
+\begin{equation}
+    \theta^{(1)},\theta^{(2)},\ldots,\theta^{(6)}.
+\end{equation}
+During ODE integration, define $\theta(t)$ either as piecewise constant,
+\begin{equation}
+    \theta(t)=\theta^{(k)}
+    \qquad \text{for } t\in[s_k,s_{k+1}),
+\end{equation}
+or linearly interpolated,
+\begin{equation}
+    \theta(t)=
+    \frac{s_{k+1}-t}{s_{k+1}-s_k}\theta^{(k)}
+    +
+    \frac{t-s_k}{s_{k+1}-s_k}\theta^{(k+1)}.
+\end{equation}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Number of kinetic vectors & Interpolation & Purpose \\
+\midrule
+B1 & one per time point & none & Maximum flexibility. \\
+B2 & six per experiment & piecewise constant & Stage-like reaction phases. \\
+B3 & six per experiment & linear interpolation & Smooth low-dimensional kinetics. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Model 1: static endpoint baseline}
+
+\subsection{Question}
+Can the final outcomes be predicted from a static summary of the input recipe?
+
+\subsection{Step 1: convert each input program into summary features}
+
+For each input channel $j$, compute:
+\begin{align}
+    a_j &= \sum_n u_j(t_n), &&\text{total amount added}, \\
+    f_j &= \min\{t_n: u_j(t_n)>0\}, &&\text{first addition time}, \\
+    \ell_j &= \max\{t_n: u_j(t_n)>0\}, &&\text{last addition time}, \\
+    e_j &= \sum_{t_n<2\mathrm{h}}u_j(t_n), &&\text{early amount}, \\
+    l_j &= \sum_{t_n\geq 2\mathrm{h}}u_j(t_n), &&\text{late amount}.
+\end{align}
+Collect all features into one vector:
+\begin{equation}
+    \xi_i = \left(a_1,f_1,\ell_1,e_1,l_1,\ldots,a_{d_u},f_{d_u},\ell_{d_u},e_{d_u},l_{d_u}\right).
+\end{equation}
+
+\subsection{Step 2: predict endpoint observables}
+
+Predict final protein and maximum mRNA:
+\begin{align}
+    \widehat{P}_{\final,i} &= g_\psi(\xi_i), \\
+    \widehat{M}_{\max,i} &= q_\psi(\xi_i).
+\end{align}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Model & Target & Purpose \\
+\midrule
+1A & Ridge regression & $P_{\final}$, $M_{\max}$ & Linear baseline. \\
+1B & Random forest or XGBoost & $P_{\final}$, $M_{\max}$ & Nonlinear static baseline. \\
+1C & Small MLP & $P_{\final}$, $M_{\max}$ & Neural static baseline. \\
+1D & Small MLP with classifier head & $P_{\final}$, $M_{\max}$, $z_{\expr}$ & Adds no-expression prediction. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model is expected to be weaker than time-resolved models. It tests whether TXTL can be treated as a static recipe-to-yield mapping. If it performs surprisingly well, then most variation is explained by total reagent composition rather than timing.
+
+\section{Model 2: direct sequence-to-trajectory baseline}
+
+\subsection{Question}
+Can a black-box sequence model predict the full mRNA and protein trajectories directly from the input program?
+
+\subsection{Step 1: define the sequence model}
+
+The model receives the input sequence and predicts the output sequence:
+\begin{equation}
+    \widehat{y}_{0:N}=G_\psi(u_{0:N}).
+\end{equation}
+Here
+\begin{equation}
+    \widehat{y}_n=
+    \begin{bmatrix}
+        \widehat{M}_{\obs}(t_n)\\
+        \widehat{P}_{\obs}(t_n)
+    \end{bmatrix}.
+\end{equation}
+
+\subsection{Step 2: optional autoregressive version}
+
+A stronger sequence model can use teacher forcing during training:
+\begin{equation}
+    \widehat{y}_{n+1}=G_\psi(u_{0:n},y_{0:n}).
+\end{equation}
+At test time, the model receives its own previous predictions:
+\begin{equation}
+    \widehat{y}_{n+1}=G_\psi(u_{0:n},\widehat{y}_{0:n}).
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Architecture & Input & Purpose \\
+\midrule
+2A & GRU & $u_{0:N}$ & Simple recurrent baseline. \\
+2B & GRU autoregressive & $u_{0:n},y_{0:n}$ & Tests whether output history helps. \\
+2C & LSTM autoregressive & $u_{0:n},y_{0:n}$ & Checks recurrent architecture sensitivity. \\
+2D & Transformer or Mamba & $u_{0:n},y_{0:n}$ & Long-memory black-box baseline. \\
+2E & GRU with time input & $u_{0:n},y_{0:n},\tau_{0:n}$ & Tests explicit reaction age. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model may fit trajectories well inside the training distribution, but it does not expose transcription, translation, resource depletion, or maturation. It is a performance baseline, not a mechanistic explanation.
+
+\section{Model 3: two-state observable ODE}
+
+\subsection{Question}
+Can the measured data be explained by only mRNA and fluorescent protein states?
+
+\subsection{Step 1: define the states}
+
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        M(t)\\
+        P(t)
+    \end{bmatrix},
+\end{equation}
+where $M(t)$ is measured mRNA and $P(t)$ is measured fluorescent protein.
+
+\subsection{Step 2: define the ODE}
+
+The minimal transcription--translation model is
+\begin{align}
+    \frac{dM}{dt} &= v_{\TX}(t)-k_M M, \\
+    \frac{dP}{dt} &= v_{\TL}(t)M-k_P P.
+\end{align}
+Here $v_{\TX}(t)$ is the effective transcription drive and $v_{\TL}(t)$ is the effective translation drive.
+
+\subsection{Step 3: define the observation model}
+
+\begin{equation}
+    \widehat{y}(t)=
+    \begin{bmatrix}
+        M(t)\\
+        P(t)
+    \end{bmatrix}.
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & How to define $v_{\TX}(t)$ and $v_{\TL}(t)$ & Model output & Purpose \\
+\midrule
+3A & one learned value per experiment & $M(t),P(t)$ & Simplest ODE baseline. \\
+3B & function of input summaries $g(u_{\summary})$ & $M(t),P(t)$ & Tests recipe-level kinetic changes. \\
+3C & encoder from input/output history & $M(t),P(t)$ and kinetic trajectories & Minimal mechanistic encoder. \\
+3D & encoder with time input & $M(t),P(t)$ and kinetic trajectories & Tests explicit reaction age. \\
+3E & six kinetic vectors over time & $M(t),P(t)$ and six kinetic stages & Tests low-dimensional reaction phases. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model is intentionally too simple. It cannot represent immature mRNA, immature protein, resource depletion, or dark protein. If the opening-tube data show a jump in fluorescent protein after oxygen exposure, this model should fail because it assumes that measured fluorescent protein is the total protein state.
+
+\section{Model 4: three-state transcription--translation--maturation ODE}
+
+\subsection{Question}
+Is one hidden immature protein state enough to explain delayed protein fluorescence?
+
+\subsection{Step 1: define the states}
+
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        M(t)\\
+        P_{\mathrm{imm}}(t)\\
+        P_{\fluor}(t)
+    \end{bmatrix},
+\end{equation}
+where $P_{\mathrm{imm}}$ is translated but not yet fluorescent protein and $P_{\fluor}$ is mature fluorescent protein.
+
+\subsection{Step 2: define the ODE}
+
+\begin{align}
+    \frac{dM}{dt} &= v_{\TX}(t)-k_M M, \\
+    \frac{dP_{\mathrm{imm}}}{dt} &= v_{\TL}(t)M-k_{\mat}P_{\mathrm{imm}}-k_{\degp}P_{\mathrm{imm}}, \\
+    \frac{dP_{\fluor}}{dt} &= k_{\mat}P_{\mathrm{imm}}.
+\end{align}
+
+\subsection{Step 3: define the observation model}
+
+\begin{equation}
+    \widehat{y}(t)=
+    \begin{bmatrix}
+        M(t)\\
+        P_{\fluor}(t)
+    \end{bmatrix}.
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Kinetic drive & Output & Purpose \\
+\midrule
+4A & one learned kinetic trajectory for transcription and translation & $M,P_{\mathrm{imm}},P_{\fluor}$ & Tests delayed maturation. \\
+4B & encoder predicts all kinetic drives in the three-state ODE & $M,P_{\mathrm{imm}},P_{\fluor}$ & More flexible three-state model. \\
+4C & encoder with time input & $M,P_{\mathrm{imm}},P_{\fluor}$ & Tests reaction-age information. \\
+4D & six kinetic vectors over time & $M,P_{\mathrm{imm}},P_{\fluor}$ & Tests stage-like maturation. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model tests whether simple maturation delay explains protein trajectories. It still does not distinguish ordinary maturation from oxygen-limited fluorescence maturation. That distinction is introduced in Model 9.
+
+\section{Model 5: seven-state reduced TXTL ODE}
+
+\subsection{Question}
+Can a compact TXTL scaffold explain transcription, mRNA maturation, translation, protein maturation, resource depletion, and activity decay?
+
+\subsection{Step 1: define the states}
+
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        R(t)\\
+        O(t)\\
+        m(t)\\
+        m_m(t)\\
+        p(t)\\
+        p_m(t)\\
+        D(t)
+    \end{bmatrix}.
+\end{equation}
+The states are:
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+State & Name & Meaning \\
+\midrule
+$R$ & resource/activity & generic TXTL resource capacity. \\
+$O$ & maturation activity & generic activity required for protein maturation. \\
+$m$ & immature mRNA & newly transcribed but not yet mature mRNA reporter. \\
+$m_m$ & mature mRNA & observed mRNA reporter state. \\
+$p$ & immature protein & translated but not yet mature fluorescent protein. \\
+$p_m$ & mature protein & observed fluorescent protein state. \\
+$D$ & DNA template & available or cumulative DNA template. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Step 2: define the ODE}
+
+\begin{align}
+    \frac{dR}{dt} &= -\lambda R, \\
+    \frac{dO}{dt} &= -\lambda_O O, \\
+    \frac{dm}{dt} &= R V_{\TX}D-(k_{dm}+k_{matm})m, \\
+    \frac{dm_m}{dt} &= k_{matm}m-k_{dm}m_m, \\
+    \frac{dp}{dt} &= R V_{\TL}(m+m_m)-k_{mt}p, \\
+    \frac{dp_m}{dt} &= O k_{mt}p.
+\end{align}
+
+\subsection{Step 3: define the observation model}
+
+\begin{equation}
+    \widehat{y}(t)=
+    \begin{bmatrix}
+        m_m(t)\\
+        p_m(t)
+    \end{bmatrix}.
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Kinetic parameter source & Output & Purpose \\
+\midrule
+5A & one shared kinetic vector for all experiments & seven-state trajectory & Tests one global TXTL regime. \\
+5B & one kinetic vector per experiment & seven-state trajectory & Tests recipe-specific TXTL regimes. \\
+5C & kinetic vector predicted from input summaries & seven-state trajectory & Tests static input-conditioned kinetics. \\
+5D & kinetic vector predicted from full input history & seven-state trajectory & Tests dynamic input-conditioned kinetics. \\
+5E & six kinetic vectors over time & seven-state trajectory & Tests stage-like TXTL kinetics. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This is the main reduced mechanistic scaffold. It should outperform Models 3--4 if mRNA maturation, protein maturation, and resource/activity depletion matter. It still uses generic resource variables, so it does not yet say which reagent causes which change.
+
+\section{Model 6: history-conditioned seven-state mechanistic encoder}
+
+\subsection{Question}
+Can the input and output history be mapped to a time-resolved kinetic vector that improves prediction while keeping the seven-state TXTL scaffold? 
+
+\subsection{Step 1: use the seven-state ODE}
+
+The state vector is the same as in Model 5:
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        R,O,m,m_m,p,p_m,D
+    \end{bmatrix}^{\top}.
+\end{equation}
+The ODE is written in the compact form
+\begin{equation}
+    \frac{dx}{dt}=f_{\mathrm{TXTL}}(x(t),u(t);\theta(t)).
+\end{equation}
+Here $f_{\mathrm{TXTL}}$ is the seven-state vector field from Model 5.
+
+\subsection{Step 2: define the kinetic vector}
+
+Use the kinetic vector
+\begin{equation}
+    \theta(t)=
+    \begin{bmatrix}
+        \lambda(t),
+        \lambda_O(t),
+        V_{\TX}(t),
+        k_{dm}(t),
+        V_{\TL}(t),
+        k_{mt}(t),
+        k_{matm}(t)
+    \end{bmatrix}^{\top}.
+\end{equation}
+
+\subsection{Step 3: define the encoder}
+
+At time $t_n$, the encoder reads the history:
+\begin{equation}
+    h_n=F_\phi(u_{0:n},y_{0:n}).
+\end{equation}
+The kinetic vector is produced by a bounded readout:
+\begin{equation}
+    \theta_n = \theta_{\min}+\left(\theta_{\max}-\theta_{\min}\right)\sigma(W h_n+b).
+\end{equation}
+Then solve the ODE using $\theta(t)$.
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Encoder design & Kinetic output & Purpose \\
+\midrule
+6A & GRU encoder & dense $\theta(t)$ & Main mechanistic encoder. \\
+6B & GRU encoder with time input & dense $\theta(t)$ & Tests explicit reaction age. \\
+6C & GRU encoder & six $\theta$ vectors & Tests low-dimensional kinetic stages. \\
+6D & GRU encoder with time input & six $\theta$ vectors & Tests time-aware kinetic stages. \\
+6E & LSTM, Transformer, or Mamba encoder & dense or six-vector $\theta$ & Tests encoder architecture. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model tests the core mechanistic-encoder hypothesis: unresolved TXTL processes can be represented as history-dependent changes in an interpretable kinetic vector.
+
+\section{Model 7: boundary-aware no-expression model}
+
+\subsection{Question}
+Can the model learn conditions where TXTL expression is impossible or strongly inhibited?
+
+\subsection{Step 1: define an expression gate}
+
+Introduce a gate
+\begin{equation}
+    g_{\expr}(t)\in[0,1].
+\end{equation}
+This gate multiplies the expression channels. A value near zero means that expression is not possible under the current input regime.
+
+For a first implementation, define
+\begin{equation}
+    g_{\expr}(t)=g_D(t)g_{T7}(t)g_{NTP}(t)g_{AA}(t)g_{Mg}(t)g_K(t).
+\end{equation}
+Here each $g_j(t)$ is a smooth gate for one required or inhibitory component.
+
+For a required component, use
+\begin{equation}
+    g_j(t)=\frac{X_j(t)}{K_j+X_j(t)}.
+\end{equation}
+For a component that is needed but inhibitory in excess, use
+\begin{equation}
+    g_j(t)=
+    \frac{X_j(t)}{K_j+X_j(t)}
+    \cdot
+    \frac{1}{1+\left(\frac{X_j(t)}{K_{\mathrm{inh},j}}\right)^{n_j}}.
+\end{equation}
+
+\subsection{Step 2: add the gate to the seven-state ODE}
+
+Use the seven-state TXTL scaffold, but multiply the production channels:
+\begin{align}
+    \frac{dR}{dt} &= -\lambda R, \\
+    \frac{dO}{dt} &= -\lambda_O O, \\
+    \frac{dm}{dt} &= g_{\expr}(t) R V_{\TX}D-(k_{dm}+k_{matm})m, \\
+    \frac{dm_m}{dt} &= k_{matm}m-k_{dm}m_m, \\
+    \frac{dp}{dt} &= g_{\expr}(t) R V_{\TL}(m+m_m)-k_{mt}p, \\
+    \frac{dp_m}{dt} &= g_{\expr}(t) O k_{mt}p.
+\end{align}
+
+\subsection{Step 3: add a no-expression loss}
+
+Synthetic no-expression data receive the label
+\begin{equation}
+    z_{\expr}=0.
+\end{equation}
+Real expression data receive
+\begin{equation}
+    z_{\expr}=1.
+\end{equation}
+Train the model with
+\begin{equation}
+    \mathcal{L}=\mathcal{L}_{\mathrm{traj}}+\beta\mathcal{L}_{\mathrm{boundary}}.
+\end{equation}
+The boundary loss can be a classification loss,
+\begin{equation}
+    \mathcal{L}_{\mathrm{boundary}}
+    =\BCE(\widehat{z}_{\expr},z_{\expr}),
+\end{equation}
+or a zero-trajectory loss for synthetic no-expression examples,
+\begin{equation}
+    \mathcal{L}_{\mathrm{zero}}
+    =
+    \sum_{i\in\mathcal{D}_{\mathrm{zero}}}\sum_n
+    \left(\widehat{M}_i(t_n)^2+\widehat{P}_i(t_n)^2\right).
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Gate design & Kinetic output & Purpose \\
+\midrule
+7A & rule-based gates & one kinetic vector per experiment & Tests hand-coded no-expression boundaries. \\
+7B & smooth learned gates & one kinetic vector per experiment & Learns boundary thresholds. \\
+7C & learned gates + encoder & dense $\theta(t)$ & Combines feasibility with history-dependent kinetics. \\
+7D & learned gates + time-aware encoder & dense $\theta(t)$ & Tests reaction-age information. \\
+7E & learned gates + sparse kinetics & six $\theta$ vectors & Interpretable boundary-aware stages. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model should prevent the encoder from trying to explain impossible reactions with strange kinetic values. It uses the synthetic no-expression data to define where TXTL cannot occur.
+
+\section{Model 8: explicit reagent-resource model}
+
+\subsection{Question}
+Can the controlled reagents be linked to interpretable internal resource states?
+
+\subsection{Step 1: define the resource states}
+
+Use the state vector
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        E(t),
+        A(t),
+        T(t),
+        Mg(t),
+        K(t),
+        C(t),
+        W(t),
+        m(t),
+        m_m(t),
+        p(t),
+        p_m(t),
+        D(t)
+    \end{bmatrix}^{\top}.
+\end{equation}
+The states are:
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+State & Meaning & Main input relation \\
+\midrule
+$E$ & energy/NTP/feed capacity & NTPs, feeding buffer, maltose. \\
+$A$ & amino-acid capacity & amino-acid input. \\
+$T$ & active T7 RNA polymerase & T7 input. \\
+$Mg$ & magnesium state & magnesium glutamate input. \\
+$K$ & potassium state & potassium glutamate input. \\
+$C$ & crowding state & PEG input. \\
+$W$ & inhibitory waste/byproduct state & generated during TXTL. \\
+$m,m_m,p,p_m,D$ & TXTL species & as in Model 5. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Step 2: define resource dynamics}
+
+\begin{align}
+    \frac{dE}{dt} &= u_{\mathrm{NTP}}(t)+u_{\mathrm{feed}}(t)+\eta_{\mathrm{mal}}u_{\mathrm{maltose}}(t)
+    -c_{E,\TX}v_{\TX}-c_{E,\TL}v_{\TL}-k_EE, \\
+    \frac{dA}{dt} &= u_{\mathrm{AA}}(t)-c_Av_{\TL}-k_AA, \\
+    \frac{dT}{dt} &= u_{\mathrm{T7}}(t)-k_TT, \\
+    \frac{dW}{dt} &= b_{\TX}v_{\TX}+b_{\TL}v_{\TL}-k_WW.
+\end{align}
+Bolus inputs for $Mg$, $K$, $C$, and $D$ can be represented as state jumps.
+
+\subsection{Step 3: define transcription and translation rates}
+
+Transcription:
+\begin{equation}
+    v_{\TX}
+    =
+    \alpha_{\TX}(t)
+    D T
+    f_E(E)
+    f_{Mg,\TX}(Mg)
+    f_{K,\TX}(K)
+    f_C(C)
+    f_W(W).
+\end{equation}
+Translation:
+\begin{equation}
+    v_{\TL}
+    =
+    \alpha_{\TL}(t)
+    (m+m_m)
+    f_A(A)
+    f_E(E)
+    f_{Mg,\TL}(Mg)
+    f_{K,\TL}(K)
+    f_C(C)
+    f_W(W).
+\end{equation}
+Use simple saturating terms first:
+\begin{equation}
+    f_E(E)=\frac{E}{K_E+E},
+    \qquad
+    f_A(A)=\frac{A}{K_A+A}.
+\end{equation}
+Use inhibitory terms where needed:
+\begin{equation}
+    f_W(W)=\frac{1}{1+W/K_W}.
+\end{equation}
+For Mg or K, use a peaked response if too little and too much are both bad:
+\begin{equation}
+    f_{Mg}(Mg)=
+    \frac{Mg}{K_{Mg}+Mg}
+    \cdot
+    \frac{1}{1+\left(\frac{Mg}{K_{\mathrm{inh},Mg}}\right)^{n_{Mg}}}.
+\end{equation}
+
+\subsection{Step 4: define TXTL species equations}
+
+\begin{align}
+    \frac{dm}{dt} &= v_{\TX}-(k_{dm}+k_{matm})m, \\
+    \frac{dm_m}{dt} &= k_{matm}m-k_{dm}m_m, \\
+    \frac{dp}{dt} &= v_{\TL}-k_{mt}p, \\
+    \frac{dp_m}{dt} &= k_{mt}p.
+\end{align}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Resource detail & Encoder output & Purpose \\
+\midrule
+8A & $E,A,T$ only & $\alpha_{\TX}(t),\alpha_{\TL}(t)$ & Minimal explicit-resource model. \\
+8B & add $Mg$ and $K$ & $\alpha_{\TX}(t),\alpha_{\TL}(t)$ & Tests salt and ion effects. \\
+8C & add PEG/crowding $C$ & $\alpha_{\TX}(t),\alpha_{\TL}(t)$ & Tests crowding effects. \\
+8D & add waste $W$ & $\alpha_{\TX}(t),\alpha_{\TL}(t)$ & Tests shutdown and inhibition. \\
+8E & full resource model with six kinetic vectors & six values for $\alpha_{\TX}$ and $\alpha_{\TL}$ & Interpretable resource stages. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Expected outcome}
+
+This model is harder to fit than the seven-state model but gives a more biochemical interpretation. It should be used to test which controlled inputs affect transcription, translation, inhibition, or shutdown.
+
+\section{Model 9: oxygen-limited dark-protein maturation model}
+
+\subsection{Question}
+Does low measured fluorescent protein mean low translation, or does it mean that translated protein accumulated in a non-fluorescent dark state until oxygen was introduced?
+
+\subsection{Step 1: define the states}
+
+\begin{equation}
+    x(t)=
+    \begin{bmatrix}
+        R(t),
+        O_2(t),
+        m(t),
+        m_m(t),
+        p(t),
+        P_{\dark}(t),
+        P_{\fluor}(t),
+        D(t)
+    \end{bmatrix}^{\top}.
+\end{equation}
+The key new states are:
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+State & Meaning & Why it matters \\
+\midrule
+$O_2$ & oxygen / oxygen-dependent maturation capacity & increases after tube opening. \\
+$P_{\dark}$ & translated but non-fluorescent protein & hidden pool revealed by oxygen. \\
+$P_{\fluor}$ & fluorescent mature protein & measured protein signal. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Step 2: define transcription and translation}
+
+Use the same basic transcription and translation structure as the seven-state model:
+\begin{align}
+    \frac{dR}{dt} &= -\lambda R, \\
+    \frac{dm}{dt} &= R V_{\TX}(t)D-(k_{dm}+k_{matm})m, \\
+    \frac{dm_m}{dt} &= k_{matm}m-k_{dm}m_m, \\
+    \frac{dp}{dt} &= R V_{\TL}(t)(m+m_m)-k_{fold}p-k_{\degp}p.
+\end{align}
+Here $p$ is nascent protein.
+
+\subsection{Step 3: split protein into dark and fluorescent states}
+
+Nascent protein folds into a dark, non-fluorescent state:
+\begin{equation}
+    \frac{dP_{\dark}}{dt}
+    =
+    k_{fold}p
+    -k_{ox}O_2P_{\dark}
+    -k_{\deg,dark}P_{\dark}.
+\end{equation}
+The dark protein becomes fluorescent in an oxygen-dependent process:
+\begin{equation}
+    \frac{dP_{\fluor}}{dt}
+    =
+    k_{ox}O_2P_{\dark}.
+\end{equation}
+
+\subsection{Step 4: define oxygen dynamics}
+
+Oxygen is replenished when the tube is opened:
+\begin{equation}
+    \frac{dO_2}{dt}
+    =
+    k_{\open}u_{\open}(t)(O_2^\ast-O_2)
+    -c_{ox}k_{ox}O_2P_{\dark}
+    -c_{\met}L_{\met}(t)O_2.
+\end{equation}
+For the first implementation, use a simple latent metabolism term:
+\begin{equation}
+    L_{\met}(t)=1.
+\end{equation}
+A more detailed version can make $L_{\met}$ input-driven:
+\begin{equation}
+    \frac{dL_{\met}}{dt}
+    =
+    a_{\mathrm{feed}}u_{\mathrm{feed}}(t)
+    +a_{\mathrm{mal}}u_{\mathrm{maltose}}(t)
+    +a_{\mathrm{AA}}u_{\mathrm{AA}}(t)
+    -k_LL_{\met}.
+\end{equation}
+
+\subsection{Step 5: define the observation model}
+
+The measured protein is not total protein. It is the fluorescent protein state:
+\begin{equation}
+    \widehat{y}(t)=
+    \begin{bmatrix}
+        m_m(t)\\
+        P_{\fluor}(t)
+    \end{bmatrix}.
+\end{equation}
+The total translated protein proxy is
+\begin{equation}
+    P_{\mathrm{total}}(t)=p(t)+P_{\dark}(t)+P_{\fluor}(t).
+\end{equation}
+
+\subsection{Runs}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+Run & Oxygen design & Kinetic output & Purpose \\
+\midrule
+9A & no tube-opening input & $V_{\TX}(t),V_{\TL}(t)$ & Baseline dark-protein model. \\
+9B & tube-opening input $u_{\open}(t)$ & $V_{\TX}(t),V_{\TL}(t)$ & Tests oxygen rescue. \\
+9C & tube-opening input + time-aware encoder & $V_{\TX}(t),V_{\TL}(t)$ & Tests reaction age. \\
+9D & tube-opening input + six kinetic vectors & six values for $V_{\TX}$ and $V_{\TL}$ & Tests stage-like oxygen model. \\
+9E & dynamic latent metabolism $L_{\met}(t)$ & oxygen and TXTL trajectories & Tests metabolic oxygen consumption. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Oxygen-rescue loss}
+
+For opening experiments, add a specific post-opening loss:
+\begin{equation}
+    \mathcal{L}_{\oxygen}
+    =
+    \sum_{i\in\mathcal{D}_{\open}}
+    \sum_{t_n>t_{\open,i}}
+    \left(\widehat{P}_{\fluor,i}(t_n)-P_{\obs,i}(t_n)\right)^2.
+\end{equation}
+This forces the model to explain the post-opening jump in measured protein.
+
+\subsection{Expected outcome}
+
+This is the key model for the new 200 oxygen-opening experiments. It directly tests whether protein was translated but remained non-fluorescent because oxygen-dependent maturation was limited.
+
+\section{Common loss functions}
+
+\subsection{Trajectory loss}
+
+For all trajectory models:
+\begin{equation}
+    \mathcal{L}_{\mathrm{traj}}
+    =
+    \sum_i\sum_{n\in\mathcal{T}_i}
+    \left\lVert
+    W_y\left(\widehat{y}_i(t_n)-y_i(t_n)\right)
+    \right\rVert_2^2.
+\end{equation}
+Use $W_y$ to normalize mRNA and protein to comparable scales.
+
+\subsection{Endpoint loss}
+
+Optionally add endpoint terms:
+\begin{equation}
+    \mathcal{L}_{\mathrm{endpoint}}
+    =
+    \sum_i
+    \left(\widehat{P}_{\final,i}-P_{\final,i}\right)^2
+    +
+    \sum_i
+    \left(\widehat{M}_{\max,i}-M_{\max,i}\right)^2.
+\end{equation}
+
+\subsection{Smooth kinetic loss}
+
+For models that output kinetic trajectories:
+\begin{equation}
+    \mathcal{L}_{\mathrm{smooth}}
+    =
+    \gamma
+    \sum_i\sum_n
+    \left\lVert \theta_i(t_{n+1})-\theta_i(t_n)\right\rVert_2^2.
+\end{equation}
+Do not use this loss for the six-vector model unless the six vectors are linearly interpolated.
+
+\subsection{Boundary loss}
+
+For no-expression data:
+\begin{equation}
+    \mathcal{L}_{\mathrm{boundary}}
+    =
+    \beta\BCE(\widehat{z}_{\expr},z_{\expr})
+\end{equation}
+or
+\begin{equation}
+    \mathcal{L}_{\mathrm{zero}}
+    =
+    \beta
+    \sum_{i\in\mathcal{D}_{\mathrm{zero}}}\sum_n
+    \left(\widehat{M}_i(t_n)^2+\widehat{P}_i(t_n)^2\right).
+\end{equation}
+
+\subsection{Oxygen loss}
+
+For tube-opening data:
+\begin{equation}
+    \mathcal{L}_{\mathrm{oxygen}}
+    =
+    \rho
+    \sum_{i\in\mathcal{D}_{\open}}
+    \sum_{t_n>t_{\open,i}}
+    \left(\widehat{P}_{\fluor,i}(t_n)-P_{\obs,i}(t_n)\right)^2.
+\end{equation}
+
+\subsection{Total loss}
+
+Use only the terms relevant to the model:
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{traj}}
+    +
+    \mathcal{L}_{\mathrm{endpoint}}
+    +
+    \mathcal{L}_{\mathrm{smooth}}
+    +
+    \mathcal{L}_{\mathrm{boundary}}
+    +
+    \mathcal{L}_{\mathrm{oxygen}}.
+\end{equation}
+
+\section{Implementation checklist}
+
+\begin{enumerate}[leftmargin=*]
+    \item Implement one common data loader returning $(u_{0:N},y_{0:N},t_{0:N},\mathrm{metadata})$.
+    \item Store tube opening as the extra input channel $u_{\open}(t)$.
+    \item Store synthetic no-expression data with a binary label $z_{\expr}=0$.
+    \item Use the same train/validation/test split for all models.
+    \item Start with Models 1--3 before training mechanistic encoders.
+    \item For every encoder-based model, run both versions: with and without normalized time input.
+    \item For every encoder-based model, run both versions: dense kinetic output and six-vector kinetic output.
+    \item Save predicted trajectories for every test experiment.
+    \item Save predicted kinetic vectors for every test experiment.
+    \item Plot inputs, observations, predictions, and kinetic vectors together.
+    \item Compare models by trajectory $R^2$, endpoint $R^2$, no-expression accuracy, oxygen-rescue error, and kinetic smoothness.
+\end{enumerate}
+
+\section{Recommended order of experiments}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+Order & Model & Reason \\
+\midrule
+1 & Model 1 & Establish static endpoint baseline. \\
+2 & Model 2 & Establish black-box sequence baseline. \\
+3 & Model 3 & Test minimal observable ODE. \\
+4 & Model 4 & Test whether simple maturation delay is enough. \\
+5 & Model 5 & Test compact seven-state TXTL scaffold. \\
+6 & Model 6 & Test full history-conditioned mechanistic encoder. \\
+7 & Model 7 & Add no-expression boundaries. \\
+8 & Model 9 & Use oxygen-opening experiments to identify dark protein. \\
+9 & Model 8 & Add explicit reagent-resource interpretation after the main mechanisms are validated. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Final comparison table}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lccccccX}
+\toprule
+Model & mRNA $R^2$ & Protein $R^2$ & Final $P$ $R^2$ & No-expr. score & Oxygen error & Smoothness & Interpretation \\
+\midrule
+1 Static endpoint & & & & & & & Static recipe-to-yield baseline. \\
+2 Sequence model & & & & & & & Black-box time-series baseline. \\
+3 Two-state ODE & & & & & & & Minimal observable dynamics. \\
+4 Three-state ODE & & & & & & & Simple protein maturation delay. \\
+5 Seven-state ODE & & & & & & & Compact TXTL scaffold. \\
+6 Mechanistic encoder & & & & & & & History-conditioned kinetic vector. \\
+7 Boundary model & & & & & & & Feasible versus infeasible expression. \\
+8 Resource model & & & & & & & Reagent-resource interpretation. \\
+9 Oxygen model & & & & & & & Dark protein and oxygen maturation. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+
+
+\section{Practical recommendation}
+
+The most important near-term model is Model 9, because the oxygen-opening experiments directly test whether the protein was already translated but not fluorescent. The most important control model is Model 7, because the synthetic no-expression data should define the feasible region of TXTL rather than being treated only as many zero-output trajectories.
+
+For the AI experiments, always compare dense kinetic output against the six-vector kinetic output. If six kinetic vectors perform similarly to dense output, then the reaction can be described by a small number of kinetic stages, which is easier to interpret and easier to use for experimental design.
+
+\section{Interpretability of the effective parameters}
+\label{sec:interpretable_effective_parameters}
+
+The mechanistic encoder is most useful when the learned effective parameters can be related back to specific biochemical processes. However, this interpretability is lost if the encoder is allowed to change too many kinetic parameters at once. In that case, several different parameter trajectories can explain the same measured mRNA or protein trajectory, making the model predictive but not mechanistically diagnostic.
+
+The guiding principle for this part of the model ladder is therefore:
+\begin{quote}
+A time-varying effective parameter should correspond to one dominant biological process.
+\end{quote}
+
+This means that the encoder should not initially output the full kinetic vector of the seven-state TXTL scaffold. Instead, the first interpretable model should restrict the encoder to a small set of effective parameters whose meaning is clear.
+
+\subsection{Confounding in the full seven-parameter scaffold}
+
+In the seven-state TXTL model, the full kinetic vector is
+\begin{equation}
+    \theta(t)=
+    \begin{bmatrix}
+        \lambda(t),
+        \lambda_O(t),
+        V_{\TX}(t),
+        k_{dm}(t),
+        V_{\TL}(t),
+        k_{mt}(t),
+        k_{matm}(t)
+    \end{bmatrix}^{\top}.
+\end{equation}
+
+Although this parameterization is flexible, it is not automatically interpretable. For example, a reduction in the observed mature protein signal could be explained by several different mechanisms:
+\begin{align}
+    V_{\TL}(t) \downarrow
+    &\qquad \text{lower effective translation capacity}, \\
+    k_{mt}(t) \downarrow
+    &\qquad \text{slower protein maturation}, \\
+    O(t) \downarrow
+    &\qquad \text{loss of maturation activity}, \\
+    R(t) \downarrow
+    &\qquad \text{shared resource depletion}.
+\end{align}
+
+If all of these quantities are allowed to change simultaneously, the encoder can distribute one biological effect across multiple parameters. The resulting model may predict well, but the individual parameter trajectories should not be interpreted as direct biochemical causes.
+
+\subsection{First interpretable model: transcription and translation only}
+
+The most interpretable starting point is to let the encoder output only two effective parameters:
+\begin{equation}
+    \theta_{\mathrm{eff}}(t)=
+    \begin{bmatrix}
+        V_{\TX}(t)\\
+        V_{\TL}(t)
+    \end{bmatrix}.
+\end{equation}
+
+The seven-state ODE then becomes
+\begin{align}
+    \frac{dR}{dt} &= -\lambda_0 R, \\
+    \frac{dO}{dt} &= -\lambda_{O,0} O, \\
+    \frac{dm}{dt} &= R V_{\TX}(t)D-(k_{dm,0}+k_{matm,0})m, \\
+    \frac{dm_m}{dt} &= k_{matm,0}m-k_{dm,0}m_m, \\
+    \frac{dp}{dt} &= R V_{\TL}(t)(m+m_m)-k_{mt,0}p, \\
+    \frac{dp_m}{dt} &= O k_{mt,0}p.
+\end{align}
+
+This gives the two effective parameters a direct interpretation:
+\begin{align}
+    V_{\TX}(t) &= \text{effective transcription capacity}, \\
+    V_{\TL}(t) &= \text{effective translation capacity}.
+\end{align}
+
+In this version, the remaining quantities are not outputs of the encoder. They are treated as global model quantities, calibration-derived quantities, or quantities determined directly from the input program.
+
+\subsection{Quantities to keep outside the encoder}
+
+For the first interpretable model, the following quantities should not be time-varying encoder outputs:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+Quantity & Treatment & Reason \\
+\midrule
+$R_0$ & set or globally learned & Otherwise $R_0$, $V_{\TX}$, and $V_{\TL}$ are multiplicatively confounded. \\
+$O_0$ & set or globally learned & Otherwise initial maturation capacity can absorb protein maturation effects. \\
+$\lambda$ & set or globally learned & Otherwise resource depletion and changing expression capacity cannot be separated. \\
+$\lambda_O$ & set or globally learned & Otherwise loss of maturation activity can absorb translation or oxygen effects. \\
+$k_{dm}$ & set or globally learned & Otherwise mRNA degradation can be confused with reduced transcription. \\
+$k_{matm}$ & set or globally learned & Otherwise mRNA maturation can be confused with mRNA production and decay. \\
+$k_{mt}$ & set or globally learned & Otherwise protein maturation can be confused with translation, folding delay, oxygen limitation, or measurement delay. \\
+$D(t)$ & fixed from the input program & DNA additions are known experimental inputs, not latent kinetic parameters. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Thus, the recommended first interpretable effective-parameter model is
+\begin{equation}
+    \boxed{
+    \theta_{\mathrm{eff}}(t)
+    =
+    \left(
+    V_{\TX}(t),
+    V_{\TL}(t)
+    \right)
+    }.
+\end{equation}
+
+\subsection{Second interpretable model: add shared resource activity}
+
+If the two-parameter model cannot explain late-stage shutdown or global reaction collapse, add one shared resource/activity multiplier:
+\begin{equation}
+    \theta_{\mathrm{eff}}(t)=
+    \begin{bmatrix}
+        V_{\TX}(t)\\
+        V_{\TL}(t)\\
+        \alpha_R(t)
+    \end{bmatrix}.
+\end{equation}
+
+The production equations become
+\begin{align}
+    \frac{dm}{dt}
+    &=
+    \alpha_R(t)R V_{\TX}(t)D
+    -(k_{dm,0}+k_{matm,0})m, \\
+    \frac{dp}{dt}
+    &=
+    \alpha_R(t)R V_{\TL}(t)(m+m_m)
+    -k_{mt,0}p.
+\end{align}
+
+The interpretation is
+\begin{align}
+    V_{\TX}(t) &= \text{transcription-specific capacity}, \\
+    V_{\TL}(t) &= \text{translation-specific capacity}, \\
+    \alpha_R(t) &= \text{shared TXTL resource or activity state}.
+\end{align}
+
+This model is more expressive, but it is also easier to confound $\alpha_R(t)$ with $V_{\TX}(t)$ and $V_{\TL}(t)$. Therefore, it should only be used after the two-parameter model has been tested.
+
+\subsection{Oxygen-aware interpretable model}
+
+For the tube-opening experiments, the generic protein maturation term should be replaced by explicit dark-protein and fluorescent-protein states:
+\begin{align}
+    \frac{dP_{\dark}}{dt}
+    &=
+    k_{fold}p
+    -k_{ox}O_2P_{\dark}
+    -k_{\mathrm{deg,dark}}P_{\dark}, \\
+    \frac{dP_{\fluor}}{dt}
+    &=
+    \alpha_{ox}(t)O_2P_{\dark}.
+\end{align}
+
+For this oxygen-aware model, use
+\begin{equation}
+    \theta_{\mathrm{eff}}(t)=
+    \begin{bmatrix}
+        V_{\TX}(t)\\
+        V_{\TL}(t)\\
+        \alpha_{ox}(t)
+    \end{bmatrix}.
+\end{equation}
+
+The interpretation is
+\begin{align}
+    V_{\TX}(t) &= \text{effective transcription capacity}, \\
+    V_{\TL}(t) &= \text{effective translation capacity}, \\
+    \alpha_{ox}(t) &= \text{effective oxygen-dependent maturation capacity}.
+\end{align}
+
+In this model, the encoder should not also output a generic time-varying $k_{mt}(t)$. Both $k_{mt}(t)$ and $\alpha_{ox}(t)$ would explain changes in fluorescent protein maturation, making the interpretation ambiguous.
+
+\subsection{Recommended interpretability ladder}
+
+The interpretability experiments should be run in the following order:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+Version & Effective parameter vector & Interpretation \\
+\midrule
+I1 & $\left(V_{\TX}(t),V_{\TL}(t)\right)$
+& Transcription and translation capacity only. \\
+I2 & $\left(V_{\TX}(t),V_{\TL}(t),\alpha_R(t)\right)$
+& Adds shared resource or global activity state. \\
+I3 & $\left(V_{\TX}(t),V_{\TL}(t),\alpha_{ox}(t)\right)$
+& Adds oxygen-dependent maturation for the tube-opening experiments. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The default choice should be Version I1. Versions I2 and I3 should only be introduced when the simpler model cannot explain the relevant trajectories or when the experimental perturbation directly identifies the added process.
+
+\end{document}

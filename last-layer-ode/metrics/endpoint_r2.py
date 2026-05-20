@@ -68,10 +68,15 @@ def _find_runs(root: Path) -> list[Path]:
 
 def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
                       protein_sp: str, mrna_sp: str) -> dict:
-    model, ds, obs_names, _ = rebuild_model_from_experiment(exp_dir, device)
+    model, ds, obs_names, _, lift_info = rebuild_model_from_experiment(exp_dir, device)
     subset = _split_subset(ds, exp_dir, split)
     dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
-    obs_idx = torch.arange(len(obs_names), device=device)
+    if lift_info:
+        # Scaffold layout: obs_state_idx[0]=mm slot, obs_state_idx[1]=pm slot
+        # (mirrors cfg.obs_idx convention: mRNA first, protein second).
+        obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=device, dtype=torch.long)
+    else:
+        obs_idx = torch.arange(len(obs_names), device=device)
 
     # Forward-time feature transforms (u_transform/y_transform) are kwargs on
     # ode_rnn.forward — they MUST be passed at eval time too, or the trained
@@ -86,38 +91,79 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
         "y_transform": str(cfg_local.get("y_transform", "none")),
     }
 
-    if protein_sp not in obs_names or mrna_sp not in obs_names:
-        raise ValueError(
-            f"{exp_dir.name}: species {protein_sp!r}/{mrna_sp!r} not in obs_names={obs_names}"
-        )
-    p_idx = obs_names.index(protein_sp)
-    m_idx = obs_names.index(mrna_sp)
+    if lift_info:
+        # Partial-obs scaffold: pred is in scaffold layout. By convention
+        # cfg.obs_idx = [mm_idx, pm_idx], so position 0 = mRNA, position 1 = protein
+        # in scaffold_obs_idx as well. The dataset-side y_seq is read at the
+        # source obs positions (dataset_obs_idx) for ground truth.
+        m_idx = int(lift_info["scaffold_obs_idx"][0])
+        p_idx = int(lift_info["scaffold_obs_idx"][1])
+        m_idx_data = int(lift_info["dataset_obs_idx"][0])
+        p_idx_data = int(lift_info["dataset_obs_idx"][1])
+    else:
+        if protein_sp not in obs_names or mrna_sp not in obs_names:
+            raise ValueError(
+                f"{exp_dir.name}: species {protein_sp!r}/{mrna_sp!r} not in obs_names={obs_names}"
+            )
+        p_idx = obs_names.index(protein_sp)
+        m_idx = obs_names.index(mrna_sp)
+        m_idx_data = m_idx
+        p_idx_data = p_idx
 
     true_final, pred_final = [], []
     true_max,   pred_max   = [], []
+    n_skipped_synth = 0
+
+    # When the dataset carries a z_expr label (combined real + synthetic no-go
+    # build), evaluate the endpoint metric only on the real experiments.
+    # Synthetic no-go samples are flat-baseline by construction; including them
+    # in R² collapses the metric onto "predict the baseline" and obscures
+    # real-data fit quality. The subset itself still iterates everything; we
+    # just skip the synth rows here.
+    raw_ds = subset.dataset if isinstance(subset, torch.utils.data.Subset) else subset
+    z_expr_arr = getattr(raw_ds, "z_expr", None)
+    subset_indices = (list(subset.indices) if isinstance(subset, torch.utils.data.Subset)
+                      else list(range(len(raw_ds))))
 
     model.eval()
     with torch.no_grad():
         for i in range(len(subset)):
-            y0, u_seq, y_seq = subset[i]
+            global_i = subset_indices[i]
+            if z_expr_arr is not None and int(z_expr_arr[global_i]) == 0:
+                n_skipped_synth += 1
+                continue
+            item = subset[i]
+            y0, u_seq, y_seq = item[0], item[1], item[2]
+            y0_b = y0.unsqueeze(0).to(device)
+            u_b = u_seq.unsqueeze(0).to(device)
+            y_seq_b = y_seq.unsqueeze(0).to(device)
+            # Lift into scaffold layout if needed.
+            if lift_info:
+                from plot_diagnostics import _maybe_lift
+                y0_b, _y_lift = _maybe_lift(y0_b, y_seq_b, lift_info)
             pred, _, _ = model(
-                y0.unsqueeze(0).to(device),
-                u_seq.unsqueeze(0).to(device),
+                y0_b,
+                u_b,
                 dt.unsqueeze(0),
                 obs_idx,
                 **_filter_model_kwargs(model, base_kwargs),
             )
+            # Ground truth comes from the dataset (always); pred is in scaffold layout.
             y_np = y_seq.cpu().numpy()
             p_np = pred[0].cpu().numpy()
 
-            true_final.append(y_np[-1, p_idx])
+            true_final.append(y_np[-1, p_idx_data])
             pred_final.append(p_np[-1, p_idx])
-            true_max.append(y_np[:, m_idx].max())
+            true_max.append(y_np[:, m_idx_data].max())
             pred_max.append(p_np[:, m_idx].max())
 
+    if n_skipped_synth:
+        print(f"  endpoint_r2: skipped {n_skipped_synth} synthetic no-go samples; "
+              f"R² computed on {len(true_final)} real experiments.")
     return {
         "run": exp_dir.name,
         "n": len(true_final),
+        "n_skipped_synth": n_skipped_synth,
         "true_protein_final": np.array(true_final),
         "pred_protein_final": np.array(pred_final),
         "true_mrna_max":      np.array(true_max),

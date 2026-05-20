@@ -1,0 +1,144 @@
+# Demo config exercising every new option added in the recent chunks.
+# Everything outside the "NEW FEATURES" section is a sensible copy of
+# configs/ivtt_gru_ode.yaml — feel free to swap dataset/scaffold/model
+# without touching the new-feature flags.
+#
+# To turn any new feature OFF, comment out or null-out its field; defaults
+# already match pre-change behaviour, so a stale config keeps working.
+
+dataset_path: datasets/cell-free/txtl_combined.npz   # built via scripts/build_txtl_combined_npz.py
+study: ivtt_new_features
+tags: [new_features_demo]
+exp_name: ivtt_new_features_demo
+out_root: experiments
+
+save_model_name: model.pt
+save_last_name: model_last.pt
+save_curves_name: loss_curves.npz
+
+# Training hyperparameters
+epochs: 200
+batch_size: 100
+lr: 0.002
+weight_decay: 0.0018
+warmup_epochs: 0
+cosine_decay: false
+
+# Train/val/test split (none of the new features affects splitting)
+val_n: 50
+test_n: 50
+val_frac: 0.0
+seed: 42
+split_seed: 42
+
+stratified_split: false
+stratify_bins: 5
+stratify_targets: null
+
+num_workers: 0
+pin_memory: true
+
+# ============================================================================
+# Model: K-anchor sparse-θ wrapper. Three working variants are registered, one
+# per base architecture:
+#
+#   ode_rnn_sparse_theta              — wraps the regular OdeRNN  (RECOMMENDED)
+#   ode_slstm_sparse_theta            — wraps OdesLSTM
+#   ode_rnn_basal_v2_sparse_theta     — wraps OdeRNNBasalV2 (basal disabled
+#                                       in the integration pass)
+#
+# For the dense per-step θ baseline instead, set model_class to one of
+# ode_rnn / ode_slstm / ode_rnn_basal_v2 and leave n_theta_anchors null below.
+# ============================================================================
+model_class: ode_rnn_sparse_theta
+scaffold: txtl_resource_and_maturation_dna   # Model 5 (7-state TXTL)
+
+hidden: 400
+lift_dim: 32
+num_layers: 2
+dropout: 0.2
+lift_skip: true
+gru_variant: stacked_cell
+gru_init: supervisor
+head_init: supervisor
+
+# Per-parameter bounds come from the scaffold's theta_lo_vec / theta_hi_vec.
+# The scalars below are the fallback when a scaffold doesn't override.
+theta_lo: 1.0e-06
+theta_hi: 2.0
+theta_bounded: true
+theta_head_transform: log_gamma
+theta_head_tau: 2.3
+n_substeps: 1
+
+# Encoder feature pipeline
+gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+gru_y_cols: [3, 5]
+u_transform: sqrt
+y_transform: sqrt_clamp1
+
+# Loss
+obs_normalization: null
+use_ivtt_mse_loss: true
+obs_idx: [3, 5]
+
+teacher_forcing: true
+tf_every: 200
+tf_drop_epoch: 100
+grad_clip: 1.0
+jit_scripting: false   # OdeRNNSparseTheta isn't script-traced (two-pass forward)
+endpoint_r2: true
+
+# ============================================================================
+# NEW FEATURES — every field below is a knob added in the recent chunks.
+# All have safe defaults that preserve pre-change behaviour, so deleting
+# any line returns the model to its old form.
+# ============================================================================
+
+# --- Chunk 2: gate the observation (Bob's min-subtract) -----------------
+# Per-sample, per-channel min-subtraction on y0/y_seq applied at every
+# train/val/test batch. The underlying .npz file is never modified, so a
+# single dataset file works with the flag on or off. False = raw obs.
+subtract_channel_min: true
+# Channels to gate. null = every channel; here we gate only the two observed
+# readouts (mm = Broccoli at index 3, pm = mCherry/2 at index 5).
+subtract_channel_min_cols: [3, 5]
+
+# --- Chunk 3: gate the parameter (ablation knob) ------------------------
+# Map of {θ index (int): pinned value (float)}. The bounded readout
+# θ_min + (θ_max − θ_min)·σ(z) collapses to the pinned value when
+# lo == hi, so the encoder is forced to leave that parameter constant
+# while the remaining ones absorb / re-allocate the kinetic explanation.
+# null/empty disables pinning. Example below pins λ (resource decay, θ idx 0)
+# to 0 to test "what if no resource depletion?".
+pin_theta:
+  0: 0.0
+
+# --- Chunk 4: K-anchor sparse θ readout ---------------------------------
+# Number of kinetic vectors the encoder emits per experiment. 1 = a single
+# global θ; 3 / 6 = stage-like reaction phases (tex Models B2/B3); null = the
+# usual dense per-timestep θ (and you don't need ode_rnn_sparse_theta).
+n_theta_anchors: 6
+# How θ(t) is reconstructed between anchors:
+#   piecewise — step function; sharper "reaction stages" (tex B2, default).
+#   linear    — smooth blend between adjacent anchors (tex B3).
+# Note: with anchor_interp=piecewise the smoothness loss should be off
+# (l1_regularization / l2_regularization in TrainConfig).
+anchor_interp: piecewise
+
+# --- Experiment A: normalized time as encoder input ---------------------
+# Concatenate τ_k = k/(K-1) ∈ [0,1] to the encoder feature vector at every
+# step. Matches new_scaffolds.tex §3.1: "tests whether the model benefits
+# from knowing the age of the reaction explicitly." Default false preserves
+# pre-change behaviour.
+encoder_use_time: false
+
+# --- Chunk 5: Model 7 zero-trajectory boundary loss ---------------------
+# Penalises predicted (mm, pm) values on synthetic no-go experiments
+# (z_expr == 0) toward zero, teaching the encoder/scaffold to leave the
+# feasible-expression region under boundary inputs. 0 disables (default).
+# Needs a dataset built with scripts/build_txtl_combined_npz.py (or any
+# .npz that carries a z_expr int array). Typical starting weight 1e-2 –
+# 1e-1; tune so this term is comparable in magnitude to the trajectory MSE.
+lambda_zero_traj: 0.05
+

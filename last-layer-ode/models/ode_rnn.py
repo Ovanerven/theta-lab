@@ -67,7 +67,7 @@ class OdeRNN(nn.Module):
     # (TorchScript-friendly) or full-passthrough — selected once at script time.
     __constants__ = [
         "_analytic_scaffold", "_tf_at_k_zero", "theta_dim_emit",
-        "_has_gru_u_cols", "_has_gru_y_cols",
+        "_has_gru_u_cols", "_has_gru_y_cols", "encoder_use_time",
     ]
 
     def __init__(
@@ -108,6 +108,8 @@ class OdeRNN(nn.Module):
         head_init: str = "default",                   # "default" (PyTorch defaults; respect head_bias_init/head_weight_gain) | "supervisor" (xavier_ + zeros, unconditional)
         y0_theta_init: bool = False,                  # if True, add an MLP(y0) logit bias so the GRU starts from a
                                                       # per-sample theta prior rather than from the population mean
+        encoder_use_time: bool = False,               # if True, concat τ_k = k/(K-1) ∈ [0,1] to the encoder
+                                                      # feature vector (Experiment A in new_scaffolds.tex §3.1).
         **kwargs,
     ):
         super().__init__()
@@ -155,6 +157,7 @@ class OdeRNN(nn.Module):
         self.gru_init = str(gru_init)
         self.head_init = str(head_init)
         self.y0_theta_init = bool(y0_theta_init)
+        self.encoder_use_time = bool(encoder_use_time)
 
         # Per-parameter bounds — use scaffold-defined if available, else broadcast scalar
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
@@ -180,6 +183,8 @@ class OdeRNN(nn.Module):
 
         gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         feat_in = gru_feat_dim + gru_y_dim
+        if self.encoder_use_time:
+            feat_in += 1
         if self.lift_skip:
             self.lift = nn.Identity()
             gru_input_dim = feat_in
@@ -385,7 +390,16 @@ class OdeRNN(nn.Module):
                 y_in_feat = y_in_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
             elif y_transform == "log1p":
                 y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
-            feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
+            if self.encoder_use_time:
+                tau_k = torch.full(
+                    (u_gru_k_feat.shape[0], 1),
+                    float(k) / float(max(K - 1, 1)),
+                    device=u_gru_k_feat.device,
+                    dtype=u_gru_k_feat.dtype,
+                )
+                feat = torch.cat([u_gru_k_feat, y_in_feat, tau_k], dim=-1)
+            else:
+                feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
             raw = self.head(self.head_bottle(z.squeeze(1)))

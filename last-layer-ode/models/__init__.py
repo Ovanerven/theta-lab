@@ -1,5 +1,11 @@
 from models.ode_rnn import OdeRNN
 from models.ode_rnn_basal_v2 import OdeRNNBasalV2
+from models.ode_rnn_sparse_theta import (
+    OdeRNNSparseTheta,
+    OdesLSTMSparseTheta,
+    OdeRNNBasalV2SparseTheta,
+)
+from models.ode_rnn_sparse_theta_v2 import OdeRNNSparseThetaV2
 from models.ode_rnn_analytical import AnalyticalOdeRNN
 from models.ode_rnn_txtl import TXTLAnalyticalOdeRNN, TXTLAnalyticalBleachOdeRNN, TXTLApproxOdeRNN, TXTLMaturationApproxOdeRNN
 from models.bob_gru_verbatim import BobGRUVerbatim
@@ -31,6 +37,10 @@ except ImportError:
 MODELS: dict = {
     "ode_rnn":            OdeRNN,
     "ode_rnn_basal_v2":   OdeRNNBasalV2,
+    "ode_rnn_sparse_theta": OdeRNNSparseTheta,
+    "ode_rnn_sparse_theta_v2": OdeRNNSparseThetaV2,
+    "ode_slstm_sparse_theta": OdesLSTMSparseTheta,
+    "ode_rnn_basal_v2_sparse_theta": OdeRNNBasalV2SparseTheta,
     "lstm_rnn":           OdeLSTM,
     "ode_rnn_analytical": AnalyticalOdeRNN,
     "ode_rnn_txtl":       TXTLAnalyticalOdeRNN,

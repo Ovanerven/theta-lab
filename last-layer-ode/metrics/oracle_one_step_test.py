@@ -88,7 +88,7 @@ def run_oracle_test(
     endpoint_mrna: str,
 ):
     device = device_auto()
-    model, ds, state_names, _ = rebuild_model_from_experiment(exp_dir, device=device)
+    model, ds, state_names, _, lift_info = rebuild_model_from_experiment(exp_dir, device=device)
     cfg = load_yaml(exp_dir / "config.yaml")
 
     if species not in state_names:
@@ -112,11 +112,16 @@ def run_oracle_test(
     collate_fn = collate_varlen if getattr(raw_ds, "variable_length", False) else collate
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, collate_fn=collate_fn)
 
-    obs_idx_cfg = cfg.get("obs_idx")
-    if obs_idx_cfg:
-        obs_idx = torch.tensor(obs_idx_cfg, device=device)
+    if lift_info:
+        obs_idx = torch.tensor(lift_info["scaffold_obs_idx"], device=device, dtype=torch.long)
+        # When lifting, sp/protein/mrna idx come from the scaffold's state vector
+        # — sp_idx etc. already do that lookup against state_names (= scaffold names).
     else:
-        obs_idx = torch.arange(len(state_names), device=device)
+        obs_idx_cfg = cfg.get("obs_idx")
+        if obs_idx_cfg:
+            obs_idx = torch.tensor(obs_idx_cfg, device=device)
+        else:
+            obs_idx = torch.arange(len(state_names), device=device)
 
     u_transform = str(cfg.get("u_transform", "none"))
     y_transform = str(cfg.get("y_transform", "none"))
@@ -134,7 +139,9 @@ def run_oracle_test(
 
     model.eval()
     with torch.no_grad():
-        for y0, u_seq, y_seq, lengths in loader:
+        for _batch in loader:
+            # collate returns (y0, u, y, lengths, z_expr)
+            y0, u_seq, y_seq, lengths = _batch[0], _batch[1], _batch[2], _batch[3]
             B = y0.shape[0]
             K = u_seq.shape[1]
             dt_seq = torch.from_numpy(raw_ds.dt[:K])[None, :].expand(B, -1)
@@ -144,6 +151,12 @@ def run_oracle_test(
             y_seq = y_seq.to(device)
             dt_seq = dt_seq.to(device)
             lengths_np = lengths.cpu().numpy() if lengths is not None else None
+            # Partial-obs scaffolds: lift dataset y0/y_seq into scaffold layout
+            # so sp_idx / protein_idx / mrna_idx (resolved against scaffold's
+            # state_names above) refer to the same cols as pred.
+            if lift_info:
+                from plot_diagnostics import _maybe_lift
+                y0, y_seq = _maybe_lift(y0, y_seq, lift_info)
 
             model_kwargs = {
                 "y_seq": y_seq,

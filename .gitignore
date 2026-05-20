@@ -9,3 +9,9 @@ __pycache__/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/codebase.zip
 old.zip
+
+# Large rebuilt datasets (regenerate locally via scripts/build_txtl_combined_npz.py
+# and scripts/build_legacy_in_combined_format.py). GitHub rejects files >100 MB.
+datasets/cell-free/txtl_combined.npz
+datasets/cell-free/txtl_combined_plus_legacy.npz
+datasets/cell-free/txtl_legacy_in_combined.npz
