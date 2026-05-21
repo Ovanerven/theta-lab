@@ -1,0 +1,54 @@
+# Parity follow-up: add loss_clamp_min=1.0 to the composable path to match
+# loss_fn_ivtt_mse's log1p(clamp_min(y, 1.0)) floor.
+#
+# Hypothesis (from the B vs A diagnosis): the dominant gap between the new
+# composable loss and the supervisor's verbatim loss is the [0, 1] dead zone
+# created by clamping before log1p. Both inputs hit log(2) inside the floor,
+# so any small-value mismatch contributes 0 to the loss. Composable without
+# the floor was loading the optimiser with extra signal in that region and
+# learning slower as a result.
+#
+# Variant D = same recipe as B (n3 normaliser, all species/time/endpoint
+# knobs), plus loss_clamp_min=1.0. If D tracks A within seed-noise, the
+# parity gap is closed and we can deprecate loss_fn_ivtt_mse.
+
+study: txtl_loss_parity
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]
+
+runs:
+  - exp_name: D_composable_n3_clamp1_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: D_composable_n3_clamp1_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: D_composable_n3_clamp1_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0

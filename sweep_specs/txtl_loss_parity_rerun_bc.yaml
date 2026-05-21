@@ -1,0 +1,72 @@
+# Re-run of the B (composable_n3) and C (composable_n1) variants from
+# txtl_loss_parity.yaml — the first launch crashed because obs_idx was a
+# torch.Tensor when the new loss branch tried `.index()` on it. Fixed in
+# train.py:1593-1610 (resolve obs_idx via .tolist() before mapping).
+#
+# A (verbatim) is intentionally skipped — those jobs are still running from
+# the first launch (23005809–23005811) and don't need to be redone.
+
+study: txtl_loss_parity
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]
+
+runs:
+  # ─── B) New composable path, /3 normaliser ────────────────────────────────
+  - exp_name: B_composable_n3_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+
+  # ─── C) New composable path, NO /3 ────────────────────────────────────────
+  - exp_name: C_composable_n1_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null

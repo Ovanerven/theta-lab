@@ -247,6 +247,7 @@ def loss_fn(
     use_log_loss: bool = True,
     channel_weights: Optional[torch.Tensor] = None,
     time_weight: Optional[torch.Tensor] = None,
+    clamp_min: float = 0.0,
 ) -> torch.Tensor:
     """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised.
 
@@ -261,8 +262,15 @@ def loss_fn(
         it replaces the lengths-mask entirely (must already encode validity).
     """
     if use_log_loss:
-        pred  = torch.log1p(pred)
-        y_seq = torch.log1p(y_seq)
+        if clamp_min > 0.0:
+            # Supervisor parity: floor both pred and y at clamp_min before log1p,
+            # creating a dead zone in [0, clamp_min] where small-value mismatches
+            # don't contribute to the loss.
+            pred  = torch.log1p(pred.clamp_min(clamp_min))
+            y_seq = torch.log1p(y_seq.clamp_min(clamp_min))
+        else:
+            pred  = torch.log1p(pred)
+            y_seq = torch.log1p(y_seq)
     se = (pred - y_seq).pow(2)  # (B,K,P)
 
     if time_weight is None:
@@ -342,13 +350,19 @@ def endpoint_mse(
     lengths: Optional[torch.Tensor],
     channels: list[int],
     use_log_loss: bool = True,
+    clamp_min: float = 0.0,
 ) -> torch.Tensor:
     """MSE at the final valid timestep on selected post-slice channels.
     `channels` indexes into the sliced (B, K, P) tensors, not raw state indices.
+    `clamp_min`: floor pred/y before log1p (supervisor parity; 0 disables).
     """
     if use_log_loss:
-        pred  = torch.log1p(pred)
-        y_seq = torch.log1p(y_seq)
+        if clamp_min > 0.0:
+            pred  = torch.log1p(pred.clamp_min(clamp_min))
+            y_seq = torch.log1p(y_seq.clamp_min(clamp_min))
+        else:
+            pred  = torch.log1p(pred)
+            y_seq = torch.log1p(y_seq)
     B, K, _ = pred.shape
     if lengths is None:
         last = torch.full((B,), K - 1, device=pred.device, dtype=torch.long)
@@ -1024,6 +1038,12 @@ class TrainConfig:
     # to skip (relative gradient direction is unchanged, only the overall scale).
     # Tracked as a knob so we can ablate the normaliser choice later.
     loss_normalizer_channels: int | None = None
+    # Floor pred/y at this value before log1p inside loss_fn / endpoint_mse.
+    # Supervisor parity: 1.0 (matches loss_fn_ivtt_mse's clamp_min(1.0)). 0.0
+    # disables (plain log1p). Creates a "dead zone" for small values where
+    # mismatches don't contribute to the loss — useful when many trajectory
+    # segments are structurally near zero (pm early in IVTT traces).
+    loss_clamp_min: float = 0.0
 
 
 def load_cfg(path: str | Path) -> TrainConfig:
@@ -1581,19 +1601,25 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
                     loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                 else:
-                    chan_w = _resolve_channel_weights(obs_idx, cfg.species_weights, pred.device, pred.dtype)
+                    # obs_idx is a torch.Tensor here; channel-keyed config knobs
+                    # use raw state indices, so resolve against the python list.
+                    obs_idx_list = obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)
+                    chan_w = _resolve_channel_weights(obs_idx_list, cfg.species_weights, pred.device, pred.dtype)
                     time_w = _build_per_channel_time_weight(
-                        obs_idx, cfg.time_upweight, batch_lengths,
+                        obs_idx_list, cfg.time_upweight, batch_lengths,
                         pred.shape[0], pred.shape[1], pred.device, pred.dtype,
                     )
                     loss = loss_fn(pred, y_seq, batch_lengths,
                                    use_log_loss=use_log_loss,
                                    channel_weights=chan_w,
-                                   time_weight=time_w)
+                                   time_weight=time_w,
+                                   clamp_min=float(cfg.loss_clamp_min))
                     if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
-                        ep_post = [obs_idx.index(int(c)) for c in cfg.endpoint_channels]
+                        ep_post = [obs_idx_list.index(int(c)) for c in cfg.endpoint_channels]
                         loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
-                            pred, y_seq, batch_lengths, ep_post, use_log_loss=use_log_loss)
+                            pred, y_seq, batch_lengths, ep_post,
+                            use_log_loss=use_log_loss,
+                            clamp_min=float(cfg.loss_clamp_min))
                     if cfg.loss_normalizer_channels:
                         loss = loss / float(cfg.loss_normalizer_channels)
 
@@ -1700,19 +1726,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
                         loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                     else:
-                        chan_w = _resolve_channel_weights(obs_idx, cfg.species_weights, pred.device, pred.dtype)
+                        obs_idx_list = obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)
+                        chan_w = _resolve_channel_weights(obs_idx_list, cfg.species_weights, pred.device, pred.dtype)
                         time_w = _build_per_channel_time_weight(
-                            obs_idx, cfg.time_upweight, batch_lengths,
+                            obs_idx_list, cfg.time_upweight, batch_lengths,
                             pred.shape[0], pred.shape[1], pred.device, pred.dtype,
                         )
                         loss = loss_fn(pred, y_seq, batch_lengths,
                                        use_log_loss=use_log_loss,
                                        channel_weights=chan_w,
-                                       time_weight=time_w)
+                                       time_weight=time_w,
+                                       clamp_min=float(cfg.loss_clamp_min))
                         if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
-                            ep_post = [obs_idx.index(int(c)) for c in cfg.endpoint_channels]
+                            ep_post = [obs_idx_list.index(int(c)) for c in cfg.endpoint_channels]
                             loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
-                                pred, y_seq, batch_lengths, ep_post, use_log_loss=use_log_loss)
+                                pred, y_seq, batch_lengths, ep_post,
+                                use_log_loss=use_log_loss,
+                                clamp_min=float(cfg.loss_clamp_min))
                         if cfg.loss_normalizer_channels:
                             loss = loss / float(cfg.loss_normalizer_channels)
                     va_total += float(loss.item())
