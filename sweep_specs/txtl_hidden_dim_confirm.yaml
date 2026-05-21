@@ -1,0 +1,39 @@
+# Confirmation sweep for the hidden-dim winner. First-pass hidden_dim_sweep
+# (single seed) put h=600+warmup at pm R²=0.54 vs h=400+warmup at 0.39 — a
+# ~0.15 gap that's worth verifying isn't seed luck before locking h=600 in.
+#
+# Setup: same IVTT data + D-recipe loss + warmup_epochs=5 + 100 epochs as the
+# winning hidden_dim_sweep cells. Only varies hidden ∈ {400, 600} and seed.
+#
+# Pass criterion: if h=600 mean pm R² > h=400 mean pm R² across 3 seeds with
+# meaningful margin (say > 1 sd apart), lock h=600 as default. Otherwise stick
+# with h=400.
+
+study: txtl_hidden_dim_confirm
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  # D-recipe composable loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  - {exp_name: h400_seed1, hidden: 400, seed: 1}
+  - {exp_name: h400_seed2, hidden: 400, seed: 2}
+  - {exp_name: h400_seed3, hidden: 400, seed: 3}
+  - {exp_name: h600_seed1, hidden: 600, seed: 1}
+  - {exp_name: h600_seed2, hidden: 600, seed: 2}
+  - {exp_name: h600_seed3, hidden: 600, seed: 3}
