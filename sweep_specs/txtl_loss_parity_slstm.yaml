@@ -1,0 +1,106 @@
+# Same parity sweep as txtl_loss_parity.yaml but with sLSTM encoder instead
+# of GRU. Tests whether the D-recipe (clamp=1, /3, species/time/endpoint) is
+# the right choice for sLSTM too, AND lets us compare sLSTM vs GRU at the
+# best loss path for each.
+#
+# Variants A/B/C/D identical in meaning to the GRU parity sweep. Same fixed
+# IVTT split (3seed_splits idx=0). Three seeds per variant for noise bars.
+
+study: txtl_loss_parity_slstm
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_slstm.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]
+
+runs:
+  # ─── A) Supervisor verbatim ───────────────────────────────────────────────
+  - {exp_name: A_verbatim_seed1, seed: 1, use_ivtt_mse_loss: true}
+  - {exp_name: A_verbatim_seed2, seed: 2, use_ivtt_mse_loss: true}
+  - {exp_name: A_verbatim_seed3, seed: 3, use_ivtt_mse_loss: true}
+
+  # ─── B) Composable, /3, no clamp ──────────────────────────────────────────
+  - exp_name: B_composable_n3_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+
+  # ─── C) Composable, no /3, no clamp ───────────────────────────────────────
+  - exp_name: C_composable_n1_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+
+  # ─── D) Composable, /3, clamp=1 (best on GRU) ─────────────────────────────
+  - exp_name: D_composable_n3_clamp1_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: D_composable_n3_clamp1_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: D_composable_n3_clamp1_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0

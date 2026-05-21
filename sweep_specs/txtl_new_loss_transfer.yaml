@@ -1,0 +1,69 @@
+# D-recipe loss transfer check: does the loss that won on IVTT (parity sweep)
+# also win on the new txtl_combined dataset, on the locked Model-5 baseline?
+#
+# Setup mirrors the OFAT scaffold_model5_baseline run except for the loss.
+# All other knobs (model, scaffold, hidden, encoder features, TF schedule)
+# are held fixed so the only difference is plain-MSE vs D-recipe.
+#
+# Outcome decides what we sweep next:
+#   * d_recipe ≥ plain_mse  → lock D-recipe in, redo the scaffold OFAT axis
+#                              (Models 3/4/5/7/8/9) with the new loss.
+#   * d_recipe < plain_mse  → the IVTT-tuned recipe doesn't generalise to
+#                              this data shape; likely the time_upweight
+#                              pattern doesn't match the new trajectories.
+#                              Diagnose before scaling.
+#
+# txtl_combined.npz includes synth (N=7800) → val_n=test_n=975 (12.5% rule).
+# 100 epochs (matches existing OFAT runs).
+
+study: txtl_new_loss_transfer
+runs_per_job: 1
+time: "03:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  scaffold: txtl_resource_and_maturation_dna   # Model 5
+  val_n: 975
+  test_n: 975
+  stratify_z_expr: true
+  epochs: 100
+  batch_size: 100
+  endpoint_r2: true
+
+runs:
+  # ─── A) Plain MSE (current OFAT default — anchors current results) ────────
+  - {exp_name: plain_mse_seed1, seed: 1}
+  - {exp_name: plain_mse_seed2, seed: 2}
+  - {exp_name: plain_mse_seed3, seed: 3}
+
+  # ─── B) D-recipe composable loss (best on IVTT parity sweep) ──────────────
+  - exp_name: d_recipe_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: d_recipe_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: d_recipe_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0

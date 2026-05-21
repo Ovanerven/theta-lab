@@ -1,0 +1,32 @@
+# Re-run h=600 and h=800 with warmup. The first pass NaN'd at ep 24 (h=600)
+# and ep 12 (h=800) because LR=0.002 is too aggressive for the bigger model
+# at init. h=200/300/400 completed cleanly with the same LR.
+#
+# Fix: 5-epoch linear warmup from 0 → 0.002. Doesn't change the asymptotic
+# LR, just absorbs the init-instability window where the bigger model can
+# spike. If h=800 still NaNs, fall back to lr=0.0014 for that one.
+
+study: txtl_hidden_dim_sweep
+runs_per_job: 1
+time: "03:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  seed: 1
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  warmup_epochs: 5
+
+runs:
+  - {exp_name: h600_warmup5, hidden: 600}
+  - {exp_name: h800_warmup5, hidden: 800}

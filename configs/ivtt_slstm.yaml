@@ -68,5 +68,5 @@ tf_every: 200
 tf_drop_epoch: 100
 grad_clip: 1.0
 
-jit_scripting: false
+jit_scripting: true   # wrapped in try/except in train.py; falls back to eager if scripting fails
 endpoint_r2: true
