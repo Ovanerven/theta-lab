@@ -1,0 +1,424 @@
+# Phase A: Data axis on Model 5 (4 dataset variants × 2 losses × 3 seeds = 24 runs).
+#
+# Answers three coupled questions:
+#   1. Does the OLD→NEW interpolation lose information?  A1 vs A2
+#   2. Does adding NEW real data help on a non-oxygen scaffold?  A2 vs A3
+#   3. Does adding synthetic data on top help?  A3 vs A4
+#
+# All variants use Model 5 (txtl_resource_and_maturation_dna scaffold). Model 5
+# doesn't use oxygen, so OLD-only variants (A1/A2) are meaningful as controls.
+# A separate Phase B will test oxygen-aware scaffolds (M7, M9) on the
+# NEW-containing dataset that wins here.
+#
+# Loss caveat:
+#   Two losses tested per dataset: plain_mse (current OFAT default) and
+#   d_recipe (best on IVTT parity sweep: clamp=1.0, /3 normaliser, species
+#   1.25/1.0, pm second-half ×3, pm-endpoint 0.1). The supervisor's verbatim
+#   loss (`use_ivtt_mse_loss: true`) is NOT used here — it hardcodes the
+#   IVTT-analytic theta layout and crashes on Model 5's scaffold. For a true
+#   verbatim comparison you'd need scaffold: ivtt_analytic, which loses the
+#   "new scaffolds" point.
+#
+# val/test sizing follows the 12.5% rule per dataset variant.
+
+study: txtl_data_axis_m5
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  scaffold: txtl_resource_and_maturation_dna   # Model 5
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A1 — OLD only, native 60s grid (interpolation control). N=695 → 87.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: A1_old_native_plain_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+  - exp_name: A1_old_native_plain_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+  - exp_name: A1_old_native_plain_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+
+  - exp_name: A1_old_native_drecipe_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A1_old_native_drecipe_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A1_old_native_drecipe_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A2 — OLD only, resampled onto NEW grid (interpolation test). N=691 → 86.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: A2_old_interp_plain_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+  - exp_name: A2_old_interp_plain_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+  - exp_name: A2_old_interp_plain_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+
+  - exp_name: A2_old_interp_drecipe_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A2_old_interp_drecipe_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A2_old_interp_drecipe_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A3 — OLD + NEW real, no synth. N≈1003 → 125.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: A3_old_plus_new_real_plain_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+  - exp_name: A3_old_plus_new_real_plain_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+  - exp_name: A3_old_plus_new_real_plain_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+
+  - exp_name: A3_old_plus_new_real_drecipe_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A3_old_plus_new_real_drecipe_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A3_old_plus_new_real_drecipe_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A4 — OLD + NEW + synth (full combined). N=8491 → 1061.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: A4_full_combined_plain_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+  - exp_name: A4_full_combined_plain_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+  - exp_name: A4_full_combined_plain_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+
+  - exp_name: A4_full_combined_drecipe_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A4_full_combined_drecipe_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+  - exp_name: A4_full_combined_drecipe_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # E — Supervisor's full pipeline: ivtt_analytic scaffold + verbatim
+  # loss_fn_ivtt_mse, across all 4 dataset variants. This is the control that
+  # tests whether the old setup as a whole (scaffold + loss together) is worth
+  # keeping vs the new Model-5 + composable-loss path. Note: this mixes the
+  # scaffold and loss axes — a negative result (E ≤ A) is unambiguous; a
+  # positive result (E > A) would need disentangling.
+  # ═══════════════════════════════════════════════════════════════════════════
+  # E1 — OLD only, native grid
+  - exp_name: E1_old_native_verbatim_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E1_old_native_verbatim_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E1_old_native_verbatim_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/real_ivtt_exact_full_drop5000.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+
+  # E2 — OLD only, interp
+  - exp_name: E2_old_interp_verbatim_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E2_old_interp_verbatim_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E2_old_interp_verbatim_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz
+    val_n: 86
+    test_n: 86
+    stratify_z_expr: false
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+
+  # E3 — OLD + NEW real, no synth
+  - exp_name: E3_old_plus_new_real_verbatim_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E3_old_plus_new_real_verbatim_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E3_old_plus_new_real_verbatim_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: true
+    use_synthetic_data: false
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+
+  # E4 — OLD + NEW + synth (full combined)
+  - exp_name: E4_full_combined_verbatim_seed1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E4_full_combined_verbatim_seed2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
+  - exp_name: E4_full_combined_verbatim_seed3
+    seed: 3
+    dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+    val_n: 1061
+    test_n: 1061
+    stratify_z_expr: true
+    scaffold: ivtt_analytic
+    use_ivtt_mse_loss: true
