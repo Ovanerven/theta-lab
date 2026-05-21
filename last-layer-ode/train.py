@@ -245,19 +245,135 @@ def loss_fn(
     y_seq: torch.Tensor,
     lengths: Optional[torch.Tensor] = None,
     use_log_loss: bool = True,
+    channel_weights: Optional[torch.Tensor] = None,
+    time_weight: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised."""
+    """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised.
+
+    Base path (channel_weights=None, time_weight=None) is unchanged: masked MSE
+    averaged over (valid timesteps × channels) with a shared denominator.
+
+    Composable extensions used by the supervisor-style loss:
+      * channel_weights: (P,) per-species multipliers. When given, channels are
+        normalised independently and combined as Σ_p w_p · mse_p (no /P division),
+        so relative scales between species are preserved.
+      * time_weight: (B, K, P) per-(sample, timestep, species) weight. When given
+        it replaces the lengths-mask entirely (must already encode validity).
+    """
     if use_log_loss:
         pred  = torch.log1p(pred)
         y_seq = torch.log1p(y_seq)
     se = (pred - y_seq).pow(2)  # (B,K,P)
-    if lengths is not None:
-        mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
-        se = se * mask.unsqueeze(-1)
-        return se.sum() / (mask.sum() * se.shape[-1])
-    return se.mean()
+
+    if time_weight is None:
+        if lengths is not None:
+            mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
+            w = mask.unsqueeze(-1).to(se.dtype).expand_as(se)
+        else:
+            w = torch.ones_like(se)
+    else:
+        w = time_weight.to(se.dtype)
+
+    if channel_weights is None:
+        return (se * w).sum() / w.sum().clamp_min(1.0)
+
+    num = (se * w).sum(dim=(0, 1))            # (P,)
+    den = w.sum(dim=(0, 1)).clamp_min(1.0)    # (P,)
+    mse_per_chan = num / den
+    return (channel_weights.to(mse_per_chan.dtype) * mse_per_chan).sum()
 
 
+def _resolve_channel_weights(
+    obs_idx_sliced: list[int],
+    species_weights: dict | None,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    """Map raw-state-index weights to a (P,) tensor over the post-slice ordering.
+    Missing species default to 1.0. Returns None when no weights are configured.
+    """
+    if not species_weights:
+        return None
+    w = [float(species_weights.get(int(s), species_weights.get(str(s), 1.0)))
+         for s in obs_idx_sliced]
+    return torch.tensor(w, device=device, dtype=dtype)
+
+
+def _build_per_channel_time_weight(
+    obs_idx_sliced: list[int],
+    time_upweight: dict | None,
+    lengths: Optional[torch.Tensor],
+    B: int,
+    K: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    """Build a (B, K, P) weight tensor combining validity mask + per-channel
+    sub-interval upweighting.
+
+    time_upweight maps {raw_state_idx: [start_frac, factor]}: for that channel,
+    timesteps t >= int(start_frac · length) are multiplied by factor. Channels
+    not listed get the plain validity mask.
+    """
+    if not time_upweight:
+        return None
+    if lengths is None:
+        lengths_t = torch.full((B,), K, device=device, dtype=torch.long)
+    else:
+        lengths_t = lengths.to(device=device, dtype=torch.long)
+    t_grid = torch.arange(K, device=device)
+    valid = (t_grid[None, :] < lengths_t[:, None]).to(dtype)  # (B, K)
+    P = len(obs_idx_sliced)
+    w = valid.unsqueeze(-1).expand(B, K, P).clone()
+    for p, raw in enumerate(obs_idx_sliced):
+        spec = time_upweight.get(int(raw), time_upweight.get(str(raw)))
+        if not spec:
+            continue
+        start_frac, factor = float(spec[0]), float(spec[1])
+        start_idx = (lengths_t.to(torch.float32) * start_frac).to(torch.long)
+        up = (t_grid[None, :] >= start_idx[:, None]) & (t_grid[None, :] < lengths_t[:, None])
+        w[:, :, p] = torch.where(up, w[:, :, p] * factor, w[:, :, p])
+    return w
+
+
+def endpoint_mse(
+    pred: torch.Tensor,
+    y_seq: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    channels: list[int],
+    use_log_loss: bool = True,
+) -> torch.Tensor:
+    """MSE at the final valid timestep on selected post-slice channels.
+    `channels` indexes into the sliced (B, K, P) tensors, not raw state indices.
+    """
+    if use_log_loss:
+        pred  = torch.log1p(pred)
+        y_seq = torch.log1p(y_seq)
+    B, K, _ = pred.shape
+    if lengths is None:
+        last = torch.full((B,), K - 1, device=pred.device, dtype=torch.long)
+    else:
+        last = (lengths.to(pred.device, dtype=torch.long) - 1).clamp_min(0)
+    batch_idx = torch.arange(B, device=pred.device)
+    chans = torch.tensor(channels, device=pred.device, dtype=torch.long)
+    p_last = pred[batch_idx[:, None], last[:, None], chans[None, :]]
+    y_last = y_seq[batch_idx[:, None], last[:, None], chans[None, :]]
+    return (p_last - y_last).pow(2).mean()
+
+
+# DEPRECATED: superseded by the composable knobs on loss_fn (channel_weights,
+# time_weight) + endpoint_mse + cfg.loss_normalizer_channels. Kept temporarily
+# for back-compat with `use_ivtt_mse_loss: true` configs and bit-exact parity
+# checks against the supervisor's original code. Remove once new-path runs are
+# confirmed to match.
+#
+# Note on exact parity vs the new path: this function applies
+# log1p(clamp_min(y, 1.0)) (floors values at 1.0 before log1p), whereas the new
+# composable path uses plain log1p(y). For values near zero this differs
+# (log1p(0)=0 vs log1p(1)=log 2 ≈ 0.693). So even with species_weights /
+# time_upweight / lambda_endpoint / loss_normalizer_channels all set to the
+# supervisor's recipe, results will not be bit-exact. If exact reproduction is
+# needed later, add a `loss_clamp_min` knob to the new path.
 def loss_fn_ivtt_mse(
     *,
     pred_full: torch.Tensor,
@@ -887,6 +1003,28 @@ class TrainConfig:
     # disabled (default). Typical range 1e-3 – 1e-1. No-op on legacy datasets.
     lambda_zero_traj: float = 0.0
 
+    # --- supervisor-style composable loss knobs (default None → unchanged) ---
+    # Per-species multipliers keyed by raw state index. Example for mm=3, pm=5:
+    #   species_weights: {3: 1.25, 5: 1.0}
+    species_weights: dict | None = None
+    # Per-species time upweighting keyed by raw state index. Value is
+    # [start_frac, factor]: for t >= int(start_frac · length), multiply that
+    # channel's weight by factor. Supervisor uses pm second-half ×3:
+    #   time_upweight: {5: [0.5, 3.0]}
+    time_upweight: dict | None = None
+    # Extra MSE term evaluated only at the final valid timestep on the given
+    # raw state indices. Supervisor uses pm endpoint with weight 0.1:
+    #   lambda_endpoint: 0.1
+    #   endpoint_channels: [5]
+    lambda_endpoint: float = 0.0
+    endpoint_channels: list[int] | None = None
+    # Supervisor's loss divides the final composite by the number of nonzero
+    # loss-weight channels (=3 in his recipe: mm + pm-body + pm-endpoint).
+    # Set this to that count to reproduce his /N normaliser exactly; leave None
+    # to skip (relative gradient direction is unchanged, only the overall scale).
+    # Tracked as a knob so we can ablate the normaliser choice later.
+    loss_normalizer_channels: int | None = None
+
 
 def load_cfg(path: str | Path) -> TrainConfig:
     with open(path, "r") as f:
@@ -1443,7 +1581,21 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
                     loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                 else:
-                    loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+                    chan_w = _resolve_channel_weights(obs_idx, cfg.species_weights, pred.device, pred.dtype)
+                    time_w = _build_per_channel_time_weight(
+                        obs_idx, cfg.time_upweight, batch_lengths,
+                        pred.shape[0], pred.shape[1], pred.device, pred.dtype,
+                    )
+                    loss = loss_fn(pred, y_seq, batch_lengths,
+                                   use_log_loss=use_log_loss,
+                                   channel_weights=chan_w,
+                                   time_weight=time_w)
+                    if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
+                        ep_post = [obs_idx.index(int(c)) for c in cfg.endpoint_channels]
+                        loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
+                            pred, y_seq, batch_lengths, ep_post, use_log_loss=use_log_loss)
+                    if cfg.loss_normalizer_channels:
+                        loss = loss / float(cfg.loss_normalizer_channels)
 
             # Model 7 zero-trajectory boundary loss for synthetic no-go samples
             # (z_expr == 0). Pushes pred (mm, pm) toward zero on those samples
@@ -1548,7 +1700,21 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
                         loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                     else:
-                        loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+                        chan_w = _resolve_channel_weights(obs_idx, cfg.species_weights, pred.device, pred.dtype)
+                        time_w = _build_per_channel_time_weight(
+                            obs_idx, cfg.time_upweight, batch_lengths,
+                            pred.shape[0], pred.shape[1], pred.device, pred.dtype,
+                        )
+                        loss = loss_fn(pred, y_seq, batch_lengths,
+                                       use_log_loss=use_log_loss,
+                                       channel_weights=chan_w,
+                                       time_weight=time_w)
+                        if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
+                            ep_post = [obs_idx.index(int(c)) for c in cfg.endpoint_channels]
+                            loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
+                                pred, y_seq, batch_lengths, ep_post, use_log_loss=use_log_loss)
+                        if cfg.loss_normalizer_channels:
+                            loss = loss / float(cfg.loss_normalizer_channels)
                     va_total += float(loss.item())
 
                     sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()

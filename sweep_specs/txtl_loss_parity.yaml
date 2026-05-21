@@ -1,0 +1,96 @@
+# Loss-path parity check: does the new composable loss reproduce the
+# supervisor's verbatim loss on the default IVTT-GRU baseline?
+#
+# Setup: configs/ivtt_gru.yaml is the supervisor-reproduction baseline (GRU
+# encoder + ivtt_analytic scaffold, fixed split, sqrt+clamp1 features). The
+# only thing varying across runs is the loss path:
+#
+#   A) verbatim       use_ivtt_mse_loss: true   (the original loss_fn_ivtt_mse)
+#   B) composable_n3  use_ivtt_mse_loss: false + new knobs, divided by /3 to
+#                     match the supervisor's normalize-by-#nonzero-channels.
+#   C) composable_n1  same as B but loss_normalizer_channels=null — tests
+#                     whether the /3 normaliser materially changes optimisation.
+#
+# Caveat (documented next to loss_fn_ivtt_mse in train.py): the verbatim path
+# applies log1p(clamp_min(y, 1.0)); the composable path uses plain log1p(y).
+# So even with all knobs matched, results will not be bit-exact. We're after
+# functional parity (matched endpoint R² and training curves), not bit-exact.
+#
+# Three seeds per variant so we can read seed-noise vs path-difference.
+
+study: txtl_loss_parity
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  # Hard-fix the obs_idx so the species-keyed knobs below resolve identically
+  # across all runs (mm=3, pm=5 in the 7-state IVTT layout).
+  obs_idx: [3, 5]
+
+runs:
+  # ─── A) Supervisor verbatim ───────────────────────────────────────────────
+  - {exp_name: A_verbatim_seed1, seed: 1, use_ivtt_mse_loss: true}
+  - {exp_name: A_verbatim_seed2, seed: 2, use_ivtt_mse_loss: true}
+  - {exp_name: A_verbatim_seed3, seed: 3, use_ivtt_mse_loss: true}
+
+  # ─── B) New composable path, supervisor recipe, /3 normaliser ─────────────
+  # mm weight 1.25, pm weight 1.0, pm second-half ×3, pm-endpoint extra w=0.1,
+  # final /3 (= count of nonzero loss-weight channels in supervisor's vector).
+  - exp_name: B_composable_n3_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+  - exp_name: B_composable_n3_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+
+  # ─── C) New composable path, same recipe, NO /3 ───────────────────────────
+  # Identical to B but loss_normalizer_channels is null. If C ≈ B in endpoint
+  # R² and training curves, the supervisor's /3 is just an LR rescale and can
+  # be dropped going forward.
+  - exp_name: C_composable_n1_seed1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
+  - exp_name: C_composable_n1_seed3
+    seed: 3
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: null
