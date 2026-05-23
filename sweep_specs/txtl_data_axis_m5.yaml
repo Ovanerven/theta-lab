@@ -253,28 +253,28 @@ runs:
   - exp_name: A4_full_combined_plain_seed1
     seed: 1
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
   - exp_name: A4_full_combined_plain_seed2
     seed: 2
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
   - exp_name: A4_full_combined_plain_seed3
     seed: 3
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
 
   - exp_name: A4_full_combined_drecipe_seed1
     seed: 1
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -285,9 +285,9 @@ runs:
   - exp_name: A4_full_combined_drecipe_seed2
     seed: 2
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -298,9 +298,9 @@ runs:
   - exp_name: A4_full_combined_drecipe_seed3
     seed: 3
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -408,24 +408,24 @@ runs:
   - exp_name: E4_full_combined_verbatim_seed1
     seed: 1
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     scaffold: ivtt_analytic
     use_ivtt_mse_loss: true
   - exp_name: E4_full_combined_verbatim_seed2
     seed: 2
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     scaffold: ivtt_analytic
     use_ivtt_mse_loss: true
   - exp_name: E4_full_combined_verbatim_seed3
     seed: 3
     dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
-    val_n: 1061
-    test_n: 1061
-    stratify_z_expr: true
+    val_n: 125         # 12.5% of N_real=1003 (test_real_only restricts to real pool)
+    test_n: 125
+    test_real_only: true   # train on real+synth, evaluate honestly on real only
     scaffold: ivtt_analytic
     use_ivtt_mse_loss: true

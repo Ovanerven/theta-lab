@@ -626,15 +626,89 @@ def _make_split_indices(
     stratify_targets: list[int] | None,
     z_expr: np.ndarray | None = None,
     stratify_z_expr: bool = False,
+    test_real_only: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create train/val/test indices; optionally stratified by endpoint bins
     and/or by the dataset's z_expr (real vs synth no-go) class flag.
+
+    test_real_only: when True (and the dataset carries z_expr), val/test draws
+    are restricted to real samples (z_expr==1) only. Train gets remaining real
+    + all synth. Lets us train on (real + synth) but evaluate honestly on real.
     """
     if n_test + n_val >= N:
         raise ValueError(f"val_n={n_val} + test_n={n_test} >= N={N}")
 
     rng = np.random.default_rng(split_seed)
     all_idx = np.arange(N, dtype=np.int64)
+
+    # test_real_only takes precedence: restrict val/test pool to real samples,
+    # apply (optional) endpoint stratification within that pool, dump all synth
+    # into train.
+    if test_real_only and z_expr is not None:
+        real_idx = np.where(z_expr == 1)[0]
+        synth_idx = np.where(z_expr == 0)[0]
+        n_real = len(real_idx)
+        if n_test + n_val >= n_real:
+            raise ValueError(
+                f"test_real_only=True but val_n={n_val} + test_n={n_test} >= "
+                f"n_real={n_real}. Reduce val_n/test_n or disable the flag."
+            )
+
+        if stratified_split and stratify_targets:
+            # Endpoint-stratify within the real pool only.
+            P = int(y_seq.shape[-1])
+            targets = [int(t) for t in stratify_targets if 0 <= int(t) < P]
+            if not targets:
+                raise ValueError("test_real_only + stratified_split: empty stratify_targets")
+            real_lengths = lengths[real_idx] if lengths is not None else None
+            vals = _endpoint_values(y_seq[real_idx], real_lengths, targets)
+            std = vals.std(axis=0)
+            keep = std > 1e-12
+            if not np.any(keep):
+                rng.shuffle(real_idx)
+                test_idx = real_idx[:n_test]
+                val_idx = real_idx[n_test:n_test + n_val]
+                real_train = real_idx[n_test + n_val:]
+            else:
+                vals = vals[:, keep]
+                ranks = np.empty_like(vals, dtype=np.float64)
+                for j in range(vals.shape[1]):
+                    order = np.argsort(vals[:, j], kind="mergesort")
+                    inv = np.empty_like(order)
+                    inv[order] = np.arange(vals.shape[0])
+                    ranks[:, j] = inv / max(1, vals.shape[0] - 1)
+                score = ranks.mean(axis=1)
+                labels = _quantile_bin_1d(score, int(stratify_bins)).astype(np.int64)
+                uniq = np.unique(labels)
+                strata = []
+                for u in uniq:
+                    idx_u = real_idx[labels == u]
+                    rng.shuffle(idx_u)
+                    strata.append(idx_u)
+                sizes = np.array([len(s) for s in strata], dtype=np.int64)
+                take_test = _allocate_counts(sizes, int(n_test))
+                test_parts, rem_parts = [], []
+                for s, k in zip(strata, take_test):
+                    test_parts.append(s[:k]); rem_parts.append(s[k:])
+                test_idx = np.concatenate(test_parts) if test_parts else np.array([], dtype=np.int64)
+                rem_strata_sizes = np.array([len(r) for r in rem_parts], dtype=np.int64)
+                take_val = _allocate_counts(rem_strata_sizes, int(n_val))
+                val_parts, train_real_parts = [], []
+                for r, k in zip(rem_parts, take_val):
+                    val_parts.append(r[:k]); train_real_parts.append(r[k:])
+                val_idx = np.concatenate(val_parts) if val_parts else np.array([], dtype=np.int64)
+                real_train = np.concatenate(train_real_parts) if train_real_parts else np.array([], dtype=np.int64)
+        else:
+            rng.shuffle(real_idx)
+            test_idx = real_idx[:n_test]
+            val_idx = real_idx[n_test:n_test + n_val]
+            real_train = real_idx[n_test + n_val:]
+
+        train_idx = np.concatenate([real_train, synth_idx])
+        rng.shuffle(test_idx); rng.shuffle(val_idx); rng.shuffle(train_idx)
+        print(f"test_real_only: train={len(real_train)} real + {len(synth_idx)} synth; "
+              f"val={len(val_idx)} real; test={len(test_idx)} real")
+        return train_idx, val_idx, test_idx
 
     # z_expr stratification: split real and synth pools separately and allocate
     # n_val / n_test proportionally to each. This guarantees val/test contain
@@ -803,6 +877,7 @@ def _resolve_split(cfg, ds, N: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         stratify_targets=cfg.stratify_targets,
         z_expr=getattr(ds, "z_expr", None),
         stratify_z_expr=bool(cfg.stratify_z_expr),
+        test_real_only=bool(cfg.test_real_only),
     )
     kind = ("stratified+z_expr" if cfg.stratify_z_expr and cfg.stratified_split
             else "stratified" if cfg.stratified_split
@@ -859,6 +934,12 @@ class TrainConfig:
     # synthetic samples so each split preserves the dataset's class ratio. This
     # is what you want for txtl_combined.npz so val/test aren't ~99% synthetics.
     stratify_z_expr: bool = False
+    # Honest eval on real-only: when True and z_expr is present, val/test are
+    # drawn only from real samples (z_expr==1); train gets the remaining real
+    # + all synth. Use for datasets that mix synth bulk into training but where
+    # the deployment distribution is real-only. Overrides stratify_z_expr's
+    # proportional mixing for the val/test side.
+    test_real_only: bool = False
     # Ablation knob: drop synthetic no-go rows from the dataset before training.
     # Default True (keep them — matches existing behavior). Set False to A/B test
     # whether the synth bulk + lambda_zero_traj loss actually helps real-data fit.
