@@ -1,0 +1,94 @@
+# Two questions in one sweep:
+#
+#   1. Init ablation: do any of the available init knobs nudge pm R² beyond
+#      the current best (D-recipe, h=400, warmup=5 ≈ 0.33 pm R²)?
+#        I0  baseline       (anchor — current best config)
+#        I1  + y0_theta_init     (direct y0 → theta bias at each step)
+#        I2  + forget_bias_init=1.0 (Gers/Jozefowicz positive shift)
+#        I3  + l2 smoothness     (penalise θ(t+1)−θ(t))
+#        I4  + n_substeps=2      (finer RK4 — relevant if ODE is stiff)
+#
+#   2. Split sensitivity: is the supervisor's hardcoded 3seed_splits.npz
+#      easier than a stratified random split? We hold the baseline config
+#      constant and just swap the split source.
+#        II  stratified random split (stratify by pm-endpoint quantile bins)
+#
+# All variants share: base = ivtt_gru.yaml (IVTT data, ivtt_analytic scaffold),
+# D-recipe loss (clamp=1, /3, species, time, endpoint), h=400, 100 epochs,
+# warmup_epochs=5. Three seeds per variant for noise bars.
+
+study: txtl_init_and_split
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/ivtt_gru.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 400
+  # D-recipe composable loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  # ─── I0: baseline (anchor for the init ablations) ─────────────────────────
+  - {exp_name: I0_baseline_seed1, seed: 1}
+  - {exp_name: I0_baseline_seed2, seed: 2}
+  - {exp_name: I0_baseline_seed3, seed: 3}
+
+  # ─── I1: y0_theta_init ────────────────────────────────────────────────────
+  - {exp_name: I1_y0_theta_init_seed1, seed: 1, y0_theta_init: true}
+  - {exp_name: I1_y0_theta_init_seed2, seed: 2, y0_theta_init: true}
+  - {exp_name: I1_y0_theta_init_seed3, seed: 3, y0_theta_init: true}
+
+  # ─── I2: forget_bias_init=1.0 ─────────────────────────────────────────────
+  - {exp_name: I2_forget_bias1_seed1, seed: 1, forget_bias_init: 1.0}
+  - {exp_name: I2_forget_bias1_seed2, seed: 2, forget_bias_init: 1.0}
+  - {exp_name: I2_forget_bias1_seed3, seed: 3, forget_bias_init: 1.0}
+
+  # ─── I3: L2 smoothness on θ(t) ────────────────────────────────────────────
+  - {exp_name: I3_l2_smooth_seed1, seed: 1, l2_regularization: true, lambda_reg: 0.001}
+  - {exp_name: I3_l2_smooth_seed2, seed: 2, l2_regularization: true, lambda_reg: 0.001}
+  - {exp_name: I3_l2_smooth_seed3, seed: 3, l2_regularization: true, lambda_reg: 0.001}
+
+  # ─── I4: n_substeps=2 ─────────────────────────────────────────────────────
+  - {exp_name: I4_nsubsteps2_seed1, seed: 1, n_substeps: 2}
+  - {exp_name: I4_nsubsteps2_seed2, seed: 2, n_substeps: 2}
+  - {exp_name: I4_nsubsteps2_seed3, seed: 3, n_substeps: 2}
+
+  # ─── II: stratified random split (no fixed split file) ────────────────────
+  # val_n/test_n at 12.5% of N=695. Stratify by pm endpoint quantiles so the
+  # split balances easy/hard samples across train/val/test.
+  - exp_name: II_strat_split_seed1
+    seed: 1
+    fixed_split_file: null
+    val_n: 87
+    test_n: 87
+    stratified_split: true
+    stratify_targets: [5]
+    stratify_bins: 5
+  - exp_name: II_strat_split_seed2
+    seed: 2
+    fixed_split_file: null
+    val_n: 87
+    test_n: 87
+    stratified_split: true
+    stratify_targets: [5]
+    stratify_bins: 5
+  - exp_name: II_strat_split_seed3
+    seed: 3
+    fixed_split_file: null
+    val_n: 87
+    test_n: 87
+    stratified_split: true
+    stratify_targets: [5]
+    stratify_bins: 5
