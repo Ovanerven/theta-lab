@@ -62,7 +62,7 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
     test_subset = ds if no_split else _test_subset(ds, exp_dir)
 
     model.eval()
-    dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
+    # dt now read per-sample from item[3] (the dataset's __getitem__).
 
     # When lifting, restrict species accounting to the actually-observed pair
     # (mRNA, protein). Labels come from the scaffold's state_names at those
@@ -87,10 +87,11 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
     with torch.no_grad():
         for i in range(len(test_subset)):
             item = test_subset[i]
-            y0, u_seq, y_seq = item[0], item[1], item[2]
+            y0, u_seq, y_seq, dt_i = item[0], item[1], item[2], item[3]
             y0_b = y0.unsqueeze(0).to(device)
             u_b = u_seq.unsqueeze(0).to(device)
             y_seq_b = y_seq.unsqueeze(0).to(device)
+            dt_b = dt_i.unsqueeze(0).to(device)
             if lift_info:
                 from plot_diagnostics import _maybe_lift
                 y0_b, _ = _maybe_lift(y0_b, y_seq_b, lift_info)
@@ -98,7 +99,7 @@ def _compute_run(exp_dir: Path, device: torch.device, no_split: bool = False,
             else:
                 obs_idx_t = torch.arange(len(obs_names), device=device)
             pred, _, _ = model(
-                y0_b, u_b, dt.unsqueeze(0), obs_idx_t,
+                y0_b, u_b, dt_b, obs_idx_t,
                 **_filter_model_kwargs(model, base_kwargs),
             )
             y_np = y_seq.cpu().numpy()             # dataset layout

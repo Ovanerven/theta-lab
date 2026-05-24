@@ -1,0 +1,161 @@
+# Data axis on the NATIVE-GRID datasets (no interpolation cost). GRU encoder.
+# Single seed, 50 epochs — quick triage to confirm per-sample dt + no-resample
+# data unlocks higher R² than the interpolated variants.
+#
+# Three dataset variants:
+#   A_native_old   = OLD legacy only (691 real, 60s uniform grid)
+#   B_native_real  = OLD + NEW real (1003 real total, each on its native grid)
+#   C_native_full  = OLD + NEW + synth (8491 total, synth on its native NEW grid).
+#                    Eval is real-only via test_real_only=true.
+#
+# Locked-in production knobs (from earlier sweeps):
+#   D-recipe composable loss (clamp=1, /3 normaliser, species 1.25/1.0,
+#     pm second-half ×3, lambda_endpoint=0.1)
+#   hidden=600, warmup_epochs=5, y0_theta_init=true
+#   Model 5 scaffold (txtl_resource_and_maturation_dna)
+#   Stratified split on [3, 5], split_seed default (42)
+#
+# Seed 2 chosen because A1 sLSTM d_recipe seed 2 hit pm=0.69 — the best
+# single-run result we've seen on the new framework. Worth repeating that
+# seed on the native-grid setup to see how much of that came from the OLD
+# native grid vs the encoder/loss combo.
+#
+# log_dt axis: each dataset variant runs twice — once with the encoder fed
+# only the standard features (no log_dt) and once with log(dt_k) concatenated
+# to the GRU input. On A (OLD-only, constant 60s dt) the two should be ~equal
+# (log_dt is a constant feature → no info), serving as a sanity control.
+# On B and C the dt varies (OLD 60s vs NEW ~600s) so log_dt should help.
+
+study: txtl_data_axis_native_gru_DT_AWARE_and_model9
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  scaffold: txtl_resource_and_maturation_dna
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 2
+  y0_theta_init: false
+  # D-recipe composable loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  # Stratified random split on (mm, pm) endpoint quantiles
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  # Match OLD's upstream blanking on the NEW real samples (raw in the NPZ).
+  # OLD was already min-gated; this op is a no-op on OLD and lifts NEW to start at 0.
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # Diagnostics: dump 5 extra pred-vs-true plots from NEW test samples (A_native_old
+  # has no NEW samples so this is a silent no-op there).
+  plot_extra_new_samples: 5
+
+runs:
+  # ─── baseline (no log_dt in encoder) ──────────────────────────────────────
+  # A — OLD legacy only on native 60s grid. N=691 → val/test=87.
+  - exp_name: A_native_old
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false   # dataset is already all-real
+    encoder_use_log_dt: false
+
+  # B — OLD + NEW real, no synth. N=1003 → val/test=125.
+  - exp_name: B_native_real
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false   # all-real dataset
+    encoder_use_log_dt: false
+
+  # C — OLD + NEW + synth on native grids. Train on real+synth, eval on real.
+  # N_real=1003 → val/test=125 (drawn only from real via test_real_only).
+  - exp_name: C_native_full
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+    encoder_use_log_dt: false
+
+  # ─── log_dt arm (concat log(dt_k) into GRU encoder feature) ───────────────
+  # A_logdt — sanity control: dt is constant 60s on OLD, so log_dt is constant
+  # across all steps and should add no info — A_logdt ≈ A_native_old expected.
+  - exp_name: A_native_old_logdt
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false
+    encoder_use_log_dt: true
+
+  # B_logdt — OLD (60s) + NEW (~600s) mixed; log_dt should help the GRU
+  # distinguish per-step scale and improve the OLD→NEW comparison.
+  - exp_name: B_native_real_logdt
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+    encoder_use_log_dt: true
+
+  # C_logdt — same as C but with log_dt; tests whether dt-awareness lets the
+  # encoder also benefit from synth (which lives on the NEW grid).
+  - exp_name: C_native_full_logdt
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+    encoder_use_log_dt: true
+
+  # ─── Model 9 arm (oxygen-aware dark-protein scaffold, reads u_open) ───────
+  # Model 9 adds P_dark / P_fluor / tube_opened latents. u_open=1 at t≈22h on
+  # NEW samples flips tube_opened, turning off O2 sinks so dark protein matures
+  # into fluorescent protein. The scaffold's obs_state_idx=[3, 6] maps
+  # dataset (mm, pm) → scaffold (mm, P_fluor). Uses log_dt by default since
+  # NEW samples (where u_open actually fires) live on a variable grid.
+  #
+  # A_model9: sanity control on OLD (u_open=0 everywhere → tube_opened stays
+  # at 0, O2 sinks always on). Tests Model 9 mechanics on data without opening.
+  - exp_name: A_model9
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false
+    scaffold: txtl_model9_oxygen_dark
+    encoder_use_log_dt: true
+
+  # B_model9: primary test. OLD+NEW mixed; u_open fires on the 312 NEW samples
+  # at t≈22h. If oxygen-rescue is real, Model 9 should beat Model 5's B run.
+  - exp_name: B_model9
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+    scaffold: txtl_model9_oxygen_dark
+    encoder_use_log_dt: true
+
+  # C_model9: same plus synth. Synth pieces have u_open=0 (no opening event in
+  # the simulator); only NEW real samples carry the bolus.
+  - exp_name: C_model9
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+    scaffold: txtl_model9_oxygen_dark
+    encoder_use_log_dt: true

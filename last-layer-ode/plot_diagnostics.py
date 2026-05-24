@@ -120,7 +120,13 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
                 f"(checked cwd, {exp_dir}, {script_dir}, and {project_root}/datasets)"
             )
 
-    ds = ODEDataset(dataset_path)
+    # Match the trainer's filter: if the run used use_synthetic_data=False, the
+    # dataset was loaded with synth rows dropped before splitting. Reloading
+    # without that flag here would cause the saved train/val/test indices to
+    # reference DIFFERENT samples in the unfiltered dataset — endpoint_r2 then
+    # skips ~80% of the test set as "synth" because the indices land in the
+    # synth region. Forward this flag from the config.
+    ds = ODEDataset(dataset_path, use_synthetic_data=bool(cfg.get("use_synthetic_data", True)))
 
     norm_path = exp_dir / "norm_stats.npz"
     if norm_path.exists():
@@ -499,12 +505,11 @@ def _save_event_driven_dashboard(t, y_true, y_pred, u_val, theta_val, state_name
     plt.close(fig)
 
 
-def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", param_names: list[str] | None = None, lift_info: dict | None = None):
+def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Path, n_samples: int, device: torch.device, exp_dir: Path | None = None, u_transform: str = "none", param_names: list[str] | None = None, lift_info: dict | None = None, extra_new_samples: int = 0):
     raw_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     n_samples = min(int(n_samples), len(plot_ds))
     collate_fn = collate_varlen if getattr(raw_ds, "variable_length", False) else collate
-    loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate_fn)
     split_label = "test" if (exp_dir is not None and (exp_dir / "split.npz").exists()) else "train"
 
     if isinstance(plot_ds, torch.utils.data.Subset):
@@ -512,11 +517,11 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     else:
         plotted_indices = list(range(n_samples))
 
+    loader = torch.utils.data.DataLoader(plot_ds, batch_size=n_samples, shuffle=False, num_workers=0, collate_fn=collate_fn)
     batch = next(iter(loader))
-    # collate / collate_varlen now return (y0, u, y, lengths_or_None, z_expr)
+    # collate / collate_varlen now return (y0, u, y, lengths_or_None, z_expr, dt_seq)
     y0, u_seq, y_seq, batch_lengths = batch[0], batch[1], batch[2], batch[3]
-    K_batch = u_seq.shape[1]
-    dt_seq = torch.from_numpy(raw_ds.dt[:K_batch])[None, :].expand(y0.shape[0], -1)
+    dt_seq = batch[5] if len(batch) >= 6 else torch.from_numpy(raw_ds.dt[:u_seq.shape[1]])[None, :].expand(y0.shape[0], -1)
 
     y0 = y0.to(device)
     u_seq = u_seq.to(device)
@@ -625,6 +630,84 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     if theta_np is None:
         print("[warn] model returned no theta; skipping theta plots for plotted samples")
 
+    # ─── extra plots from NEW samples only ───────────────────────────────────
+    # When the dataset has a source_label field (i.e. it's a mixed OLD+NEW
+    # native-grid build) and extra_new_samples > 0, plot that many additional
+    # NEW samples from the test split with a "new_" filename prefix. Lets you
+    # eyeball post-tube-opening behaviour without manually digging out indices.
+    if extra_new_samples > 0:
+        src = getattr(raw_ds, "source_label", None)
+        if src is None:
+            print(f"[plot_predictions] extra_new_samples={extra_new_samples} requested but dataset has no source_label; skipping")
+        else:
+            src_arr = np.array([str(s) for s in src])
+            test_idx_arr = np.array(plotted_indices) if isinstance(plot_ds, torch.utils.data.Subset) else np.arange(len(plot_ds))
+            # Use the full test split, not just the already-plotted slice
+            if isinstance(plot_ds, torch.utils.data.Subset):
+                full_test_idx = np.asarray(plot_ds.indices, dtype=int)
+            else:
+                full_test_idx = np.arange(len(plot_ds))
+            new_in_test = full_test_idx[src_arr[full_test_idx] == "new"]
+            if len(new_in_test) == 0:
+                print(f"[plot_predictions] no NEW samples in test split; skipping {extra_new_samples} extras")
+            else:
+                chosen = list(new_in_test[: int(extra_new_samples)])
+                print(f"[plot_predictions] plotting {len(chosen)} extra NEW samples: idx={chosen}")
+                sub = torch.utils.data.Subset(raw_ds, chosen)
+                ldr = torch.utils.data.DataLoader(sub, batch_size=len(chosen), shuffle=False, num_workers=0, collate_fn=collate_fn)
+                bx = next(iter(ldr))
+                y0x, u_seqx, y_seqx, blx = bx[0], bx[1], bx[2], bx[3]
+                dt_seqx = bx[5] if len(bx) >= 6 else torch.from_numpy(raw_ds.dt[:u_seqx.shape[1]])[None, :].expand(y0x.shape[0], -1)
+                y0x, u_seqx, y_seqx, dt_seqx = y0x.to(device), u_seqx.to(device), y_seqx.to(device), dt_seqx.to(device)
+                if blx is not None:
+                    blx = blx.to(device)
+                y0x, y_seqx = _maybe_lift(y0x, y_seqx, lift_info or {})
+                with torch.no_grad():
+                    obs_idx_x = (torch.tensor(lift_info["scaffold_obs_idx"], device=y0x.device, dtype=torch.long)
+                                 if lift_info else torch.arange(y0x.shape[-1], device=y0x.device))
+                    kwargs_x = {"y_seq": None, "teacher_forcing": False, "u_transform": u_transform, "y_transform": str((load_yaml(exp_dir / "config.yaml") if exp_dir else {}).get("y_transform", "none"))}
+                    if model.__class__.__name__ == "OdeTransformerGrouped" and blx is not None:
+                        kwargs_x["lengths"] = blx
+                    predx, thetax, _ = model(y0x, u_seqx, dt_seqx, obs_idx_x, **_filter_model_kwargs(model, kwargs_x))
+                yt = y_seqx.cpu().numpy(); yp = predx.cpu().numpy()
+                un = u_seqx.cpu().numpy(); dtn = dt_seqx.cpu().numpy()
+                ln = blx.cpu().numpy() if blx is not None else None
+                thn = thetax.cpu().numpy() if thetax is not None else None
+                Px = yp.shape[-1]
+                for i, gi in enumerate(chosen):
+                    Li = int(ln[i]) if ln is not None else yp.shape[1]
+                    tg = np.concatenate([[0.0], np.cumsum(dtn[i, :Li])])[1:]
+                    sid = f"new_{i:03d}_idx{gi}"
+                    yt_i, yp_i, u_i = yt[i, :Li, :], yp[i, :Li, :], un[i, :Li, :]
+                    th_i = thn[i, :Li, :] if thn is not None else None
+                    fig, axes = plt.subplots(Px, 1, figsize=(6, 4 * Px), sharex=True)
+                    if Px == 1:
+                        axes = [axes]
+                    for p, ax in enumerate(axes):
+                        ax.plot(tg, yt_i[:, p], linewidth=2, label="true")
+                        ax.plot(tg, yp_i[:, p], linewidth=2, linestyle="--", label="pred")
+                        ax.set_ylabel(state_names[p] if p < len(state_names) else f"s{p}")
+                        ax.grid(True, alpha=0.25)
+                        if p == 0:
+                            ax.legend()
+                    axes[-1].set_xlabel("Time")
+                    fig.suptitle(f"Prediction vs truth [NEW test sample {sid}]")
+                    fig.tight_layout()
+                    fig.savefig(out_dir / f"pred_vs_true_{sid}.png", dpi=150)
+                    plt.close(fig)
+                    _save_bolus_panel(tg, u_i, control_names,
+                                      title=f"Inputs/Boluses [NEW test sample {sid}]",
+                                      out_path=out_dir / f"inputs_bolus_{sid}.png")
+                    if th_i is not None:
+                        _save_theta_panel(th_i, dtn[i, :Li],
+                                          out_dir / f"theta_sample_{sid}.png",
+                                          title=f"Learned θ(t) [NEW test sample {sid}]",
+                                          param_names=param_names)
+                    _save_event_driven_dashboard(tg, yt_i, yp_i, u_i, th_i,
+                                                 state_names, control_names, param_names,
+                                                 title=f"Event Overview [NEW test sample {sid}]",
+                                                 out_path=out_dir / f"event_dashboard_{sid}.png")
+
 
 def _save_theta_panel(
     theta_np: np.ndarray,
@@ -666,8 +749,8 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     plot_ds = _test_subset(ds, exp_dir) if exp_dir is not None else ds
     item = plot_ds[sample_idx]
     y0, u_seq = item[0], item[1]
-    K = int(u_seq.shape[0])
-    dt_seq = torch.from_numpy(raw_ds.dt[:K])
+    # __getitem__ returns dt at index 3 (after y0, u, y) for both varlen and fixed.
+    dt_seq = item[3] if len(item) >= 4 and torch.is_tensor(item[3]) else torch.from_numpy(raw_ds.dt[:int(u_seq.shape[0])])
 
     y0 = y0.unsqueeze(0).to(device)
     u_seq = u_seq.unsqueeze(0).to(device)
@@ -719,7 +802,7 @@ def plot_beta(model, ds: ODEDataset, state_names: list[str], out_dir: Path, samp
     plt.close(fig)
 
 
-def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0, ckpt_path: str | Path | None = None) -> Path:
+def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0, ckpt_path: str | Path | None = None, extra_new_samples: int = 0) -> Path:
     exp_dir = Path(exp_dir)
     out_dir = exp_dir / "plots"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -742,7 +825,7 @@ def plot_experiment(exp_dir: str | Path, n_samples: int = 5, sample_idx: int = 0
         plot_loss_curves(loss_npz, out_dir)
         plot_val_species_losses(loss_npz, out_dir, state_names=state_names, obs_idx=obs_idx)
 
-    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names, lift_info=lift_info)
+    plot_predictions(model, ds, state_names=state_names, out_dir=out_dir, n_samples=n_samples, device=device, exp_dir=exp_dir, u_transform=u_transform, param_names=param_names, lift_info=lift_info, extra_new_samples=int(extra_new_samples))
 
     if cfg.get("use_basal", False) or cfg.get("model_class", "") == "ode_rnn_basal_v2":
         plot_beta(model, ds, state_names=state_names, out_dir=out_dir, sample_idx=sample_idx, device=device, exp_dir=exp_dir, u_transform=u_transform, lift_info=lift_info)
@@ -810,12 +893,15 @@ def plot_epoch_prediction_overlays(
     item = ds[sample_idx]
     y0, u_seq, y_seq = item[0], item[1], item[2]
     K = int(u_seq.shape[0])
-    dt = raw_ds.dt[:K].astype(np.float32)
+    # Use per-sample dt from __getitem__ (index 3) when available — falls back
+    # to the dataset's shared dt for back-compat with older NPZs.
+    dt_t = item[3] if len(item) >= 4 and torch.is_tensor(item[3]) else torch.from_numpy(raw_ds.dt[:K])
+    dt = dt_t.detach().cpu().numpy().astype(np.float32)
     t = np.cumsum(dt)
 
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
-    dt_b = torch.from_numpy(raw_ds.dt[:K]).unsqueeze(0).to(device)
+    dt_b = dt_t.unsqueeze(0).to(device)
     y_seq_b = y_seq.unsqueeze(0).to(device)
     # Lift dataset (y0, y_seq) into scaffold layout for partial-obs runs.
     y0_b, y_seq_b = _maybe_lift(y0_b, y_seq_b, lift_info or {})

@@ -1207,9 +1207,12 @@ class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
         ]
         # (mm, pm) -> (mm @ idx 3, P_fluor @ idx 6)
         self.obs_state_idx = [3, 6]
-        # tube_opened currently has no dataset column (Excel doesn't carry it);
-        # if/when added, point its control_name here.
-        self.control_state_map = {"DNA c": 7}
+        # u_open is the per-sample tube-opening bolus signal (1.0 at the opening
+        # timestep, 0 elsewhere) supplied by build_native_grids_npz.py. The
+        # u_to_y_jump machinery adds it to state idx 8 (tube_opened), flipping
+        # 0 -> 1 at the opening event. After that, open_gate = 1 turns off the
+        # O2 sinks (dO2/dt term in forward()).
+        self.control_state_map = {"DNA c": 7, "u_open": 8}
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)

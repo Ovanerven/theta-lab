@@ -70,7 +70,8 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
                       protein_sp: str, mrna_sp: str) -> dict:
     model, ds, obs_names, _, lift_info = rebuild_model_from_experiment(exp_dir, device)
     subset = _split_subset(ds, exp_dir, split)
-    dt = torch.tensor(ds.dt.astype(np.float32)).to(device)
+    # dt is now read per-sample from the dataset's __getitem__ (item[3]); the
+    # shared ds.dt only matters as a fallback when no per-sample grid exists.
     if lift_info:
         # Scaffold layout: obs_state_idx[0]=mm slot, obs_state_idx[1]=pm slot
         # (mirrors cfg.obs_idx convention: mRNA first, protein second).
@@ -133,10 +134,11 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
                 n_skipped_synth += 1
                 continue
             item = subset[i]
-            y0, u_seq, y_seq = item[0], item[1], item[2]
+            y0, u_seq, y_seq, dt_i = item[0], item[1], item[2], item[3]
             y0_b = y0.unsqueeze(0).to(device)
             u_b = u_seq.unsqueeze(0).to(device)
             y_seq_b = y_seq.unsqueeze(0).to(device)
+            dt_b = dt_i.unsqueeze(0).to(device)
             # Lift into scaffold layout if needed.
             if lift_info:
                 from plot_diagnostics import _maybe_lift
@@ -144,7 +146,7 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
             pred, _, _ = model(
                 y0_b,
                 u_b,
-                dt.unsqueeze(0),
+                dt_b,
                 obs_idx,
                 **_filter_model_kwargs(model, base_kwargs),
             )

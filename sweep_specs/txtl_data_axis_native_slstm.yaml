@@ -1,0 +1,55 @@
+# sLSTM mirror of txtl_data_axis_native_gru.yaml. Same 3 dataset variants,
+# same seed=2, 50 epochs, D-recipe loss, h=600, warmup=5, y0_theta_init=true.
+# Only difference: model_class=ode_slstm.
+
+study: txtl_data_axis_native_slstm_noy0_drecipe
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  scaffold: txtl_resource_and_maturation_dna
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 2
+  y0_theta_init: false
+  model_class: ode_slstm
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  # Match OLD's upstream blanking on the NEW real samples (raw in the NPZ).
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+runs:
+  - exp_name: A_native_old
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: B_native_real
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: C_native_full
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true

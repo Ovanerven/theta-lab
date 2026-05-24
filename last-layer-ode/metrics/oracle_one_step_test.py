@@ -140,11 +140,12 @@ def run_oracle_test(
     model.eval()
     with torch.no_grad():
         for _batch in loader:
-            # collate returns (y0, u, y, lengths, z_expr)
+            # collate now returns (y0, u, y, lengths_or_None, z_expr, dt_seq)
             y0, u_seq, y_seq, lengths = _batch[0], _batch[1], _batch[2], _batch[3]
             B = y0.shape[0]
             K = u_seq.shape[1]
-            dt_seq = torch.from_numpy(raw_ds.dt[:K])[None, :].expand(B, -1)
+            dt_seq = _batch[5] if len(_batch) >= 6 else (
+                torch.from_numpy(raw_ds.dt[:K])[None, :].expand(B, -1))
 
             y0 = y0.to(device)
             u_seq = u_seq.to(device)

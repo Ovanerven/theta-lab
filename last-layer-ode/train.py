@@ -54,7 +54,16 @@ class ODEDataset(Dataset):
         self.u_seq = _maybe_filter(d["u_seq"].astype(np.float32))          # (N,K,U)
         self.y_seq = _maybe_filter(d["y_seq"].astype(np.float32))          # (N,K,P_obs)
         t_obs = d["t_obs"].astype(np.float32)  # (K+1,)
-        self.dt = np.diff(t_obs).astype(np.float32)  # (K,)
+        self.dt = np.diff(t_obs).astype(np.float32)  # (K,) — shared fallback when no per-sample grid
+
+        # Per-sample time grid (optional). When present, lets datasets mix
+        # samples from different acquisition grids (e.g. OLD 60s + NEW 160s)
+        # without resampling. Shape (N, K_max). Padded steps for shorter
+        # samples can be any value — they're masked out via `lengths`.
+        if "dt_per_sample" in d.files:
+            self.dt_per_sample = _maybe_filter(d["dt_per_sample"].astype(np.float32))
+        else:
+            self.dt_per_sample = None
 
         if "control_indices" not in d or "obs_indices" not in d:
             raise ValueError(
@@ -109,34 +118,42 @@ class ODEDataset(Dataset):
         z_i = int(self.z_expr[i]) if self.z_expr is not None else 1
         if self.variable_length:
             L = int(self.lengths[i])
+            dt_i = (self.dt_per_sample[i, :L] if self.dt_per_sample is not None
+                    else self.dt[:L])
             return (
                 torch.from_numpy(self.y0[i]),          # (P_obs,)
                 torch.from_numpy(self.u_seq[i, :L]),   # (L,U)
                 torch.from_numpy(self.y_seq[i, :L]),   # (L,P_obs)
+                torch.from_numpy(np.ascontiguousarray(dt_i)),  # (L,)
                 torch.tensor(z_i, dtype=torch.long),
             )
+        dt_i = (self.dt_per_sample[i] if self.dt_per_sample is not None
+                else self.dt)
         return (
             torch.from_numpy(self.y0[i]),  # (P_obs,)
             torch.from_numpy(self.u_seq[i]),  # (K,U)
             torch.from_numpy(self.y_seq[i]),  # (K,P_obs)
+            torch.from_numpy(np.ascontiguousarray(dt_i)),  # (K,)
             torch.tensor(z_i, dtype=torch.long),
         )
 
 
 def collate(batch):
-    y0, u, y, z = zip(*batch)
-    return torch.stack(y0), torch.stack(u), torch.stack(y), None, torch.stack(z)
+    y0, u, y, dt, z = zip(*batch)
+    return (torch.stack(y0), torch.stack(u), torch.stack(y), None,
+            torch.stack(z), torch.stack(dt))
 
 
 def collate_varlen(batch):
     """Pad each batch to its own max length; return lengths tensor."""
-    y0_list, u_list, y_list, z_list = zip(*batch)
+    y0_list, u_list, y_list, dt_list, z_list = zip(*batch)
     lengths = torch.tensor([u.shape[0] for u in u_list], dtype=torch.long)
     y0 = torch.stack(y0_list)
     u_padded = torch.nn.utils.rnn.pad_sequence(u_list, batch_first=True)   # (B, K_batch, U)
     y_padded = torch.nn.utils.rnn.pad_sequence(y_list, batch_first=True)   # (B, K_batch, P)
+    dt_padded = torch.nn.utils.rnn.pad_sequence(dt_list, batch_first=True)  # (B, K_batch) — padded with 0
     z = torch.stack(z_list)
-    return y0, u_padded, y_padded, lengths, z
+    return y0, u_padded, y_padded, lengths, z, dt_padded
 
 
 def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> torch.Tensor:
@@ -188,6 +205,7 @@ def _apply_channel_min_gate(
     y0: torch.Tensor,
     y_seq: torch.Tensor,
     cols: list[int] | None,
+    lengths: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Per-sample, per-channel min-subtraction on (y0, y_seq) for a batch.
 
@@ -196,12 +214,24 @@ def _apply_channel_min_gate(
     pure runtime op on the batch; the underlying npz is never modified.
 
     cols=None applies to every channel; otherwise restrict to the listed indices.
+
+    If `lengths` is provided, padded positions (k >= length) are masked out of
+    the min so a zero-padded NPZ doesn't trivially set ch_min=0 and turn the
+    gate into a no-op on shorter samples.
     """
+    B, K, P = y_seq.shape
+    if lengths is not None:
+        ar = torch.arange(K, device=y_seq.device).unsqueeze(0)        # (1, K)
+        valid = ar < lengths.to(y_seq.device).unsqueeze(1)            # (B, K)
+        mask = valid.unsqueeze(-1)                                    # (B, K, 1)
+        masked_y = torch.where(mask, y_seq, torch.full_like(y_seq, float("inf")))
+    else:
+        masked_y = y_seq
     if cols is None:
-        ch_min = y_seq.amin(dim=1, keepdim=True)            # (B,1,P)
+        ch_min = masked_y.amin(dim=1, keepdim=True)                   # (B,1,P)
         return y0 - ch_min[:, 0, :], y_seq - ch_min
     idx = torch.as_tensor(cols, device=y_seq.device, dtype=torch.long)
-    ch_min = y_seq.index_select(dim=2, index=idx).amin(dim=1, keepdim=True)  # (B,1,|cols|)
+    ch_min = masked_y.index_select(dim=2, index=idx).amin(dim=1, keepdim=True)  # (B,1,|cols|)
     y0_out = y0.clone()
     y_seq_out = y_seq.clone()
     y0_out[:, idx] = y0[:, idx] - ch_min[:, 0, :]
@@ -1002,6 +1032,8 @@ class TrainConfig:
     y0_theta_init: bool = False           # ode_rnn: add MLP(y0) bias to theta-head logits at every step
     encoder_use_time: bool = False        # ode_rnn: concat τ_k = k/(K-1) ∈ [0,1] to encoder feat (Experiment A
                                           # in new_scaffolds.tex §3.1 — "normalized time as encoder input").
+    encoder_use_log_dt: bool = False      # ode_rnn: concat log(dt_k) to encoder feat (dt-awareness for variable
+                                          # grids — OLD 60s vs NEW ~600s).
     theta_head_transform: str = "log_gamma"  # "log_gamma" | "gamma"
     theta_head_tau: float = 1.0           # log_gamma sigmoid temperature (Bob: 2.3)
     u_transform: str = "none"             # forward-time u feature transform ("none" | "sqrt" | "cumsum" | …)
@@ -1079,6 +1111,13 @@ class TrainConfig:
     # Channels to gate when subtract_channel_min=True. None = all P channels.
     # Typical for the IVTT 7-state layout: [3, 5] (mm = Broccoli, pm = mCherry/2).
     subtract_channel_min_cols: list[int] | None = None
+
+    # Diagnostics: if >0, plot_predictions also dumps this many extra sample
+    # plots restricted to NEW-source samples (source_label=='new') from the
+    # test split, with a "new_" filename prefix. Useful when training on
+    # mixed OLD+NEW native-grid NPZs and you want to eyeball post-tube-opening
+    # behaviour without manually picking indices.
+    plot_extra_new_samples: int = 0
 
     # "Gate the parameter" (Bob's ablation knob): pin chosen entries of θ(t) to
     # constant values by collapsing their (theta_lo, theta_hi) box to a single
@@ -1349,8 +1388,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             pin_memory=bool(cfg.pin_memory),
         )
 
-    # infer dims
-    y0_ex, u_ex, _, _ = ds[0]
+    # infer dims (item now returns (y0, u, y, dt, z) — 5 elements)
+    item_ex = ds[0]
+    y0_ex, u_ex = item_ex[0], item_ex[1]
     P_obs = int(y0_ex.shape[0])
     U = int(u_ex.shape[-1])
 
@@ -1486,6 +1526,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         head_init=cfg.head_init,
         y0_theta_init=cfg.y0_theta_init,
         encoder_use_time=cfg.encoder_use_time,
+        encoder_use_log_dt=cfg.encoder_use_log_dt,
         theta_head_transform=cfg.theta_head_transform,
         theta_head_tau=cfg.theta_head_tau,
         **sparse_theta_kwargs,
@@ -1612,7 +1653,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     if not _lift_partial:
         _dataset_obs_idx = None  # unused on the non-lift code path
 
-    dt_tensor = torch.from_numpy(ds.dt).to(device)
+    # dt is now per-sample, carried by the dataloader.
     grouped_model = cfg.model_class == "ode_transformer_grouped"
 
     def _inject_feat_transforms(mk: dict) -> dict:
@@ -1633,10 +1674,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         tr_total = 0.0
         tr_batches = 0
 
-        for y0, u_seq, y_seq, batch_lengths, z_expr_batch in train_loader:
-            K_batch = u_seq.shape[1]
-            dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
-
+        for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in train_loader:
             y0 = y0.to(device)
             y_seq = y_seq.to(device)
             u_seq = u_seq.to(device)
@@ -1647,7 +1685,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             # "Gate the observation": per-batch min-subtract on y0/y_seq. No-op
             # when the flag is off, so the same .npz file can be used in both modes.
             if cfg.subtract_channel_min:
-                y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+                y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
             if _lift_partial:
                 y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
 
@@ -1684,7 +1722,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 else:
                     # obs_idx is a torch.Tensor here; channel-keyed config knobs
                     # use raw state indices, so resolve against the python list.
-                    obs_idx_list = obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)
+                    # Use cfg.obs_idx (user-specified raw state indices) when present —
+                    # the partial-observability lift may have remapped `obs_idx` to
+                    # scaffold-local indices, but channel-keyed config dicts (species_weights,
+                    # time_upweight, endpoint_channels) reference raw indices.
+                    obs_idx_list = (list(cfg.obs_idx) if cfg.obs_idx is not None
+                                    else (obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)))
                     chan_w = _resolve_channel_weights(obs_idx_list, cfg.species_weights, pred.device, pred.dtype)
                     time_w = _build_per_channel_time_weight(
                         obs_idx_list, cfg.time_upweight, batch_lengths,
@@ -1767,11 +1810,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_total = None
 
             with torch.no_grad():
-                for y0, u_seq, y_seq, batch_lengths, z_expr_batch in val_loader:
-                    K_batch = u_seq.shape[1]
-                    dt_seq = torch.from_numpy(ds.dt[:K_batch])
-                    dt_seq = dt_seq[None, :].expand(y0.shape[0], -1)
-
+                for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in val_loader:
                     y0 = y0.to(device)
                     y_seq = y_seq.to(device)
                     u_seq = u_seq.to(device)
@@ -1780,7 +1819,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         batch_lengths = batch_lengths.to(device)
 
                     if cfg.subtract_channel_min:
-                        y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+                        y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
                     if _lift_partial:
                         y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
 
@@ -1807,7 +1846,12 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                         y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
                         loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
                     else:
-                        obs_idx_list = obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)
+                        # Use cfg.obs_idx (user-specified raw state indices) when present —
+                        # the partial-observability lift may have remapped `obs_idx` to
+                        # scaffold-local indices, but channel-keyed config dicts (species_weights,
+                        # time_upweight, endpoint_channels) reference raw indices.
+                        obs_idx_list = (list(cfg.obs_idx) if cfg.obs_idx is not None
+                                        else (obs_idx.tolist() if torch.is_tensor(obs_idx) else list(obs_idx)))
                         chan_w = _resolve_channel_weights(obs_idx_list, cfg.species_weights, pred.device, pred.dtype)
                         time_w = _build_per_channel_time_weight(
                             obs_idx_list, cfg.time_upweight, batch_lengths,
@@ -1916,9 +1960,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_batches = 0
         sp_total = None
         with torch.no_grad():
-            for y0, u_seq, y_seq, batch_lengths, z_expr_batch in test_loader:
-                K_batch = u_seq.shape[1]
-                dt_seq = dt_tensor[:K_batch][None, :].expand(y0.shape[0], -1)
+            for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in test_loader:
                 y0 = y0.to(device)
                 y_seq = y_seq.to(device)
                 u_seq = u_seq.to(device)
@@ -1926,7 +1968,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 if batch_lengths is not None:
                     batch_lengths = batch_lengths.to(device)
                 if cfg.subtract_channel_min:
-                    y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols)
+                    y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
                 if _lift_partial:
                     y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
                 model_kwargs = {"y_seq": None, "teacher_forcing": False}
@@ -1984,7 +2026,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         try:
             from plot_diagnostics import plot_experiment, plot_epoch_prediction_overlays
 
-            plot_experiment(exp_dir, n_samples=int(plot_samples), sample_idx=int(plot_sample_idx))
+            plot_experiment(exp_dir, n_samples=int(plot_samples), sample_idx=int(plot_sample_idx),
+                            extra_new_samples=int(getattr(cfg, "plot_extra_new_samples", 0)))
 
             # epochs=None => automatically uses available checkpoints and picks up to max_overlays evenly spaced
             plot_epoch_prediction_overlays(

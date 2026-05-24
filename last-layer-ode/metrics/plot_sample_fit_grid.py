@@ -63,7 +63,10 @@ def pick_dataset_index(exp_dir: Path, sample_pos: int) -> int:
 def predict_sample(model, ds, dataset_idx: int, device: torch.device, cfg: dict = None, lift_info: dict | None = None):
     item = ds[dataset_idx]
     y0, u_seq, y_seq = item[0], item[1], item[2]
-    dt = torch.tensor(ds.dt.astype(np.float32)).unsqueeze(0).to(device)
+    # Per-sample dt from __getitem__ (item[3]); falls back to shared ds.dt
+    # for older NPZs without dt_per_sample.
+    dt_t = item[3] if len(item) >= 4 and torch.is_tensor(item[3]) else torch.tensor(ds.dt.astype(np.float32))
+    dt = dt_t.unsqueeze(0).to(device)
     y0_b = y0.unsqueeze(0).to(device)
     u_b = u_seq.unsqueeze(0).to(device)
     y_seq_b = y_seq.unsqueeze(0).to(device)

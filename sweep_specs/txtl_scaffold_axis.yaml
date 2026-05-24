@@ -1,0 +1,84 @@
+# Phase B: scaffold axis (GRU). Single seed per scaffold for first-pass triage.
+# Dataset = A4 (full combined real + synth, eval on real only via test_real_only).
+# Locked-in hyperparams: D-recipe loss, h=600, warmup=5, y0_theta_init=true,
+# stratified split on [3, 5].
+#
+# Goal: rank the 6 implemented scaffolds on combined-real eval. Winners get
+# a 3-seed follow-up. The tex also calls for Models 1, 2, 6 — those need
+# code implementation first (no existing scaffold), so they're omitted here.
+#
+# Reading the result:
+#   - Model 5 (current baseline) is the anchor. Any scaffold beating M5 wins.
+#   - Models 7/9 are oxygen-aware — their advantage (if any) only shows with
+#     the new oxygen experiments included (A4 has them).
+#   - Models 3/4 are stripped-down baselines: do they suffice, or is the
+#     full 7-state machinery necessary?
+#   - Model 8 (explicit reagent-resource) is the "more physics" alternative
+#     to Model 5.
+
+study: txtl_scaffold_axis
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 1
+  # Dataset = A4: full combined, real-only eval
+  dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+  val_n: 125
+  test_n: 125
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  # D-recipe composable loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# Each scaffold tested twice: once with current best init (y0_theta_init off,
+# locked-in baseline) and once with y0_theta_init=true (the only init knob
+# with a positive — if weak — signal from txtl_init_and_split). Pairs let you
+# read both "which scaffold wins" and "does y0_init help here" in one sweep.
+runs:
+  # ─── Model 3 — two-state observable ODE ───────────────────────────────────
+  - {exp_name: M3_two_state_base,  scaffold: txtl_model3_two_state}
+  - {exp_name: M3_two_state_y0,    scaffold: txtl_model3_two_state, y0_theta_init: true}
+
+  # ─── Model 4 — three-state TX-TL-maturation ───────────────────────────────
+  - {exp_name: M4_three_state_base, scaffold: txtl_model4_three_state}
+  - {exp_name: M4_three_state_y0,   scaffold: txtl_model4_three_state, y0_theta_init: true}
+
+  # ─── Model 5 — seven-state TXTL baseline (anchor) ─────────────────────────
+  # NaN'd at ep 3 on first launch — relaunch with same config (seed=1 may have
+  # been unlucky; if it NaNs again, increase warmup_epochs or drop lr).
+  - {exp_name: M5_baseline_base, scaffold: txtl_resource_and_maturation_dna}
+  # M5_baseline_y0 already running from first launch (job 23071790) — comment
+  # out to avoid re-running. Re-enable if relaunching from scratch.
+  # - {exp_name: M5_baseline_y0,   scaffold: txtl_resource_and_maturation_dna, y0_theta_init: true}
+
+  # ─── Model 7 — boundary-gated no-expression ───────────────────────────────
+  # M7 pair already running from first launch (jobs 23071792, 23071793) — both
+  # survived the obs_idx bug because M7's scaffold.obs_state_idx happens to be
+  # [3,5] so the lift is a no-op. Comment out to avoid re-running.
+  # - {exp_name: M7_boundary_gated_base, scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005}
+  # - {exp_name: M7_boundary_gated_y0,   scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005, y0_theta_init: true}
+
+  # ─── Model 8 — explicit reagent-resource ──────────────────────────────────
+  - {exp_name: M8_reagent_resource_base, scaffold: txtl_model8_reagent_resource}
+  - {exp_name: M8_reagent_resource_y0,   scaffold: txtl_model8_reagent_resource, y0_theta_init: true}
+
+  # ─── Model 9 — oxygen-limited dark-protein maturation ─────────────────────
+  - {exp_name: M9_oxygen_dark_base, scaffold: txtl_model9_oxygen_dark}
+  - {exp_name: M9_oxygen_dark_y0,   scaffold: txtl_model9_oxygen_dark, y0_theta_init: true}

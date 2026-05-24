@@ -1,0 +1,53 @@
+# Phase B scaffold axis — sLSTM mirror of txtl_scaffold_axis.yaml. Same 6
+# scaffolds × 1 seed = 6 runs. Only difference: model_class: ode_slstm.
+# Lets you read the GRU vs sLSTM × scaffold interaction.
+
+study: txtl_scaffold_axis_slstm
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 1
+  model_class: ode_slstm   # ← only difference from txtl_scaffold_axis.yaml
+  dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz
+  val_n: 125
+  test_n: 125
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# Same pairing as GRU sweep: each scaffold tested with and without y0_theta_init.
+runs:
+  - {exp_name: M3_two_state_base,  scaffold: txtl_model3_two_state}
+  - {exp_name: M3_two_state_y0,    scaffold: txtl_model3_two_state, y0_theta_init: true}
+
+  - {exp_name: M4_three_state_base, scaffold: txtl_model4_three_state}
+  - {exp_name: M4_three_state_y0,   scaffold: txtl_model4_three_state, y0_theta_init: true}
+
+  - {exp_name: M5_baseline_base, scaffold: txtl_resource_and_maturation_dna}
+  - {exp_name: M5_baseline_y0,   scaffold: txtl_resource_and_maturation_dna, y0_theta_init: true}
+
+  - {exp_name: M7_boundary_gated_base, scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005}
+  - {exp_name: M7_boundary_gated_y0,   scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005, y0_theta_init: true}
+
+  - {exp_name: M8_reagent_resource_base, scaffold: txtl_model8_reagent_resource}
+  - {exp_name: M8_reagent_resource_y0,   scaffold: txtl_model8_reagent_resource, y0_theta_init: true}
+
+  - {exp_name: M9_oxygen_dark_base, scaffold: txtl_model9_oxygen_dark}
+  - {exp_name: M9_oxygen_dark_y0,   scaffold: txtl_model9_oxygen_dark, y0_theta_init: true}

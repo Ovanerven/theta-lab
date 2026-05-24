@@ -1,0 +1,85 @@
+# Plain MSE counterpart to the D-recipe native-grid sweeps. Combines GRU and
+# sLSTM in one file: 3 datasets × 2 encoders × seed 2 = 6 runs total.
+#
+# Loss: plain masked log1p MSE (no clamp, no species weights, no time upweight,
+# no endpoint term, no /N normaliser). Same setup as the original A1 plain
+# variant where sLSTM hit pm mean=0.49 on OLD-native.
+#
+# Comparison purpose:
+#   - vs txtl_data_axis_native_{gru,slstm}.yaml (D-recipe at same seed=2):
+#     does the D-recipe peak still pay off on the no-resample data, or does
+#     plain MSE generalise more cleanly?
+
+study: txtl_data_axis_native_plainmse
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  scaffold: txtl_resource_and_maturation_dna
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 2
+  y0_theta_init: false
+  # Stratified random split on (mm, pm) endpoint quantiles
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  # Match OLD's upstream blanking on the NEW real samples (raw in the NPZ).
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # Plain MSE — no D-recipe knobs set.
+
+runs:
+  # ─── GRU ──────────────────────────────────────────────────────────────────
+  - exp_name: gru_A_native_old
+    model_class: ode_rnn
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: gru_B_native_real
+    model_class: ode_rnn
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: gru_C_native_full
+    model_class: ode_rnn
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+
+  # ─── sLSTM ────────────────────────────────────────────────────────────────
+  - exp_name: slstm_A_native_old
+    model_class: ode_slstm
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: slstm_B_native_real
+    model_class: ode_slstm
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+
+  - exp_name: slstm_C_native_full
+    model_class: ode_slstm
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true

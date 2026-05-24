@@ -16,7 +16,7 @@ Why a custom cell instead of the xLSTM package's sLSTMLayer?
 Drop-in replacement for OdeLSTM. Same forward signature, same kwargs.
 """
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -152,6 +152,7 @@ class OdesLSTM(nn.Module):
         head_init: str = "default",
         theta_head_transform: str = "log_gamma",
         theta_head_tau: float = 1.0,
+        y0_theta_init: bool = False,    # MLP(y0) → per-sample bias on theta-head logits (mirrors ode_rnn.py)
         **kwargs,
     ):
         super().__init__()
@@ -220,6 +221,24 @@ class OdesLSTM(nn.Module):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
+        # y0 MLP: encodes the initial observation y0 into a per-sample logit bias
+        # added to the head output at every timestep. Zero-init output so the
+        # model starts equivalent to baseline (no contribution from y0_mlp at
+        # init; gradients flow into it during training). Port of the equivalent
+        # block in ode_rnn.py — same shape, same init, same y_transform pipeline.
+        self.y0_theta_init = bool(y0_theta_init)
+        if self.y0_theta_init:
+            y0_in_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
+            self.y0_mlp = nn.Sequential(
+                nn.Linear(y0_in_dim, lift_dim),
+                nn.SiLU(),
+                nn.Linear(lift_dim, head_out),
+            )
+            nn.init.zeros_(self.y0_mlp[-1].weight)
+            nn.init.zeros_(self.y0_mlp[-1].bias)
+        else:
+            self.y0_mlp = None
+
     def forward(
         self,
         y0: torch.Tensor,
@@ -237,10 +256,10 @@ class OdesLSTM(nn.Module):
         th_out = torch.empty(B, K, self.theta_dim_emit, device=y0.device, dtype=y0.dtype)
         beta_out = torch.zeros(B, K, self.P, device=y0.device, dtype=y0.dtype)
 
-        states: Optional[List] = None
+        states: Optional[List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]] = None
         use_partial = obs_idx.numel() > 0
 
-        analytic_ctx: dict = {}
+        analytic_ctx: Dict[str, torch.Tensor] = {}
         if self._analytic_scaffold:
             analytic_ctx = self.rhs.precompute_batch(y0, u_seq)
             y_prev = self.rhs.initial_state(y0)
@@ -253,6 +272,19 @@ class OdesLSTM(nn.Module):
             u_enc = u_seq
         if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
             u_enc = u_enc.clamp_min(0.0).sqrt()
+
+        # Per-sample head bias from y0 MLP — computed once before the K-loop
+        # since y0 is the same at every step. None when y0_theta_init=False.
+        raw_y0_bias: Optional[torch.Tensor] = None
+        if self.y0_mlp is not None:
+            y0_feat = y0[:, self.gru_y_cols] if self.gru_y_cols is not None else y0
+            if y_transform == "sqrt":
+                y0_feat = y0_feat.clamp_min(0.0).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                y0_feat = y0_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+            elif y_transform == "log1p":
+                y0_feat = torch.log1p(y0_feat.clamp_min(0.0))
+            raw_y0_bias = self.y0_mlp(y0_feat)  # (B, head_out)
 
         for k in range(K):
             u_k = u_seq[:, k, :]
@@ -281,6 +313,8 @@ class OdesLSTM(nn.Module):
             x = self.lift(torch.cat([u_feat, y_feat], dim=-1))
             z, states = self.slstm(x, states)
             raw = self.head(z)
+            if raw_y0_bias is not None:
+                raw = raw + raw_y0_bias
 
             if self.use_basal:
                 raw_theta = raw[:, :self.theta_dim]
