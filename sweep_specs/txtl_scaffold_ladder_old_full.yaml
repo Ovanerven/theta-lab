@@ -1,0 +1,249 @@
+# Full scaffold ladder on OLD-only data — covers the tex's ladder Models 3-6
+# (M6 = M5 scaffold + ode_rnn encoder, which is every arm's default architecture,
+# so M5 runs here ARE M6A runs in tex terminology).
+#
+# Design:
+#   - M3, M4: 3 seeds × 2 losses (D-recipe, plain).  Baseline coverage.
+#   - M5    : 3 seeds × 2 losses × 2 y0_init (off, on).  Best-so-far scaffold,
+#             gets the extra y0-init axis.
+#
+# 2*(3*2) + (3*2*2) = 12 + 12 = 24 runs.
+#
+# Why OLD only: per new_scaffolds.tex's "Practical recommendation",
+# NEW data is structurally tied to Model 9 (oxygen / tube_opened) and synthetic
+# no-expression data is tied to Model 7. Models 3-6 don't represent the
+# tube-opening regime; running them on NEW just confounds the ladder.
+# Separate sweeps handle M7 (synth) and M9 (NEW).
+
+study: txtl_scaffold_ladder_old_full
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]                              # dataset side: mm@3, pm@5
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true                     # no-op on OLD (one source) but kept for consistency
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true                     # constant dt on OLD → no-op
+  plot_extra_new_samples: 0
+  y0_theta_init: false                         # overridden by M5 y0on arms below
+
+# ─── runs ──────────────────────────────────────────────────────────────────
+# Naming: M{N}_{loss}[_y0on]_s{seed}
+#   loss ∈ {drecipe, plain}
+#   y0on present only on M5 extra arms
+#   seed ∈ {0, 1, 2}
+
+runs:
+  # ════════════════════════════════════════════════════════════════════════
+  # Model 3: two-state observable ODE   (6 runs)
+  # ════════════════════════════════════════════════════════════════════════
+  - exp_name: M3_drecipe_s0
+    scaffold: txtl_model3_two_state
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_drecipe_s1
+    scaffold: txtl_model3_two_state
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_drecipe_s2
+    scaffold: txtl_model3_two_state
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_plain_s0
+    scaffold: txtl_model3_two_state
+    seed: 0
+
+  - exp_name: M3_plain_s1
+    scaffold: txtl_model3_two_state
+    seed: 1
+
+  - exp_name: M3_plain_s2
+    scaffold: txtl_model3_two_state
+    seed: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Model 4: three-state ODE (TX/TL/maturation)   (6 runs)
+  # ════════════════════════════════════════════════════════════════════════
+  - exp_name: M4_drecipe_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_drecipe_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_drecipe_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_plain_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+
+  - exp_name: M4_plain_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+
+  - exp_name: M4_plain_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Model 5 / Model 6A: seven-state ODE + ode_rnn encoder (default).
+  # Extra y0_theta_init axis — this is the best scaffold so far so it gets
+  # the deeper coverage.   (12 runs)
+  # ════════════════════════════════════════════════════════════════════════
+  - exp_name: M5_drecipe_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_plain_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+
+  - exp_name: M5_plain_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+
+  - exp_name: M5_plain_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+
+  # ── M5 + y0_theta_init ────────────────────────────────────────────────
+  - exp_name: M5_drecipe_y0on_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_y0on_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_y0on_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_plain_y0on_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    y0_theta_init: true
+
+  - exp_name: M5_plain_y0on_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    y0_theta_init: true
+
+  - exp_name: M5_plain_y0on_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    y0_theta_init: true

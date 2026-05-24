@@ -79,21 +79,22 @@ PM_OUTLIER_THRESHOLD = 5000.0
 
 # ---------------- Resampling helpers ----------------
 
-def _bin_deltas_to_intervals(
-    t_src: np.ndarray, deltas_src: np.ndarray, t_grid: np.ndarray
+def _bin_deltas_to_points(
+    t_src: np.ndarray, deltas_src: np.ndarray, t_points: np.ndarray
 ) -> np.ndarray:
-    """Sum per-step deltas into K intervals defined by a (K+1)-length grid.
+    """Sum per-step deltas onto bins anchored at K time points.
 
-    `t_grid` is the endpoint grid (length K+1). The k-th interval is
-    [t_grid[k], t_grid[k+1]). OLD per-step delta j is assigned to interval k
-    where k = max{i : t_grid[i] <= t_src[j]} (most recent interval start at
-    or before t_src[j]).
+    `t_points` is a length-K array of time points (e.g. the combined dataset's
+    t_obs). Each OLD per-step delta j is assigned to bin k where
+        k = max{i : t_points[i] <= t_src[j]}
+    (most recent target time at or before t_src[j]). This preserves
+    sum(deltas) across the resampling.
     """
-    K = len(t_grid) - 1
+    K = len(t_points)
     if len(t_src) == 0 or deltas_src.size == 0:
         return np.zeros(K, dtype=np.float32)
     out = np.zeros(K, dtype=np.float32)
-    bin_of = np.searchsorted(t_grid, t_src, side="right") - 1
+    bin_of = np.searchsorted(t_points, t_src, side="right") - 1
     bin_of = np.clip(bin_of, 0, K - 1)
     np.add.at(out, bin_of, deltas_src.astype(np.float32))
     return out
@@ -132,8 +133,8 @@ def _build_one_experiment(
     key: str,
     inp_path: Path,
     out_path: Path,
-    t_grid: np.ndarray,           # endpoint grid, length K+1
-    K: int,                       # number of intervals (len(t_grid) - 1)
+    t_points: np.ndarray,         # time-point grid (length K, matches y_seq.shape[1])
+    K: int,                       # number of points (== len(t_points) == y_seq.shape[1])
     mcherry_divisor: float,
     outlier_mode: str,
 ) -> dict | None:
@@ -174,13 +175,12 @@ def _build_one_experiment(
         if cname not in df_inp.columns:
             continue  # missing reagent → keep zeros (matches build_txtl_combined_npz behavior)
         deltas_src = df_inp[cname].to_numpy(dtype=np.float32)[: len(t_src_inp)]
-        u_row[:, c_idx] = _bin_deltas_to_intervals(t_src_inp, deltas_src, t_grid)
+        u_row[:, c_idx] = _bin_deltas_to_points(t_src_inp, deltas_src, t_points)
 
-    # Observed trajectories interpolated to interval-end timestamps (t_grid[1:K+1]).
-    # Convention (matches build_txtl_combined_npz.py): y_seq[k] = obs at t_grid[k+1].
-    t_obs_grid = t_grid[1:K + 1]
-    mm_grid = _interp_obs_to_grid(t_src_out, broccoli, t_obs_grid)
-    pm_grid = _interp_obs_to_grid(t_src_out, mcherry, t_obs_grid)
+    # Observed trajectories interpolated directly to the target time POINTS
+    # (matches build_txtl_combined_npz.py convention: y_seq[k] = obs at t_obs[k]).
+    mm_grid = _interp_obs_to_grid(t_src_out, broccoli, t_points)
+    pm_grid = _interp_obs_to_grid(t_src_out, mcherry, t_points)
 
     y0 = X0_INIT.copy()
     y0[MM_IDX] = float(broccoli[0])
@@ -199,15 +199,14 @@ def _build_one_experiment(
     }
 
 
-def _build_combined_arrays(records: list[dict], t_grid: np.ndarray) -> dict:
+def _build_combined_arrays(records: list[dict], t_points: np.ndarray) -> dict:
     """Stack per-experiment dicts into combined-npz arrays.
 
-    `t_grid` is the endpoint grid (length K+1); per-experiment u_seq/y_seq are
-    each (K, ...). `lengths[i] = K` for every row (legacy data is all
-    full-length after resampling).
+    `t_points` is the time-point grid (length K, same as y_seq.shape[1]).
+    `lengths[i] = K` for every row (legacy data is all full-length after resampling).
     """
     N = len(records)
-    K = int(records[0]["u"].shape[0])  # number of intervals
+    K = int(records[0]["u"].shape[0])  # number of time points
     y0 = np.stack([r["y0"] for r in records], axis=0).astype(np.float32)
     u_seq = np.stack([r["u"] for r in records], axis=0).astype(np.float32)
     y_seq = np.stack([r["y_seq"] for r in records], axis=0).astype(np.float32)
@@ -223,7 +222,7 @@ def _build_combined_arrays(records: list[dict], t_grid: np.ndarray) -> dict:
 
     return dict(
         y0=y0, u_seq=u_seq, y_seq=y_seq,
-        t_obs=t_grid.astype(np.float32),
+        t_obs=t_points.astype(np.float32),
         control_indices=control_indices,
         obs_indices=obs_indices,
         names_full=np.array(STATE_NAMES + CONTROL_NAMES, dtype="<U32"),
@@ -294,23 +293,23 @@ def main():
     args = parser.parse_args()
 
     ref = np.load(str(args.reference_npz), allow_pickle=True)
-    t_grid = ref["t_obs"].astype(np.float32)           # length K+1
-    K_intervals = int(ref["y_seq"].shape[1])           # K
-    if len(t_grid) != K_intervals + 1:
+    t_points = ref["t_obs"].astype(np.float32)         # length K (time POINTS)
+    K = int(ref["y_seq"].shape[1])
+    if len(t_points) != K:
         raise ValueError(
-            f"Reference npz schema mismatch: len(t_obs)={len(t_grid)} but "
-            f"y_seq has K={K_intervals} intervals (expected K+1 = {K_intervals + 1})."
+            f"Reference npz schema mismatch: len(t_obs)={len(t_points)} but "
+            f"y_seq.shape[1]={K} (expected equal — t_obs is stored as time points)."
         )
     print(f"Reference: {args.reference_npz}")
-    print(f"  N={ref['y0'].shape[0]}, K={K_intervals}, len(t_obs)={len(t_grid)}, "
-          f"t_obs[0..3]={t_grid[:3]}, t_obs[-3..]={t_grid[-3:]}")
+    print(f"  N={ref['y0'].shape[0]}, K={K}, "
+          f"t_obs[0..3]={t_points[:3]}, t_obs[-3..]={t_points[-3:]}")
 
     print(f"\nReading parquet pairs from {args.data_dir}")
     records: list[dict] = []
     n_skipped = 0
     for key, inp, out in _iter_parquet_pairs(args.data_dir):
         rec = _build_one_experiment(
-            key, inp, out, t_grid, K_intervals,
+            key, inp, out, t_points, K,
             mcherry_divisor=args.mcherry_divisor,
             outlier_mode=args.outlier_mode,
         )
@@ -324,7 +323,7 @@ def main():
         print("Nothing to write.")
         sys.exit(1)
 
-    legacy = _build_combined_arrays(records, t_grid)
+    legacy = _build_combined_arrays(records, t_points)
     print(f"\nLegacy arrays:")
     print(f"  y0:    {legacy['y0'].shape}")
     print(f"  u_seq: {legacy['u_seq'].shape}")

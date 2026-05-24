@@ -1,0 +1,97 @@
+# Sparse-θ K × scaffold sweep on OLD-only data. Tex implementation-checklist
+# item 7: "For every encoder-based model, run both versions: dense kinetic
+# output and six-vector kinetic output." This is the sparse-K side; dense
+# baselines come from txtl_scaffold_ladder_old.yaml.
+#
+# Axes:
+#   scaffold ∈ {M3, M4, M5, M8}         (4 scaffolds. M7 dropped — needs synth
+#                                        no-expression data not in OLD. M9
+#                                        dropped — its key signal is oxygen
+#                                        opening, OLD has u_open≡0; handle M9
+#                                        in a separate sweep on the relevant
+#                                        oxygen dataset.)
+#   K ∈ {1, 3, 6}                       (3 K values; tex default is 6, also 1/3)
+#   seed ∈ {1, 2}                       (catches outliers without 3× cost)
+#
+# 4 × 3 × 2 = 24 arms.
+#
+# Loss: plain log1p MSE (no D-recipe knobs). Matches txtl_scaffold_ladder_old's
+# M*_plain arms, so dense baselines for the K=0 reference come from there.
+# Picked plain over D-recipe so the cross-scaffold comparison isn't biased
+# by D-recipe knobs that were tuned on M5 specifically.
+#
+# No y0_theta_init crossing (that axis is covered by sparse_k_ladder_old on
+# M5 only). V2 sparse-θ, uniform anchor mode.
+
+study: txtl_sparse_k_x_scaffold_old
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  y0_theta_init: false
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 0
+
+  model_class: ode_rnn_sparse_theta_v2
+  anchor_mode: uniform
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Model 3 — two-state observable ODE
+  # ═══════════════════════════════════════════════════════════════════════
+  - {exp_name: M3_K1_s1, scaffold: txtl_model3_two_state, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M3_K1_s2, scaffold: txtl_model3_two_state, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M3_K3_s1, scaffold: txtl_model3_two_state, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M3_K3_s2, scaffold: txtl_model3_two_state, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M3_K6_s1, scaffold: txtl_model3_two_state, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M3_K6_s2, scaffold: txtl_model3_two_state, n_theta_anchors: 6, seed: 2}
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Model 4 — three-state TX-TL-maturation
+  # ═══════════════════════════════════════════════════════════════════════
+  - {exp_name: M4_K1_s1, scaffold: txtl_model4_three_state, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M4_K1_s2, scaffold: txtl_model4_three_state, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M4_K3_s1, scaffold: txtl_model4_three_state, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M4_K3_s2, scaffold: txtl_model4_three_state, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M4_K6_s1, scaffold: txtl_model4_three_state, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M4_K6_s2, scaffold: txtl_model4_three_state, n_theta_anchors: 6, seed: 2}
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Model 5 — seven-state TXTL (current best on OLD)
+  # ═══════════════════════════════════════════════════════════════════════
+  - {exp_name: M5_K1_s1, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M5_K1_s2, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M5_K3_s1, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M5_K3_s2, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, n_theta_anchors: 6, seed: 2}
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Model 8 — explicit reagent-resource
+  # ═══════════════════════════════════════════════════════════════════════
+  - {exp_name: M8_K1_s1, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M8_K1_s2, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M8_K3_s1, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M8_K3_s2, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M8_K6_s1, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M8_K6_s2, scaffold: txtl_model8_reagent_resource, n_theta_anchors: 6, seed: 2}
+

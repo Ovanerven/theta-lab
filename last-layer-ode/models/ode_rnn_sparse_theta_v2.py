@@ -51,18 +51,48 @@ def _anchor_mask(K: int, n_anchors: int, device: torch.device) -> torch.Tensor:
     return mask
 
 
+def _bolus_anchor_mask(u_seq: torch.Tensor, max_anchors: int) -> torch.Tensor:
+    """Per-sample anchor mask (B, K) bool, anchors at bolus events.
+
+    A bolus event = any timestep where the raw input vector has a nonzero entry.
+    k=0 is always marked as an anchor (need a θ to start from). If `max_anchors`
+    is > 0, keep only the first `max_anchors` True positions per sample (the
+    rest of the bolus events still feed the GRU encoder but don't trigger a new
+    θ anchor — θ holds the last anchor's value through them).
+    """
+    B, K, _ = u_seq.shape
+    bolus = (u_seq.abs().sum(dim=-1) > 0)  # (B, K)
+    mask = bolus.clone()
+    mask[:, 0] = True
+    if int(max_anchors) > 0:
+        cnt = mask.long().cumsum(dim=1)
+        mask = mask & (cnt <= int(max_anchors))
+    return mask
+
+
 class OdeRNNSparseThetaV2(OdeRNN):
     """Single-pass sparse-θ on top of OdeRNN (piecewise interp only)."""
 
     __constants__ = OdeRNN.__constants__
 
-    def __init__(self, *, n_theta_anchors: int = 6, **kwargs):
+    def __init__(self, *, n_theta_anchors: int = 6,
+                 anchor_mode: str = "uniform",
+                 bolus_max_anchors: int = 0,
+                 **kwargs):
         # OdeRNN already supports encoder_use_time, basal, lift_skip, etc. — all
         # forwarded via kwargs untouched.
         OdeRNN.__init__(self, **kwargs)
         if int(n_theta_anchors) < 1:
             raise ValueError(f"n_theta_anchors must be >= 1, got {n_theta_anchors}")
+        if anchor_mode not in ("uniform", "bolus"):
+            raise ValueError(f"anchor_mode must be 'uniform' or 'bolus', got {anchor_mode!r}")
         self.n_theta_anchors = int(n_theta_anchors)
+        # "uniform" = linspace(0, K-1, n_theta_anchors) anchors (the tex default).
+        # "bolus"   = per-sample anchors at bolus events from u_seq; n_theta_anchors
+        #             is ignored in this mode (use bolus_max_anchors to cap).
+        self.anchor_mode = str(anchor_mode)
+        # Cap on bolus anchors per sample. 0 = no cap (every bolus is an anchor).
+        self.bolus_max_anchors = int(bolus_max_anchors)
 
     def forward(
         self,
@@ -115,9 +145,18 @@ class OdeRNNSparseThetaV2(OdeRNN):
         else:
             raw_y0_bias = None
 
-        # Precompute the anchor positions for this batch's K. The θ-head fires
-        # only at these positions; in between, the cached anchor θ is reused.
-        is_anchor = _anchor_mask(K, self.n_theta_anchors, y0.device)
+        # Precompute the anchor positions for this batch.
+        #   uniform: (K,) bool, same for every sample (linspace anchors).
+        #   bolus:   (B,K) bool, per-sample — anchor at each bolus event in u_seq
+        #            (plus k=0). In bolus mode the θ-head fires every step and
+        #            theta_cur is updated only for samples whose mask fires,
+        #            via torch.where (no Python-scalar branch on per-sample state).
+        if self.anchor_mode == "bolus":
+            anchor_mask_bs = _bolus_anchor_mask(u_seq, self.bolus_max_anchors)  # (B,K)
+            is_anchor = torch.zeros(K, dtype=torch.bool, device=y0.device)       # unused in bolus
+        else:
+            is_anchor = _anchor_mask(K, self.n_theta_anchors, y0.device)         # (K,)
+            anchor_mask_bs = torch.zeros(B, K, dtype=torch.bool, device=y0.device)  # unused
 
         # `theta_cur` and `beta_cur` carry the last anchor's value forward.
         # Allocated lazily at k=0 (first anchor) so dtype/device match the head output.
@@ -149,6 +188,10 @@ class OdeRNNSparseThetaV2(OdeRNN):
                 y_in_feat = y_in_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
             elif y_transform == "log1p":
                 y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
+            feat_parts = [u_gru_k_feat, y_in_feat]
+            if self.encoder_use_log_dt:
+                log_dt_k = torch.log(dt_k.clamp_min(1e-6)).to(dtype=u_gru_k_feat.dtype).unsqueeze(-1)
+                feat_parts.append(log_dt_k)
             if self.encoder_use_time:
                 tau_k = torch.full(
                     (u_gru_k_feat.shape[0], 1),
@@ -156,17 +199,22 @@ class OdeRNNSparseThetaV2(OdeRNN):
                     device=u_gru_k_feat.device,
                     dtype=u_gru_k_feat.dtype,
                 )
-                feat = torch.cat([u_gru_k_feat, y_in_feat, tau_k], dim=-1)
-            else:
-                feat = torch.cat([u_gru_k_feat, y_in_feat], dim=-1)
+                feat_parts.append(tau_k)
+            feat = torch.cat(feat_parts, dim=-1)
             x = self.lift(feat).unsqueeze(1)
             z, h = self.gru(x, h)
 
-            # === Single-pass sparse-θ: only fire the θ-head at anchor steps. ===
+            # === Sparse-θ: fire the θ-head only at anchor steps. ===
             # `theta_cur` and `beta_cur` from a prior anchor are reused on non-anchor
             # steps (piecewise-constant θ(t) between anchors). The GRU still steps
             # every k so its hidden state carries the full input/output history.
-            if bool(is_anchor[k].item()) or theta_cur is None:
+            #
+            # uniform mode: scalar Python branch on is_anchor[k] (fast — head fires
+            #               only K times across the trajectory).
+            # bolus mode:   per-sample anchor mask, so the head must fire every step
+            #               and theta_cur is updated for the subset of samples whose
+            #               mask fires this step via torch.where. Slower but per-sample.
+            if self.anchor_mode == "bolus":
                 raw = self.head(self.head_bottle(z.squeeze(1)))
                 if raw_y0_bias is not None:
                     raw = raw + raw_y0_bias if not self.use_basal else torch.cat(
@@ -176,20 +224,58 @@ class OdeRNNSparseThetaV2(OdeRNN):
                     raw_theta = raw[:, :self.theta_dim]
                     if self.theta_bounded:
                         if self.theta_head_transform == "gamma":
-                            theta_cur = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                            theta_new = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
                         else:
-                            theta_cur = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
+                            theta_new = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                     else:
-                        theta_cur = F.softplus(raw_theta)
-                    beta_cur = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
+                        theta_new = F.softplus(raw_theta)
+                    beta_new = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 else:
                     if self.theta_bounded:
                         if self.theta_head_transform == "gamma":
-                            theta_cur = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                            theta_new = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
                         else:
-                            theta_cur = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
+                            theta_new = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                     else:
-                        theta_cur = F.softplus(raw)
+                        theta_new = F.softplus(raw)
+                    beta_new = torch.zeros(0, device=raw.device, dtype=raw.dtype)  # unused
+
+                fires_b = anchor_mask_bs[:, k].unsqueeze(-1)  # (B,1) bool
+                if theta_cur is None:
+                    # First step: nothing to hold over, take theta_new everywhere.
+                    theta_cur = theta_new
+                    if self.use_basal:
+                        beta_cur = beta_new
+                else:
+                    theta_cur = torch.where(fires_b, theta_new, theta_cur)
+                    if self.use_basal:
+                        assert beta_cur is not None
+                        beta_cur = torch.where(fires_b, beta_new, beta_cur)
+            else:
+                if bool(is_anchor[k].item()) or theta_cur is None:
+                    raw = self.head(self.head_bottle(z.squeeze(1)))
+                    if raw_y0_bias is not None:
+                        raw = raw + raw_y0_bias if not self.use_basal else torch.cat(
+                            [raw[:, :self.theta_dim] + raw_y0_bias, raw[:, self.theta_dim:]], dim=-1
+                        )
+                    if self.use_basal:
+                        raw_theta = raw[:, :self.theta_dim]
+                        if self.theta_bounded:
+                            if self.theta_head_transform == "gamma":
+                                theta_cur = gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec)
+                            else:
+                                theta_cur = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
+                        else:
+                            theta_cur = F.softplus(raw_theta)
+                        beta_cur = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
+                    else:
+                        if self.theta_bounded:
+                            if self.theta_head_transform == "gamma":
+                                theta_cur = gamma(raw, self.theta_lo_vec, self.theta_hi_vec)
+                            else:
+                                theta_cur = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
+                        else:
+                            theta_cur = F.softplus(raw)
 
             theta_k = theta_cur  # piecewise: hold last anchor's value
 

@@ -125,6 +125,11 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
     z_expr_arr = getattr(raw_ds, "z_expr", None)
     subset_indices = (list(subset.indices) if isinstance(subset, torch.utils.data.Subset)
                       else list(range(len(raw_ds))))
+    # Variable-length datasets pad y_seq to K with zeros past lengths[i]. Reading
+    # y[-1] for "protein final" then yields the padded zero instead of the actual
+    # experiment endpoint — collapses true_protein_final to all zeros on datasets
+    # like txtl_native_new_only (lengths ≈ 270, K = 1497) and makes R² meaningless.
+    lengths_arr = getattr(raw_ds, "lengths", None)
 
     model.eval()
     with torch.no_grad():
@@ -154,10 +159,13 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
             y_np = y_seq.cpu().numpy()
             p_np = pred[0].cpu().numpy()
 
-            true_final.append(y_np[-1, p_idx_data])
-            pred_final.append(p_np[-1, p_idx])
-            true_max.append(y_np[:, m_idx_data].max())
-            pred_max.append(p_np[:, m_idx].max())
+            K_full = y_np.shape[0]
+            L_i = int(lengths_arr[global_i]) if lengths_arr is not None else K_full
+            L_i = max(1, min(L_i, K_full, p_np.shape[0]))
+            true_final.append(y_np[L_i - 1, p_idx_data])
+            pred_final.append(p_np[L_i - 1, p_idx])
+            true_max.append(y_np[:L_i, m_idx_data].max())
+            pred_max.append(p_np[:L_i, m_idx].max())
 
     if n_skipped_synth:
         print(f"  endpoint_r2: skipped {n_skipped_synth} synthetic no-go samples; "

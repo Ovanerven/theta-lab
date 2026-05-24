@@ -30,7 +30,7 @@ no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
-  epochs: 50
+  epochs: 150
   endpoint_r2: true
   scaffold: txtl_resource_and_maturation_dna
   obs_idx: [3, 5]
@@ -61,22 +61,22 @@ fixed:
 runs:
   # ── Baselines ────────────────────────────────────────────────────────────
   # A: OLD only — best-case ceiling, no recipe-shift to handle.
-  - exp_name: A_old_only
-    dataset_path: datasets/cell-free/txtl_native_old_only.npz
-    val_n: 87
-    test_n: 87
-    stratify_z_expr: false
-    test_real_only: false
-    encoder_use_log_dt: true
+  # - exp_name: A_old_only
+  #   dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  #   val_n: 87
+  #   test_n: 87
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   encoder_use_log_dt: true
 
   # B: OLD + NEW, no interventions. dt-aware encoder.
-  - exp_name: B_native
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    val_n: 125
-    test_n: 125
-    stratify_z_expr: false
-    test_real_only: false
-    encoder_use_log_dt: true
+  # - exp_name: B_native
+  #   dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  #   val_n: 125
+  #   test_n: 125
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   encoder_use_log_dt: true
 
   # ── New control: NEW only ────────────────────────────────────────────────
   # Is NEW learnable at all from its 312 samples alone? If yes → mixing OLD
@@ -94,6 +94,7 @@ runs:
   # NEW resampled to OLD's 60s/50h regular grid. dt is now constant 60s
   # across all samples — tests if non-uniform dt was the bottleneck.
   - exp_name: B_grid_uniform
+    epochs: 50
     dataset_path: datasets/cell-free/txtl_native_real_only_upsampled.npz
     val_n: 125
     test_n: 125
@@ -104,25 +105,25 @@ runs:
   # ── Loss-level domain re-balancing ───────────────────────────────────────
   # NEW samples weighted 5× in loss. Each NEW sample contributes 5× as much
   # to the gradient. Data distribution unchanged.
-  - exp_name: B_loss_upweight5x
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    val_n: 125
-    test_n: 125
-    stratify_z_expr: false
-    test_real_only: false
-    encoder_use_log_dt: true
-    source_loss_weights: {old: 1.0, new: 5.0}
+  # - exp_name: B_loss_upweight5x
+  #   dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  #   val_n: 125
+  #   test_n: 125
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   encoder_use_log_dt: true
+  #   source_loss_weights: {old: 1.0, new: 5.0}
 
   # ── Data-level domain re-balancing ───────────────────────────────────────
   # WeightedRandomSampler → ~50/50 batches. NEW effectively oversampled.
-  - exp_name: B_sample_oversample
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    val_n: 125
-    test_n: 125
-    stratify_z_expr: false
-    test_real_only: false
-    encoder_use_log_dt: true
-    balance_source_sampler: true
+  # - exp_name: B_sample_oversample
+  #   dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  #   val_n: 125
+  #   test_n: 125
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   encoder_use_log_dt: true
+  #   balance_source_sampler: true
 
   # ── Scaffold intervention ────────────────────────────────────────────────
   # Model 9 (oxygen-dark): supervisor's designed scaffold for the NEW
@@ -130,11 +131,11 @@ runs:
   # column in the NPZ flips tube_opened at t≈22h on NEW samples, turning
   # off O2 sinks so dark protein matures into fluorescent protein.
   # obs_state_idx=[3, 6] maps (mm, pm)_dataset → (mm, P_fluor)_scaffold.
-  - exp_name: B_native_model9
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    val_n: 125
-    test_n: 125
-    stratify_z_expr: false
-    test_real_only: false
-    encoder_use_log_dt: true
-    scaffold: txtl_model9_oxygen_dark
+  # - exp_name: B_native_model9
+  #   dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  #   val_n: 125
+  #   test_n: 125
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   encoder_use_log_dt: true
+  #   scaffold: txtl_model9_oxygen_dark

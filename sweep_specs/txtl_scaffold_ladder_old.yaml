@@ -30,7 +30,7 @@
 
 study: txtl_scaffold_ladder_old
 runs_per_job: 1
-time: "04:00:00"
+time: "02:00:00"
 partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml

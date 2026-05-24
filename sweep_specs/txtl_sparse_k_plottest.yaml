@@ -1,0 +1,48 @@
+# Plot-diagnostics smoke test for V2 sparse-θ. 2 runs (one uniform, one bolus)
+# at 2 epochs each so there's a checkpoint to plot from. Goal: verify
+# plot_diagnostics.py reconstructs V2 with the right anchor_mode /
+# n_theta_anchors / bolus_max_anchors and produces faithful theta plots.
+
+study: txtl_sparse_k_plottest
+runs_per_job: 1
+time: "00:30:00"
+partition: gpu_a100
+no_plot: false                              # plots ON — that's the whole point
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 2
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 1
+  hidden: 600
+  seed: 1
+  y0_theta_init: false
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 0
+
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_sparse_theta_v2
+
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  - {exp_name: uniform_K6_plotcheck,   anchor_mode: uniform, n_theta_anchors: 6}
+  - {exp_name: bolus_uncapped_plotcheck, anchor_mode: bolus, n_theta_anchors: 1, bolus_max_anchors: 0}

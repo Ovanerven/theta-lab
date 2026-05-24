@@ -259,9 +259,34 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         theta_head_tau=float(cfg.get("theta_head_tau", 1.0)),
         y0_theta_init=bool(cfg.get("y0_theta_init", False)),
 
+        # Sparse-θ knobs. K doesn't affect parameter shapes (only the anchor
+        # mask), so checkpoint loading succeeds regardless — but the rollout
+        # used to generate plots would fire at the wrong anchors if these were
+        # left at defaults. Must mirror train.py's V1/V2 wiring.
+        **(
+            dict(
+                n_theta_anchors=int(cfg["n_theta_anchors"]),
+                anchor_interp=str(cfg.get("anchor_interp", "piecewise")),
+            )
+            if model_class_name in {
+                "ode_rnn_sparse_theta",
+                "ode_slstm_sparse_theta",
+                "ode_rnn_basal_v2_sparse_theta",
+            }
+            else dict(
+                n_theta_anchors=int(cfg["n_theta_anchors"]),
+                anchor_mode=str(cfg.get("anchor_mode", "uniform")),
+                bolus_max_anchors=int(cfg.get("bolus_max_anchors", 0)),
+            )
+            if model_class_name == "ode_rnn_sparse_theta_v2"
+            else {}
+        ),
+
         # --- NEW ADDITIONS TO SYNC WITH TRAIN.PY ---
         tf_group_size=int(cfg.get("tf_group_size", 32)),
         ar_gap=int(cfg.get("ar_gap", 4)),
+        encoder_use_time=bool(cfg.get("encoder_use_time", False)),
+        encoder_use_log_dt=bool(cfg.get("encoder_use_log_dt", False)),
         forget_bias_init=cfg.get("forget_bias_init", None),
         legacy_forget_bias_bug=bool(cfg.get("legacy_forget_bias_bug", False)),
         detach_y_prev=bool(cfg.get("detach_y_prev", True)),

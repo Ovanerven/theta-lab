@@ -1,0 +1,91 @@
+# Sparse-θ K-ladder on OLD-only data, Model 5 + D-recipe loss. Tests
+# Experiment B from new_scaffolds.tex: how does forcing the encoder to
+# emit only K kinetic vectors per experiment degrade performance vs dense θ?
+#
+# Why OLD only + Model 5 + D-recipe: that combination already gives a clean
+# strong run (see txtl_scaffold_ladder_old.yaml M5_drecipe). Holding
+# scaffold/loss fixed isolates the K axis.
+#
+# Model: ode_rnn_sparse_theta_v2 — single-pass, JIT-scriptable. θ-head fires
+# only at K anchor positions, piecewise-constant between anchors.
+#
+# Axes:
+#   K ∈ {1, 3, 6}                      (3 values, To Do.txt)
+#     - K=1 is also a baseline check: it's similar to OdeSampleTheta
+#       (MLP(y0)→θ) but stronger — V2 K=1 also reads u_0 via one GRU step.
+#     - K=6 is the tex default.
+#   seed ∈ {1, 2, 3}                   (with y0_theta_init=false)
+#   + one y0_theta_init=true run per K (single seed=1, 4th run per K)
+#   + bolus_uncapped × 3 seeds         (does anchor PLACEMENT matter? Mean
+#                                       ~14 boluses on OLD per histogram; this
+#                                       arm anchors θ at every bolus event.
+#                                       Compare against uniform K=12 in dense
+#                                       baseline / other sweep, not this one.)
+#
+# 3 K × 4 runs + 3 bolus_uncapped = 15 arms.
+
+study: txtl_sparse_k_ladder_old
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 0
+
+  scaffold: txtl_resource_and_maturation_dna
+  model_class: ode_rnn_sparse_theta_v2
+
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+  y0_theta_init: false
+  anchor_mode: uniform
+
+runs:
+  # ─── K = 1 (single global θ — also stronger version of OdeSampleTheta) ──
+  - {exp_name: K1_s1,        n_theta_anchors: 1, seed: 1}
+  - {exp_name: K1_s2,        n_theta_anchors: 1, seed: 2}
+  - {exp_name: K1_s3,        n_theta_anchors: 1, seed: 3}
+  - {exp_name: K1_s1_y0init, n_theta_anchors: 1, seed: 1, y0_theta_init: true}
+
+  # ─── K = 3 ──────────────────────────────────────────────────────────────
+  - {exp_name: K3_s1,        n_theta_anchors: 3, seed: 1}
+  - {exp_name: K3_s2,        n_theta_anchors: 3, seed: 2}
+  - {exp_name: K3_s3,        n_theta_anchors: 3, seed: 3}
+  - {exp_name: K3_s1_y0init, n_theta_anchors: 3, seed: 1, y0_theta_init: true}
+
+  # ─── K = 6 (tex default) ────────────────────────────────────────────────
+  - {exp_name: K6_s1,        n_theta_anchors: 6, seed: 1}
+  - {exp_name: K6_s2,        n_theta_anchors: 6, seed: 2}
+  - {exp_name: K6_s3,        n_theta_anchors: 6, seed: 3}
+  - {exp_name: K6_s1_y0init, n_theta_anchors: 6, seed: 1, y0_theta_init: true}
+
+  # ─── Bolus uncapped (every bolus event is an anchor; mean ~14 per sample
+  #     on OLD per bolus_histogram.py). Tests whether placement matters. ──
+  - {exp_name: bolus_uncapped_s1, n_theta_anchors: 1, anchor_mode: bolus, bolus_max_anchors: 0, seed: 1}
+  - {exp_name: bolus_uncapped_s2, n_theta_anchors: 1, anchor_mode: bolus, bolus_max_anchors: 0, seed: 2}
+  - {exp_name: bolus_uncapped_s3, n_theta_anchors: 1, anchor_mode: bolus, bolus_max_anchors: 0, seed: 3}

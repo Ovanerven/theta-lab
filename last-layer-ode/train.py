@@ -1269,6 +1269,15 @@ class TrainConfig:
     n_theta_anchors: int | None = None
     # Interpolation between anchors: "piecewise" (B2) or "linear" (B3).
     anchor_interp: str = "piecewise"
+    # V2-only: how the K anchors are placed.
+    #   "uniform" — linspace(0, T-1, n_theta_anchors) (the tex default).
+    #   "bolus"   — per-sample anchors at every bolus event in u_seq (plus k=0);
+    #               n_theta_anchors is ignored for placement but still required
+    #               (>=1) as a sanity-check value. Use bolus_max_anchors to cap.
+    anchor_mode: str = "uniform"
+    # Cap on bolus-mode anchors per sample (0 = no cap). Late boluses past the
+    # cap still feed the GRU encoder but don't trigger a new θ anchor.
+    bolus_max_anchors: int = 0
 
     # Model 7 zero-trajectory boundary loss weight. Penalises predicted observed
     # values on samples with z_expr == 0 (synthetic no-go) toward zero. 0 =
@@ -1302,6 +1311,17 @@ class TrainConfig:
     # mismatches don't contribute to the loss — useful when many trajectory
     # segments are structurally near zero (pm early in IVTT traces).
     loss_clamp_min: float = 0.0
+    # ── L_oxygen (Model 9 / tube-opening experiments) ──────────────────────
+    # Tex "Common loss functions / Oxygen loss":
+    #   L_oxygen = ρ Σ_{i ∈ D_open} Σ_{t_n > t_open,i} (P̂_fluor,i − P_obs,i)²
+    # Adds an extra squared error on the fluorescent-protein channel
+    # restricted to timesteps AFTER each sample's tube-opening event.
+    # No-op when lambda_oxygen=0 or when the dataset has no `u_open` channel.
+    # oxygen_protein_channel: raw dataset state index for P_fluor (default 5 = pm).
+    # oxygen_u_open_name:     control_names entry identifying the opening signal.
+    lambda_oxygen: float = 0.0
+    oxygen_protein_channel: int = 5
+    oxygen_u_open_name: str = "u_open"
 
 
 def load_cfg(path: str | Path) -> TrainConfig:
@@ -1650,7 +1670,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 f"model_class='{cfg.model_class}' requires cfg.n_theta_anchors (e.g. 1, 3, or 6)."
             )
         # anchor_interp is fixed at piecewise for V2 (linear needs lookahead).
-        sparse_theta_kwargs = dict(n_theta_anchors=int(cfg.n_theta_anchors))
+        sparse_theta_kwargs = dict(
+            n_theta_anchors=int(cfg.n_theta_anchors),
+            anchor_mode=str(cfg.anchor_mode),
+            bolus_max_anchors=int(cfg.bolus_max_anchors),
+        )
     model = MODELS[cfg.model_class](
         U=U,
         rhs=scaffold,
@@ -1813,6 +1837,37 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     if not _lift_partial:
         _dataset_obs_idx = None  # unused on the non-lift code path
 
+    # ── L_oxygen prep: resolve u_open column + P_fluor channel once ────────
+    _ox_u_col: int | None = None
+    _ox_pred_ch: int | None = None
+    _ox_target_ch: int | None = None
+    if float(cfg.lambda_oxygen) > 0.0:
+        _cn_raw = getattr(ds, "control_names", None)
+        ctrl_names = [str(c) for c in _cn_raw] if _cn_raw is not None else []
+        if cfg.oxygen_u_open_name in ctrl_names:
+            _ox_u_col = ctrl_names.index(cfg.oxygen_u_open_name)
+        else:
+            print(f"[L_oxygen] WARNING: '{cfg.oxygen_u_open_name}' not in control_names "
+                  f"{ctrl_names}; oxygen loss disabled.")
+        # Map raw dataset channel (e.g. pm @ idx 5) into the supervised obs slice
+        # so it lines up with `pred` / `y_seq` after the obs_idx selection below.
+        obs_idx_list_init = (list(cfg.obs_idx) if cfg.obs_idx is not None
+                             else (list(scaffold.obs_state_idx) if _lift_partial
+                                   else list(range(P_obs))))
+        if int(cfg.oxygen_protein_channel) in obs_idx_list_init:
+            _ox_target_ch = obs_idx_list_init.index(int(cfg.oxygen_protein_channel))
+            # For the lift case, scaffold.obs_state_idx[k] corresponds to the same
+            # k-th position in the post-`pred = pred[:,:,obs_idx]` slice.
+            _ox_pred_ch = _ox_target_ch
+        else:
+            print(f"[L_oxygen] WARNING: oxygen_protein_channel={cfg.oxygen_protein_channel} "
+                  f"not in obs_idx={obs_idx_list_init}; oxygen loss disabled.")
+            _ox_u_col = None
+        if _ox_u_col is not None:
+            print(f"[L_oxygen] active: lambda={cfg.lambda_oxygen} "
+                  f"u_open_col={_ox_u_col} pred_ch={_ox_pred_ch} "
+                  f"target_ch={_ox_target_ch}")
+
     # dt is now per-sample, carried by the dataloader.
     grouped_model = cfg.model_class == "ode_transformer_grouped"
 
@@ -1921,6 +1976,38 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                             clamp_min=float(cfg.loss_clamp_min))
                     if cfg.loss_normalizer_channels:
                         loss = loss / float(cfg.loss_normalizer_channels)
+
+                    # ── L_oxygen (tex eq.) ────────────────────────────────
+                    # Post-tube-opening MSE on the fluorescent-protein channel.
+                    # Applied only to samples whose `u_open` column fires within
+                    # their valid length. Predictions/targets are taken in raw
+                    # (linear) space; the same log1p+clamp_min treatment used by
+                    # endpoint_mse is applied for scale parity with L_traj.
+                    if (float(cfg.lambda_oxygen) > 0.0 and _ox_u_col is not None
+                            and _ox_pred_ch is not None):
+                        B_o, K_o = pred.shape[0], pred.shape[1]
+                        u_open_seq = u_seq[:, :K_o, _ox_u_col]  # (B,K)
+                        if batch_lengths is not None:
+                            valid_mask = _build_loss_mask(batch_lengths, K_o, device)
+                            u_open_seq = u_open_seq * valid_mask.to(u_open_seq.dtype)
+                        has_event = (u_open_seq > 0).any(dim=1)  # (B,)
+                        if has_event.any():
+                            t_open = torch.argmax((u_open_seq > 0).to(torch.long), dim=1)  # (B,)
+                            t_grid = torch.arange(K_o, device=device).unsqueeze(0)        # (1,K)
+                            post_mask = (t_grid > t_open.unsqueeze(1))                    # (B,K)
+                            if batch_lengths is not None:
+                                post_mask = post_mask & _build_loss_mask(batch_lengths, K_o, device)
+                            post_mask = post_mask & has_event.unsqueeze(1)
+                            p_ox = pred[..., _ox_pred_ch]
+                            y_ox = y_seq[..., _ox_pred_ch]
+                            if use_log_loss:
+                                clamp_v = float(cfg.loss_clamp_min)
+                                p_ox = torch.log1p(p_ox.clamp_min(clamp_v))
+                                y_ox = torch.log1p(y_ox.clamp_min(clamp_v))
+                            sq = (p_ox - y_ox).pow(2) * post_mask.to(p_ox.dtype)
+                            denom = post_mask.sum().clamp_min(1).to(p_ox.dtype)
+                            ox_loss = sq.sum() / denom
+                            loss = loss + float(cfg.lambda_oxygen) * ox_loss
 
             # Model 7 zero-trajectory boundary loss for synthetic no-go samples
             # (z_expr == 0). Pushes pred (mm, pm) toward zero on those samples
@@ -2045,6 +2132,30 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                                 clamp_min=float(cfg.loss_clamp_min))
                         if cfg.loss_normalizer_channels:
                             loss = loss / float(cfg.loss_normalizer_channels)
+                        if (float(cfg.lambda_oxygen) > 0.0 and _ox_u_col is not None
+                                and _ox_pred_ch is not None):
+                            B_o, K_o = pred.shape[0], pred.shape[1]
+                            u_open_seq = u_seq[:, :K_o, _ox_u_col]
+                            if batch_lengths is not None:
+                                valid_mask = _build_loss_mask(batch_lengths, K_o, device)
+                                u_open_seq = u_open_seq * valid_mask.to(u_open_seq.dtype)
+                            has_event = (u_open_seq > 0).any(dim=1)
+                            if has_event.any():
+                                t_open = torch.argmax((u_open_seq > 0).to(torch.long), dim=1)
+                                t_grid = torch.arange(K_o, device=device).unsqueeze(0)
+                                post_mask = (t_grid > t_open.unsqueeze(1))
+                                if batch_lengths is not None:
+                                    post_mask = post_mask & _build_loss_mask(batch_lengths, K_o, device)
+                                post_mask = post_mask & has_event.unsqueeze(1)
+                                p_ox = pred[..., _ox_pred_ch]
+                                y_ox = y_seq[..., _ox_pred_ch]
+                                if use_log_loss:
+                                    clamp_v = float(cfg.loss_clamp_min)
+                                    p_ox = torch.log1p(p_ox.clamp_min(clamp_v))
+                                    y_ox = torch.log1p(y_ox.clamp_min(clamp_v))
+                                sq = (p_ox - y_ox).pow(2) * post_mask.to(p_ox.dtype)
+                                denom = post_mask.sum().clamp_min(1).to(p_ox.dtype)
+                                loss = loss + float(cfg.lambda_oxygen) * (sq.sum() / denom)
                     va_total += float(loss.item())
 
                     sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()
