@@ -109,6 +109,18 @@ class ODEDataset(Dataset):
         self.z_expr = (_maybe_filter(d["z_expr"].astype(np.int64))
                        if "z_expr" in d else None)
 
+        # Per-sample source-domain index: 0=old, 1=new, 2=synth, -1=unknown.
+        # Plumbed through __getitem__ → collate → train loop so the loss can
+        # upweight a domain (source_loss_weights) or the sampler can balance
+        # batches across domains (balance_source_sampler). Absent on legacy
+        # datasets where the source isn't recorded.
+        if "source_label" in d.files:
+            _src_to_int = {"old": 0, "new": 1, "synth": 2}
+            _src_arr = np.array([_src_to_int.get(str(s), -1) for s in d["source_label"]], dtype=np.int64)
+            self.source_idx = _maybe_filter(_src_arr)
+        else:
+            self.source_idx = None
+
     def __len__(self) -> int:
         return self.y0.shape[0]
 
@@ -116,6 +128,8 @@ class ODEDataset(Dataset):
         # z_expr=1 default (real) when the dataset doesn't carry the label, so
         # the boundary loss is a no-op on legacy datasets.
         z_i = int(self.z_expr[i]) if self.z_expr is not None else 1
+        # source_idx: 0=old, 1=new, 2=synth, -1 (unknown) when dataset has no source_label.
+        s_i = int(self.source_idx[i]) if self.source_idx is not None else -1
         if self.variable_length:
             L = int(self.lengths[i])
             dt_i = (self.dt_per_sample[i, :L] if self.dt_per_sample is not None
@@ -126,6 +140,7 @@ class ODEDataset(Dataset):
                 torch.from_numpy(self.y_seq[i, :L]),   # (L,P_obs)
                 torch.from_numpy(np.ascontiguousarray(dt_i)),  # (L,)
                 torch.tensor(z_i, dtype=torch.long),
+                torch.tensor(s_i, dtype=torch.long),
             )
         dt_i = (self.dt_per_sample[i] if self.dt_per_sample is not None
                 else self.dt)
@@ -135,25 +150,27 @@ class ODEDataset(Dataset):
             torch.from_numpy(self.y_seq[i]),  # (K,P_obs)
             torch.from_numpy(np.ascontiguousarray(dt_i)),  # (K,)
             torch.tensor(z_i, dtype=torch.long),
+            torch.tensor(s_i, dtype=torch.long),
         )
 
 
 def collate(batch):
-    y0, u, y, dt, z = zip(*batch)
+    y0, u, y, dt, z, s = zip(*batch)
     return (torch.stack(y0), torch.stack(u), torch.stack(y), None,
-            torch.stack(z), torch.stack(dt))
+            torch.stack(z), torch.stack(dt), torch.stack(s))
 
 
 def collate_varlen(batch):
     """Pad each batch to its own max length; return lengths tensor."""
-    y0_list, u_list, y_list, dt_list, z_list = zip(*batch)
+    y0_list, u_list, y_list, dt_list, z_list, s_list = zip(*batch)
     lengths = torch.tensor([u.shape[0] for u in u_list], dtype=torch.long)
     y0 = torch.stack(y0_list)
     u_padded = torch.nn.utils.rnn.pad_sequence(u_list, batch_first=True)   # (B, K_batch, U)
     y_padded = torch.nn.utils.rnn.pad_sequence(y_list, batch_first=True)   # (B, K_batch, P)
     dt_padded = torch.nn.utils.rnn.pad_sequence(dt_list, batch_first=True)  # (B, K_batch) — padded with 0
     z = torch.stack(z_list)
-    return y0, u_padded, y_padded, lengths, z, dt_padded
+    s = torch.stack(s_list)
+    return y0, u_padded, y_padded, lengths, z, dt_padded, s
 
 
 def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> torch.Tensor:
@@ -278,6 +295,7 @@ def loss_fn(
     channel_weights: Optional[torch.Tensor] = None,
     time_weight: Optional[torch.Tensor] = None,
     clamp_min: float = 0.0,
+    sample_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised.
 
@@ -311,6 +329,14 @@ def loss_fn(
             w = torch.ones_like(se)
     else:
         w = time_weight.to(se.dtype)
+
+    # Per-sample weights (e.g. domain upweighting for under-represented sources).
+    # `expand_as` returned a view of the lengths mask, so .contiguous().clone()
+    # before in-place multiplication to avoid silently scaling the source mask.
+    if sample_weights is not None:
+        w = w.contiguous().clone()
+        sw = sample_weights.view(-1, 1, 1).to(se.dtype)
+        w = w * sw
 
     if channel_weights is None:
         return (se * w).sum() / w.sum().clamp_min(1.0)
@@ -1112,6 +1138,20 @@ class TrainConfig:
     # Typical for the IVTT 7-state layout: [3, 5] (mm = Broccoli, pm = mCherry/2).
     subtract_channel_min_cols: list[int] | None = None
 
+    # Per-source loss weighting. Dict {source_name: multiplier} where source_name
+    # is "old"/"new"/"synth". Per-sample weight is applied as a scalar multiplier
+    # on each sample's contribution to the masked loss. Default None = uniform.
+    # Example: {"old": 1.0, "new": 5.0} upweights NEW 5× so the model can't
+    # satisfy the loss by fitting OLD only.
+    source_loss_weights: dict | None = None
+
+    # Class-balanced sampling. When True, builds a WeightedRandomSampler over
+    # the train split with weights inversely proportional to per-source count
+    # so each minibatch sees a roughly 50/50 mix of OLD/NEW (and synth, when
+    # present). Use INSTEAD OF source_loss_weights, not on top, unless you
+    # specifically want both (rare).
+    balance_source_sampler: bool = False
+
     # Diagnostics: if >0, plot_predictions also dumps this many extra sample
     # plots restricted to NEW-source samples (source_label=='new') from the
     # test split, with a "new_" filename prefix. Useful when training on
@@ -1368,10 +1408,32 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     collate_fn = collate_varlen if ds.variable_length else collate
 
+    # Optional class-balanced sampler: inverse-frequency weights per source so
+    # each minibatch sees a balanced mix of OLD/NEW/synth. Falls back to plain
+    # shuffle when the dataset has no source labels.
+    _sampler = None
+    _shuffle = True
+    if bool(cfg.balance_source_sampler):
+        if ds.source_idx is None:
+            print("balance_source_sampler=True but dataset has no source_label; ignoring.")
+        else:
+            tr_src = ds.source_idx[train_idx.astype(np.int64)]
+            counts = {int(s): int((tr_src == s).sum()) for s in np.unique(tr_src) if s >= 0}
+            print(f"balance_source_sampler: train counts by source = {counts}")
+            inv = {s: (1.0 / c if c > 0 else 0.0) for s, c in counts.items()}
+            w = np.array([inv.get(int(s), 0.0) for s in tr_src], dtype=np.float64)
+            _sampler = torch.utils.data.WeightedRandomSampler(
+                weights=torch.from_numpy(w),
+                num_samples=len(train_idx),
+                replacement=True,
+            )
+            _shuffle = False
+
     train_loader = DataLoader(
         torch.utils.data.Subset(ds, train_idx.tolist()),
         batch_size=cfg.batch_size,
-        shuffle=True,
+        shuffle=_shuffle,
+        sampler=_sampler,
         num_workers=cfg.num_workers,
         collate_fn=collate_fn,
         pin_memory=bool(cfg.pin_memory),
@@ -1674,7 +1736,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         tr_total = 0.0
         tr_batches = 0
 
-        for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in train_loader:
+        for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq, source_idx_batch in train_loader:
             y0 = y0.to(device)
             y_seq = y_seq.to(device)
             u_seq = u_seq.to(device)
@@ -1690,6 +1752,19 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
 
             opt.zero_grad(set_to_none=True)
+
+            # Per-sample loss weights from source_loss_weights config. Map each
+            # sample's source_idx (0=old, 1=new, 2=synth) to its multiplier.
+            # Applied only in training (not val/test) so eval metrics stay raw.
+            _sample_w = None
+            if cfg.source_loss_weights:
+                _idx_to_name = {0: "old", 1: "new", 2: "synth"}
+                _name_to_w = {k: float(v) for k, v in cfg.source_loss_weights.items()}
+                _sample_w = torch.tensor(
+                    [_name_to_w.get(_idx_to_name.get(int(s), ""), 1.0) for s in source_idx_batch.tolist()],
+                    device=device, dtype=torch.float32,
+                )
+
             model_kwargs = {
                 "teacher_forcing": teacher_forcing,
                 "tf_every": int(cfg.tf_every),
@@ -1718,7 +1793,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 if cfg.supervise_endpoints_only:
                     pred_l  = torch.stack([pred[:, 0, :],  pred[:, -1, :]],  dim=1)
                     y_seq_l = torch.stack([y_seq[:, 0, :], y_seq[:, -1, :]], dim=1)
-                    loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss)
+                    loss = loss_fn(pred_l, y_seq_l, None, use_log_loss=use_log_loss,
+                                   sample_weights=_sample_w)
                 else:
                     # obs_idx is a torch.Tensor here; channel-keyed config knobs
                     # use raw state indices, so resolve against the python list.
@@ -1737,7 +1813,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                                    use_log_loss=use_log_loss,
                                    channel_weights=chan_w,
                                    time_weight=time_w,
-                                   clamp_min=float(cfg.loss_clamp_min))
+                                   clamp_min=float(cfg.loss_clamp_min),
+                                   sample_weights=_sample_w)
                     if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
                         ep_post = [obs_idx_list.index(int(c)) for c in cfg.endpoint_channels]
                         loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
@@ -1810,7 +1887,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             sp_total = None
 
             with torch.no_grad():
-                for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in val_loader:
+                for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq, source_idx_batch in val_loader:
                     y0 = y0.to(device)
                     y_seq = y_seq.to(device)
                     u_seq = u_seq.to(device)
@@ -1960,7 +2037,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         te_batches = 0
         sp_total = None
         with torch.no_grad():
-            for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq in test_loader:
+            for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq, source_idx_batch in test_loader:
                 y0 = y0.to(device)
                 y_seq = y_seq.to(device)
                 u_seq = u_seq.to(device)

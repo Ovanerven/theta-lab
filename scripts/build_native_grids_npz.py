@@ -163,6 +163,16 @@ def main() -> None:
                     help="Include NEW real samples from txtl_combined.npz (z_expr==1).")
     ap.add_argument("--include-synth", action="store_true",
                     help="Include synthetic no-go samples from txtl_combined.npz (z_expr==0).")
+    ap.add_argument("--upsample-new", action="store_true",
+                    help="Resample NEW real samples from their native ~600s irregular grid up "
+                         "to a uniform 60s grid (sum-of-deltas for u_seq, linear interp for "
+                         "y_seq). Counterfactual to dt-awareness: tests whether the grid "
+                         "mismatch was the bottleneck. WARNING: invents ~5x more timesteps "
+                         "per NEW sample. Reference grid horizon is set via --upsample-target-hours.")
+    ap.add_argument("--upsample-target-hours", type=float, default=50.0,
+                    help="When --upsample-new is set, extend the reference 60s grid to cover this "
+                         "many hours so NEW samples (which go to ~40-49h) aren't truncated. "
+                         "Default 50h. OLD samples are zero-padded past their valid length.")
     ap.add_argument("--synth-on-grid", choices=["old", "native"], default="old",
                     help="'old' (default): resample synth to OLD 60s grid. "
                          "'native': keep synth on NEW ~160s grid.")
@@ -183,8 +193,16 @@ def main() -> None:
             sys.exit(f"control_names mismatch between OLD and COMBINED npzs:\n  OLD: {old_names}\n  NEW: {new_names}")
 
     # OLD's t_obs grid is our reference because it's the finest (60s) and longest.
-    t_obs_old = (old_d["t_obs"] if old_d is not None
-                 else np.arange(OLD_K_MAX + 1, dtype=np.float32) * OLD_DT_SECONDS)
+    # When upsampling NEW, extend it to cover NEW's full horizon (NEW goes to ~40-49h
+    # while OLD only spans ~25h, so the default OLD grid would truncate NEW after
+    # tube-opening — which is exactly the dynamic we care about).
+    if args.upsample_new:
+        K_target = int(round(args.upsample_target_hours * 3600.0 / OLD_DT_SECONDS))
+        t_obs_old = (np.arange(K_target + 1, dtype=np.float32) * OLD_DT_SECONDS)
+        print(f"Upsample mode: reference grid extended to K={K_target} ({args.upsample_target_hours}h @ 60s)")
+    else:
+        t_obs_old = (old_d["t_obs"] if old_d is not None
+                     else np.arange(OLD_K_MAX + 1, dtype=np.float32) * OLD_DT_SECONDS)
     K_max = len(t_obs_old) - 1
 
     pieces: list[dict] = []   # each: {'y0','u','y','dt_per','lengths','z_expr','source'}
@@ -207,7 +225,7 @@ def main() -> None:
         })
         print(f"OLD legacy:  N={N_old}, lengths∈[{lengths_old_native.min()},{lengths_old_native.max()}], dt=60s")
 
-    # ---- NEW real on native ~160s grid ----
+    # ---- NEW real on native ~160s grid (or upsampled to OLD 60s) ----
     # NEW is left raw (un-blanked) on purpose: OLD's per-sample, per-channel
     # min-subtraction is reproduced at runtime via subtract_channel_min in the
     # trainer, so both regimes are gated identically. Don't bake baseline
@@ -222,10 +240,24 @@ def main() -> None:
                        if "lengths" in combined_d
                        else np.full(N_new, u_new_native.shape[1], dtype=np.int64))
         t_obs_new = combined_d["t_obs"].astype(np.float32)
-        # Pad time axis up to K_max (rest stays zero — masked out by lengths).
-        u_new = _pad_to_K(u_new_native, K_max)
-        y_new = _pad_to_K(y_new_native, K_max)
-        dt_new = _per_sample_dt_from_tobs(N_new, t_obs_new, K_max, lengths_new)
+
+        if args.upsample_new:
+            print(f"NEW real:    N={N_new}, upsampling ~600s→60s grid (counterfactual to dt-awareness)...")
+            u_new_up, y_new_up, lengths_new_up = _resample_synth_to_old_grid(
+                u_new_native, y_new_native, t_obs_new, lengths_new, t_obs_old,
+            )
+            u_new = _pad_to_K(u_new_up, K_max)
+            y_new = _pad_to_K(y_new_up, K_max)
+            dt_new = _per_sample_dt_constant(N_new, OLD_DT_SECONDS, K_max, lengths_new_up)
+            lengths_new = lengths_new_up
+            print(f"             after upsample: lengths∈[{lengths_new.min()},{lengths_new.max()}], dt=60s")
+        else:
+            # Pad time axis up to K_max (rest stays zero — masked out by lengths).
+            u_new = _pad_to_K(u_new_native, K_max)
+            y_new = _pad_to_K(y_new_native, K_max)
+            dt_new = _per_sample_dt_from_tobs(N_new, t_obs_new, K_max, lengths_new)
+            print(f"NEW real:    N={N_new}, lengths∈[{lengths_new.min()},{lengths_new.max()}], "
+                  f"dt≈{float(np.median(np.diff(t_obs_new))):.0f}s (irregular)")
         z_new = np.ones(N_new, dtype=np.int64)
         src_new = np.array(["new"] * N_new, dtype=object)
         pieces.append({
@@ -234,8 +266,6 @@ def main() -> None:
             "dt_per": dt_new, "lengths": lengths_new,
             "z_expr": z_new, "source": src_new,
         })
-        print(f"NEW real:    N={N_new}, lengths∈[{lengths_new.min()},{lengths_new.max()}], "
-              f"dt≈{float(np.median(np.diff(t_obs_new))):.0f}s (irregular)")
 
     # ---- synth: optionally resample to OLD 60s grid, else keep native ----
     if args.include_synth:
@@ -318,10 +348,9 @@ def main() -> None:
         if k in schema_src:
             out[k] = schema_src[k]
 
-    # Append "u_open" to control_names (the 13th feature column we just added).
+    # Append "u_open" (the 13th feature column we just added).
     cn = np.array(list(out["control_names"]) + ["u_open"], dtype=out["control_names"].dtype)
     out["control_names"] = cn
-    # Extend control_indices by one (placeholder index; scaffolds key by name).
     out["control_indices"] = np.array(list(out["control_indices"]) + [int(out["control_indices"].max()) + 1], dtype=out["control_indices"].dtype)
 
     out_path = Path(args.output)
