@@ -4,21 +4,23 @@
 # R²(NEW) off its current ~-0.36 floor. Each arm changes ONE thing vs the
 # baseline, so we can attribute any improvement.
 #
-# Naming convention (kept unambiguous since "upsample" was used for two
-# different things in earlier conversations):
+# CHANGED IN THIS REVISION: all arms now use stratify_by_source=true so
+# OLD-train/val/test and NEW-train/val/test share matched yield distributions
+# (KS p>0.9). The previous yield-only stratification let NEW high-yield
+# outliers cluster disproportionately into test by chance.
+#
+# Naming convention:
 #   grid_uniform     = NEW *time grid* upsampled to OLD's 60s/50h regular grid
 #                      (counterfactual to dt-aware encoder)
 #   loss_upweight5x  = NEW *samples* weighted 5× in the loss
 #                      (gradient-level domain re-balancing)
-#   sample_oversample = NEW samples *resampled into more batches* via a
-#                       WeightedRandomSampler (data-level re-balancing,
-#                       effectively oversampling the minority class)
+#   sample_oversample = NEW *samples* resampled into more batches via
+#                       WeightedRandomSampler (data-level re-balancing)
+#   new_only         = train+val+test on NEW alone (no OLD mixing at all)
+#   model9           = Model 9 scaffold (oxygen-dark, supervisor's
+#                      "key model for the new 200 oxygen-opening experiments")
 #
-# All B arms use the same NPZ (txtl_native_real_only.npz, OLD+NEW real),
-# dt-aware encoder, D-recipe loss, seed=2, 50 epochs. Only the marked
-# intervention differs per arm.
-#
-# 5 runs total → 2 batches of 3 ≈ 6h wall-clock at the 3-parallel limit.
+# 7 runs total → 3 batches of 3 ≈ 9h wall-clock at the 3-parallel limit.
 
 study: txtl_data_axis_native_gru_intervention_test
 runs_per_job: 1
@@ -44,14 +46,16 @@ fixed:
   endpoint_channels: [5]
   loss_normalizer_channels: 3
   loss_clamp_min: 1.0
-  # Stratified random split on (mm, pm) endpoint quantiles
+  # Stratified split on (source × yield_bin) — applies to all arms uniformly.
+  # On NEW-only NPZ where only one source is present, this falls back to
+  # plain yield stratification.
   stratified_split: true
   stratify_targets: [3, 5]
   stratify_bins: 5
+  stratify_by_source: true
   # Runtime min-gate (matches OLD's upstream blanking on NEW mm/pm)
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
-  # Diagnostics: dump 5 extra NEW-test sample plots (no-op on A_old_only)
   plot_extra_new_samples: 5
 
 runs:
@@ -65,8 +69,7 @@ runs:
     test_real_only: false
     encoder_use_log_dt: true
 
-  # B: OLD + NEW, no interventions. dt-aware encoder (log_dt feature).
-  # This is the run we expect to reproduce R²(OLD)≈+0.29, R²(NEW)≈-0.36.
+  # B: OLD + NEW, no interventions. dt-aware encoder.
   - exp_name: B_native
     dataset_path: datasets/cell-free/txtl_native_real_only.npz
     val_n: 125
@@ -75,23 +78,32 @@ runs:
     test_real_only: false
     encoder_use_log_dt: true
 
+  # ── New control: NEW only ────────────────────────────────────────────────
+  # Is NEW learnable at all from its 312 samples alone? If yes → mixing OLD
+  # is causing negative transfer. If no → NEW is intrinsically hard with this
+  # data, and no amount of OLD mixing will help.
+  - exp_name: B_new_only
+    dataset_path: datasets/cell-free/txtl_native_new_only.npz
+    val_n: 39
+    test_n: 39
+    stratify_z_expr: false
+    test_real_only: false
+    encoder_use_log_dt: true
+
   # ── Grid intervention ────────────────────────────────────────────────────
-  # B + grid_uniform: NEW resampled to OLD's 60s/50h regular grid via
-  # sum-of-deltas (u_seq) and linear interp (y_seq). dt is now constant 60s
-  # across all samples, so the dt-aware encoder gives no extra signal.
-  # Tests whether the non-uniform dt was the actual bottleneck.
+  # NEW resampled to OLD's 60s/50h regular grid. dt is now constant 60s
+  # across all samples — tests if non-uniform dt was the bottleneck.
   - exp_name: B_grid_uniform
     dataset_path: datasets/cell-free/txtl_native_real_only_upsampled.npz
     val_n: 125
     test_n: 125
     stratify_z_expr: false
     test_real_only: false
-    encoder_use_log_dt: false   # dt is constant on this NPZ; flag is no-op
+    encoder_use_log_dt: false
 
   # ── Loss-level domain re-balancing ───────────────────────────────────────
-  # B + loss_upweight5x: per-sample loss weight 5.0 for NEW, 1.0 for OLD.
-  # Each NEW sample contributes 5× as much to the gradient. Data
-  # distribution unchanged.
+  # NEW samples weighted 5× in loss. Each NEW sample contributes 5× as much
+  # to the gradient. Data distribution unchanged.
   - exp_name: B_loss_upweight5x
     dataset_path: datasets/cell-free/txtl_native_real_only.npz
     val_n: 125
@@ -102,9 +114,7 @@ runs:
     source_loss_weights: {old: 1.0, new: 5.0}
 
   # ── Data-level domain re-balancing ───────────────────────────────────────
-  # B + sample_oversample: WeightedRandomSampler with inverse-frequency
-  # weights. Each minibatch contains ~50/50 OLD/NEW samples (NEW seen
-  # ~2.2× more often per epoch). Effectively oversamples the minority.
+  # WeightedRandomSampler → ~50/50 batches. NEW effectively oversampled.
   - exp_name: B_sample_oversample
     dataset_path: datasets/cell-free/txtl_native_real_only.npz
     val_n: 125
@@ -113,3 +123,18 @@ runs:
     test_real_only: false
     encoder_use_log_dt: true
     balance_source_sampler: true
+
+  # ── Scaffold intervention ────────────────────────────────────────────────
+  # Model 9 (oxygen-dark): supervisor's designed scaffold for the NEW
+  # tube-opening data. Adds P_dark/P_fluor/tube_opened latents. The u_open
+  # column in the NPZ flips tube_opened at t≈22h on NEW samples, turning
+  # off O2 sinks so dark protein matures into fluorescent protein.
+  # obs_state_idx=[3, 6] maps (mm, pm)_dataset → (mm, P_fluor)_scaffold.
+  - exp_name: B_native_model9
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    val_n: 125
+    test_n: 125
+    stratify_z_expr: false
+    test_real_only: false
+    encoder_use_log_dt: true
+    scaffold: txtl_model9_oxygen_dark

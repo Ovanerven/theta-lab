@@ -563,8 +563,12 @@ def loss_fn_per_species(
     use_log_loss: bool = True,
 ) -> torch.Tensor:
     if use_log_loss:
-        pred  = torch.log1p(pred)
-        y_seq = torch.log1p(y_seq)
+        # clamp_min(0) before log1p — model predictions for unobserved channels
+        # (e.g. R, O) can drift negative during training; log1p(<-1) → NaN and
+        # corrupts the per-species diagnostic output. Doesn't affect the main
+        # loss path, which is loss_fn with its own clamp_min.
+        pred  = torch.log1p(pred.clamp_min(0.0))
+        y_seq = torch.log1p(y_seq.clamp_min(0.0))
     se = (pred - y_seq).pow(2)
     if lengths is not None:
         mask = _build_loss_mask(lengths, se.shape[1], se.device)  # (B,K)
@@ -669,6 +673,61 @@ def _allocate_counts(stratum_sizes: np.ndarray, total: int) -> np.ndarray:
     return out
 
 
+def _stratified_yield_split(
+    pool_idx: np.ndarray,
+    y_seq: np.ndarray,
+    lengths: np.ndarray | None,
+    n_val: int,
+    n_test: int,
+    stratify_bins: int,
+    stratify_targets: list[int],
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Yield-stratified train/val/test split on a subset of indices.
+
+    Factored out so it can be called once over the whole dataset (legacy
+    behaviour) or independently per source (when stratify_by_source=True).
+    """
+    if n_test + n_val >= len(pool_idx):
+        raise ValueError(f"val={n_val}+test={n_test} >= pool size {len(pool_idx)}")
+    sub_y = y_seq[pool_idx]
+    sub_L = lengths[pool_idx] if lengths is not None else None
+    vals = _endpoint_values(sub_y, sub_L, stratify_targets)
+    std = vals.std(axis=0)
+    keep = std > 1e-12
+    if not np.any(keep):
+        shuffled = pool_idx.copy(); rng.shuffle(shuffled)
+        return shuffled[n_test + n_val:], shuffled[n_test:n_test + n_val], shuffled[:n_test]
+    vals = vals[:, keep]
+    ranks = np.empty_like(vals, dtype=np.float64)
+    for j in range(vals.shape[1]):
+        order = np.argsort(vals[:, j], kind="mergesort")
+        inv = np.empty_like(order)
+        inv[order] = np.arange(vals.shape[0])
+        ranks[:, j] = inv / max(1, vals.shape[0] - 1)
+    score = ranks.mean(axis=1)
+    labels = _quantile_bin_1d(score, int(stratify_bins)).astype(np.int64)
+    strata = []
+    for u in np.unique(labels):
+        idx_u = pool_idx[labels == u]
+        rng.shuffle(idx_u)
+        strata.append(idx_u)
+    sizes = np.array([len(s) for s in strata], dtype=np.int64)
+    take_test = _allocate_counts(sizes, int(n_test))
+    test_parts, rem_parts = [], []
+    for s, k in zip(strata, take_test):
+        test_parts.append(s[:k]); rem_parts.append(s[k:])
+    rem_sizes = np.array([len(r) for r in rem_parts], dtype=np.int64)
+    take_val = _allocate_counts(rem_sizes, int(n_val))
+    val_parts, train_parts = [], []
+    for r, k in zip(rem_parts, take_val):
+        val_parts.append(r[:k]); train_parts.append(r[k:])
+    test_idx = np.concatenate(test_parts) if test_parts else np.empty(0, dtype=np.int64)
+    val_idx = np.concatenate(val_parts) if val_parts else np.empty(0, dtype=np.int64)
+    train_idx = np.concatenate(train_parts) if train_parts else np.empty(0, dtype=np.int64)
+    return train_idx, val_idx, test_idx
+
+
 def _make_split_indices(
     *,
     N: int,
@@ -683,6 +742,8 @@ def _make_split_indices(
     z_expr: np.ndarray | None = None,
     stratify_z_expr: bool = False,
     test_real_only: bool = False,
+    source_idx: np.ndarray | None = None,
+    stratify_by_source: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create train/val/test indices; optionally stratified by endpoint bins
     and/or by the dataset's z_expr (real vs synth no-go) class flag.
@@ -818,6 +879,34 @@ def _make_split_indices(
     if len(targets) == 0:
         raise ValueError("stratified_split=True but stratify_targets is empty/invalid")
 
+    # Source-aware stratification: split OLD and NEW pools independently via the
+    # yield-bin logic so each (source × yield_bin) cell is matched across train/
+    # val/test. Counts allocated proportional to each source's pool size so the
+    # source-mix in val/test matches the dataset's natural ratio.
+    if stratify_by_source and source_idx is not None:
+        sources_present = sorted(int(s) for s in np.unique(source_idx) if int(s) >= 0)
+        if len(sources_present) >= 2:
+            pools = {s: np.where(source_idx == s)[0] for s in sources_present}
+            sizes_arr = np.array([len(pools[s]) for s in sources_present], dtype=np.int64)
+            take_test_per_src = _allocate_counts(sizes_arr, int(n_test))
+            take_val_per_src  = _allocate_counts(sizes_arr, int(n_val))
+            tr_parts, va_parts, te_parts = [], [], []
+            src_name = {0: "old", 1: "new", 2: "synth"}
+            for src, n_te, n_va in zip(sources_present, take_test_per_src, take_val_per_src):
+                pool = pools[src]
+                tr_s, va_s, te_s = _stratified_yield_split(
+                    pool, y_seq, lengths, int(n_va), int(n_te),
+                    stratify_bins, targets, rng,
+                )
+                tr_parts.append(tr_s); va_parts.append(va_s); te_parts.append(te_s)
+                print(f"  stratify_by_source[{src_name.get(src, str(src))}]: "
+                      f"pool={len(pool)} → train={len(tr_s)} val={len(va_s)} test={len(te_s)}")
+            train_idx = np.concatenate(tr_parts)
+            val_idx   = np.concatenate(va_parts)
+            test_idx  = np.concatenate(te_parts)
+            rng.shuffle(test_idx); rng.shuffle(val_idx); rng.shuffle(train_idx)
+            return train_idx, val_idx, test_idx
+
     vals = _endpoint_values(y_seq, lengths, targets)
     std = vals.std(axis=0)
     keep = std > 1e-12
@@ -934,6 +1023,8 @@ def _resolve_split(cfg, ds, N: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         z_expr=getattr(ds, "z_expr", None),
         stratify_z_expr=bool(cfg.stratify_z_expr),
         test_real_only=bool(cfg.test_real_only),
+        source_idx=getattr(ds, "source_idx", None),
+        stratify_by_source=bool(getattr(cfg, "stratify_by_source", False)),
     )
     kind = ("stratified+z_expr" if cfg.stratify_z_expr and cfg.stratified_split
             else "stratified" if cfg.stratified_split
@@ -1137,6 +1228,13 @@ class TrainConfig:
     # Channels to gate when subtract_channel_min=True. None = all P channels.
     # Typical for the IVTT 7-state layout: [3, 5] (mm = Broccoli, pm = mCherry/2).
     subtract_channel_min_cols: list[int] | None = None
+
+    # Stratify the train/val/test split jointly on (source × yield_bin) so
+    # each (OLD, NEW) population gets the same yield-bin distribution in
+    # train / val / test. Without this, the existing yield-only stratification
+    # can let NEW high-yield outliers cluster in test by chance (with only
+    # ~30 NEW-test samples, this happens easily).
+    stratify_by_source: bool = False
 
     # Per-source loss weighting. Dict {source_name: multiplier} where source_name
     # is "old"/"new"/"synth". Per-sample weight is applied as a scalar multiplier
