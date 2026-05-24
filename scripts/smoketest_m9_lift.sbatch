@@ -27,6 +27,8 @@ python -u last-layer-ode/train.py \
   --set hidden=64 --set lift_dim=16 --set num_layers=1 \
   --set val_n=40 --set test_n=40 --set batch_size=16 \
   --set lambda_oxygen=0.5 --set oxygen_protein_channel=5 --set oxygen_u_open_name=u_open \
+  --set loss_clamp_min=1.0 --set n_substeps=2 \
+  --set subtract_channel_min=true --set subtract_channel_min_cols='[3, 5]' \
   --set stratified_split=true --set stratify_targets='[3, 5]' --set stratify_bins=3 --set stratify_by_source=true \
   --set endpoint_r2=true \
   --no-plot

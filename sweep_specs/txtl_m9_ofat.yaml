@@ -57,6 +57,13 @@ fixed:
   encoder_use_log_dt: true                     # NEW has variable lengths; log_dt is informative there
   plot_extra_new_samples: 5
   y0_theta_init: false                         # overridden in Group 5
+  # ── M9 numerical stability (REQUIRED — without these every M9 arm NaNs at ep 1)
+  # M9 has multiplicative dynamics chains (R·V_TX·DNA, k_ox·O2·P_dark, k_fold·p)
+  # that explode through log1p with random initial θ. loss_clamp_min creates a
+  # dead-zone in the loss for small values; n_substeps=2 subdivides integration
+  # so per-step deltas stay finite. Both are no-ops once training stabilises.
+  loss_clamp_min: 1.0
+  n_substeps: 2
   # L_oxygen plumbing defaults (override λ in run blocks)
   oxygen_protein_channel: 5                    # raw idx of pm
   oxygen_u_open_name: "u_open"
