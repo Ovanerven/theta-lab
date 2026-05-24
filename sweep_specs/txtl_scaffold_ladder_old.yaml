@@ -1,0 +1,131 @@
+# Scaffold-ladder sweep on OLD-only data. Tests which mechanistic scaffold
+# best fits OLD (691 real samples, native 60s grid), and whether the D-recipe
+# composable loss or plain log1p MSE is the right loss objective.
+#
+# Why OLD only: we're still working out how to make NEW learn (see
+# txtl_data_axis_native_gru.yaml). Don't pollute scaffold comparison with
+# the OLD↔NEW recipe-shift confound.
+#
+# Scaffolds tested (per supervisor's "model ladder" in new_scaffolds.tex):
+#   Model 3 (two_state):   M, P, DNA            — minimal observable ODE
+#   Model 4 (three_state): M, P_imm, P_fluor    — adds maturation delay
+#   Model 5 (current):     7-state TXTL          — baseline (the one we've used)
+#   Model 8 (reagent_res): 12-state reagent→res — explicit reagent-resource map
+#   Model 9 (oxygen_dark): 9-state w/ O2 + dark — supervisor's "key NEW model"
+#                          (included as control on OLD where u_open=0 always
+#                           → tube_opened never flips → behaves like extended Model 5)
+#
+# Skipped scaffolds:
+#   Model 6: not a separate scaffold — it's the mechanistic-encoder architecture
+#            that every arm here uses by default (ode_rnn + scaffold)
+#   Model 7: needs synthetic no-go data; not applicable on OLD-only
+#
+# Loss axis:
+#   D-recipe: composable loss (species_weights, time_upweight, λ_endpoint,
+#             loss_normalizer_channels, loss_clamp_min)
+#   plain:    plain masked log1p MSE, no extras (cleaner objective for
+#             comparison; less hand-tuned)
+#
+# 5 scaffolds × 2 losses = 10 arms.
+
+study: txtl_scaffold_ladder_old
+runs_per_job: 1
+time: "04:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]                              # dataset side: mm@3, pm@5
+  warmup_epochs: 5
+  hidden: 600
+  seed: 2
+  y0_theta_init: false
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  # Stratified split on (yield bins). stratify_by_source is a no-op here
+  # (only one source present) but kept on for consistency.
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  # Runtime min-gate (no-op on OLD since OLD pm/mm already start at 0, but
+  # kept on to match the other sweep configs).
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true                     # constant dt=60s on OLD → no-op
+  plot_extra_new_samples: 0                    # no NEW samples here
+
+runs:
+  # ─── D-recipe loss arms ─────────────────────────────────────────────────
+  - exp_name: M3_drecipe
+    scaffold: txtl_model3_two_state
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_drecipe
+    scaffold: txtl_model4_three_state
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe
+    scaffold: txtl_resource_and_maturation_dna
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M8_drecipe
+    scaffold: txtl_model8_reagent_resource
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_drecipe
+    scaffold: txtl_model9_oxygen_dark
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ─── Plain log1p MSE loss arms ──────────────────────────────────────────
+  # No species_weights / time_upweight / lambda_endpoint / clamp_min.
+  - exp_name: M3_plain
+    scaffold: txtl_model3_two_state
+
+  - exp_name: M4_plain
+    scaffold: txtl_model4_three_state
+
+  - exp_name: M5_plain
+    scaffold: txtl_resource_and_maturation_dna
+
+  - exp_name: M8_plain
+    scaffold: txtl_model8_reagent_resource
+
+  - exp_name: M9_plain
+    scaffold: txtl_model9_oxygen_dark
