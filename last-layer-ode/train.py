@@ -178,12 +178,23 @@ def _build_loss_mask(lengths: torch.Tensor, K: int, device: torch.device) -> tor
     return torch.arange(K, device=device).unsqueeze(0) < lengths.unsqueeze(1)
 
 
+# Resource-state IC names that vary between dataset and scaffold conventions.
+# Used by _lift_to_scaffold_state to copy initial conditions even when the
+# scaffold renames a state (e.g. dataset "O" vs M9's "O2"). Add entries here
+# if a new scaffold uses yet another naming.
+_LIFT_NAME_ALIASES: dict[str, str] = {
+    "O2": "O",   # M9 oxygen state is called "O2"; dataset stores it as "O"
+}
+
+
 def _lift_to_scaffold_state(
     y0: torch.Tensor,
     y_seq: torch.Tensor,
     dataset_obs_idx: list[int],
     scaffold_obs_idx: list[int],
     scaffold_P: int,
+    dataset_state_names: list[str] | None = None,
+    scaffold_state_names: list[str] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Re-pack dataset observations into a scaffold-shape state vector.
 
@@ -192,11 +203,18 @@ def _lift_to_scaffold_state(
     dataset_obs_idx = [3, 5]; the other cols are placeholder zeros).
 
     For a partially-observed scaffold (different P, mm/pm at different cols), we:
-      1. Extract the observed channels: y0[:, dataset_obs_idx]  -> (B, n_obs)
-      2. Place them at scaffold_obs_idx in a zero-filled (B, scaffold_P) tensor.
+      1. Extract the observed channels and place them at scaffold_obs_idx in a
+         zero-filled (B, scaffold_P) tensor (this carries the measured mm/pm
+         signal through to the supervised positions).
+      2. ALSO copy any *non-observed* dataset state whose name matches a
+         scaffold state name (with the _LIFT_NAME_ALIASES table). This carries
+         resource/cofactor initial conditions (R=1, O=1 set by the data builder)
+         into y0. Without this, scaffolds whose dynamics multiply by R (M5/M7/M9)
+         silently get R(0)=0 → R(t)=0 → entire transcription cascade dies.
 
-    Faithful to new_scaffolds.tex: latent scaffold states (R, O, P_imm, P_dark,
-    O2, waste, reagent trackers, …) start at zero and are evolved by the ODE.
+    y_seq columns for non-observed states stay zero — the loss only supervises
+    the obs_state_idx columns, and the model integrates its own trajectory
+    forward from y0, so y_seq[..., non_obs] is never read.
     """
     if len(dataset_obs_idx) != len(scaffold_obs_idx):
         raise ValueError(
@@ -215,6 +233,19 @@ def _lift_to_scaffold_state(
     y_seq_full = torch.zeros((B, K, scaffold_P), device=y_seq.device, dtype=y_seq.dtype)
     y0_full.index_copy_(1, dst, y0_obs)
     y_seq_full.index_copy_(2, dst, y_seq_obs)
+
+    # Step 2: by-name IC copy for non-observed states (resource/cofactor).
+    # Only fires when both name lists are provided (kept optional for back-compat).
+    if dataset_state_names is not None and scaffold_state_names is not None:
+        ds_name_to_idx = {str(n): i for i, n in enumerate(dataset_state_names)}
+        scaf_obs_set = set(int(i) for i in scaffold_obs_idx)
+        for s_idx, s_name in enumerate(scaffold_state_names):
+            if s_idx in scaf_obs_set:
+                continue  # already populated in step 1
+            ds_name = _LIFT_NAME_ALIASES.get(str(s_name), str(s_name))
+            if ds_name in ds_name_to_idx:
+                d_idx = ds_name_to_idx[ds_name]
+                y0_full[:, s_idx] = y0[:, d_idx]
     return y0_full, y_seq_full
 
 
@@ -1782,7 +1813,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         )
         print(f"LR cosine decay: {cfg.lr:.2e} → {float(cfg.lr)*0.01:.2e} over {cfg.epochs} epochs")
 
-    mech_names = ds.obs_names.tolist() if ds.obs_names is not None else None
+    # mech_names is used to label the per-species loss in the epoch log line.
+    # Must match the SUPERVISED channels (len == len(cfg.obs_idx)), not the
+    # full dataset obs_names list — otherwise zip() pairs the loss for mm/pm
+    # with the first two dataset names ("R", "O") and the log silently lies.
+    _all_obs_names = ds.obs_names.tolist() if ds.obs_names is not None else None
+    if _all_obs_names is not None and cfg.obs_idx is not None:
+        mech_names = [_all_obs_names[int(i)] for i in cfg.obs_idx]
+    else:
+        mech_names = _all_obs_names
 
     print(f"Data: N={N} | train={len(train_idx)} | val={len(val_idx)} | test={len(test_idx)}")
     print(f"Dims: P_obs={P_obs} | scaffold={cfg.scaffold} | U={U}")
@@ -1836,6 +1875,31 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         obs_idx = torch.arange(P_obs, device=device, dtype=torch.long)
     if not _lift_partial:
         _dataset_obs_idx = None  # unused on the non-lift code path
+
+    # By-name IC copy data for the lift. ds.obs_names is the dataset's column
+    # naming (e.g. ['R','O','m','mm','p','pm','DNA']). scaffold.state_names is
+    # the scaffold's state ordering. Together they let _lift_to_scaffold_state
+    # carry resource ICs (R, O) into scaffolds that need them (M5/M7/M9), with
+    # _LIFT_NAME_ALIASES handling renames like O ↔ O2.
+    _lift_ds_names = ([str(n) for n in ds.obs_names]
+                      if _lift_partial and getattr(ds, "obs_names", None) is not None else None)
+    _lift_scaf_names = (list(scaffold.state_names)
+                        if _lift_partial and getattr(scaffold, "state_names", None) is not None else None)
+    if _lift_partial and _lift_ds_names is not None and _lift_scaf_names is not None:
+        _scaf_obs_set = set(int(i) for i in scaffold.obs_state_idx)
+        _ic_copies = []
+        _ds_idx_map = {n: i for i, n in enumerate(_lift_ds_names)}
+        for s_idx, s_name in enumerate(_lift_scaf_names):
+            if s_idx in _scaf_obs_set:
+                continue
+            ds_name = _LIFT_NAME_ALIASES.get(str(s_name), str(s_name))
+            if ds_name in _ds_idx_map:
+                _ic_copies.append(f"{ds_name}→{s_name}@{s_idx}")
+        if _ic_copies:
+            print(f"Lift by-name IC copy: {', '.join(_ic_copies)}")
+        else:
+            print("Lift by-name IC copy: no matches "
+                  f"(ds_names={_lift_ds_names}, scaffold_names={_lift_scaf_names})")
 
     # ── L_oxygen prep: resolve u_open column + P_fluor channel once ────────
     _ox_u_col: int | None = None
@@ -1902,7 +1966,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             if cfg.subtract_channel_min:
                 y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
             if _lift_partial:
-                y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
+                y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P, _lift_ds_names, _lift_scaf_names)
 
             opt.zero_grad(set_to_none=True)
 
@@ -2083,7 +2147,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     if cfg.subtract_channel_min:
                         y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
                     if _lift_partial:
-                        y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
+                        y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P, _lift_ds_names, _lift_scaf_names)
 
                     if cfg.use_ivtt_mse_loss:
                         model_kwargs = {"teacher_forcing": False, "tf_every": int(cfg.tf_every)}
@@ -2256,7 +2320,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 if cfg.subtract_channel_min:
                     y0, y_seq = _apply_channel_min_gate(y0, y_seq, cfg.subtract_channel_min_cols, batch_lengths)
                 if _lift_partial:
-                    y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P)
+                    y0, y_seq = _lift_to_scaffold_state(y0, y_seq, _dataset_obs_idx, scaffold.obs_state_idx, scaffold.P, _lift_ds_names, _lift_scaf_names)
                 model_kwargs = {"y_seq": None, "teacher_forcing": False}
                 _inject_feat_transforms(model_kwargs)
                 if grouped_model and batch_lengths is not None:

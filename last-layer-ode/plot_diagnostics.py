@@ -53,8 +53,20 @@ def _filter_model_kwargs(model: torch.nn.Module, kwargs: dict) -> dict:
         return kwargs
 
 
+# Mirror of train._LIFT_NAME_ALIASES. Kept in sync by hand — small enough.
+_LIFT_NAME_ALIASES: dict[str, str] = {
+    "O2": "O",
+}
+
+
 def _maybe_lift(y0: torch.Tensor, y_seq: torch.Tensor, lift_info: dict) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mirror of train._lift_to_scaffold_state. No-op if lift_info is empty."""
+    """Mirror of train._lift_to_scaffold_state. No-op if lift_info is empty.
+
+    Also performs the by-name IC copy for non-observed scaffold states whose
+    names match dataset columns (with _LIFT_NAME_ALIASES). Without this,
+    eval/plot would zero-init R/O for M5/M7/M9 and the rebuilt model would
+    produce silent-zero predictions even though the trained checkpoint is fine.
+    """
     if not lift_info:
         return y0, y_seq
     B, K = y0.shape[0], y_seq.shape[1]
@@ -65,6 +77,18 @@ def _maybe_lift(y0: torch.Tensor, y_seq: torch.Tensor, lift_info: dict) -> tuple
     y_seq_full = torch.zeros((B, K, sP), device=y_seq.device, dtype=y_seq.dtype)
     y0_full.index_copy_(1, dst, y0.index_select(1, src))
     y_seq_full.index_copy_(2, dst, y_seq.index_select(2, src))
+
+    ds_names = lift_info.get("dataset_state_names")
+    scaf_names = lift_info.get("scaffold_state_names")
+    if ds_names is not None and scaf_names is not None:
+        ds_name_to_idx = {str(n): i for i, n in enumerate(ds_names)}
+        scaf_obs_set = set(int(i) for i in lift_info["scaffold_obs_idx"])
+        for s_idx, s_name in enumerate(scaf_names):
+            if s_idx in scaf_obs_set:
+                continue
+            ds_name = _LIFT_NAME_ALIASES.get(str(s_name), str(s_name))
+            if ds_name in ds_name_to_idx:
+                y0_full[:, s_idx] = y0[:, ds_name_to_idx[ds_name]]
     return y0_full, y_seq_full
 
 
@@ -176,6 +200,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
             "dataset_obs_idx": dataset_obs_idx,
             "scaffold_obs_idx": list(scaffold.obs_state_idx),
             "scaffold_P": int(scaffold.P),
+            "dataset_state_names": ([str(n) for n in ds.obs_names]
+                                    if getattr(ds, "obs_names", None) is not None else None),
+            "scaffold_state_names": (list(scaffold.state_names)
+                                     if getattr(scaffold, "state_names", None) is not None else None),
         }
         print(f"[rebuild] partial-obs lift: dataset_obs_idx={dataset_obs_idx} "
               f"→ scaffold_obs_idx={scaffold.obs_state_idx} (P={scaffold.P})")
