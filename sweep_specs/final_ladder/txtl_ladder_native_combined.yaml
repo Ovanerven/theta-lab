@@ -52,6 +52,7 @@ fixed:
   encoder_use_log_dt: true                     # active: new data has different dt than old
   gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # 12 cols; excludes is_new(12) and u_open(13)
   plot_extra_new_samples: 5
+  ckpt_every: 0                                # no periodic checkpoints; only model.pt (best) saved
   y0_theta_init: false                         # overridden by M5_*_y0on_* arms
   model_class: ode_rnn                         # overridden by sparse-K arms
 
@@ -100,17 +101,9 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M3_plain_s0
-    scaffold: txtl_model3_two_state
-    seed: 0
-
   - exp_name: M3_plain_s1
     scaffold: txtl_model3_two_state
     seed: 1
-
-  - exp_name: M3_plain_s2
-    scaffold: txtl_model3_two_state
-    seed: 2
 
   # ── Model 4 dense ──────────────────────────────────────────────────────
   - exp_name: M4_drecipe_s0
@@ -146,17 +139,9 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M4_plain_s0
-    scaffold: txtl_model4_three_state
-    seed: 0
-
   - exp_name: M4_plain_s1
     scaffold: txtl_model4_three_state
     seed: 1
-
-  - exp_name: M4_plain_s2
-    scaffold: txtl_model4_three_state
-    seed: 2
 
   # ── Model 5 dense (no y0_init) ─────────────────────────────────────────
   - exp_name: M5_drecipe_s0
@@ -192,23 +177,110 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M5_plain_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-
   - exp_name: M5_plain_s1
     scaffold: txtl_resource_and_maturation_dna
     seed: 1
 
-  - exp_name: M5_plain_s2
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 2
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PART B — REAL-ONLY ABLATION  (synthetic data benefit check)
+  # Same drecipe recipe as Part A but trained on txtl_native_real_only.npz
+  # (691 old + 312 new = 1003 real; val/test = same 125+125 real → 753 real train).
+  # Controlled comparison: identical real train/val/test, synth stripped out.
+  # ═══════════════════════════════════════════════════════════════════════════
 
-  # ── Model 5 dense + y0_theta_init ──────────────────────────────────────
-  - exp_name: M5_drecipe_y0on_s0
+  # ── Model 3 real-only ──────────────────────────────────────────────────
+  - exp_name: M3_real_s0
+    scaffold: txtl_model3_two_state
+    seed: 0
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_real_s1
+    scaffold: txtl_model3_two_state
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_real_s2
+    scaffold: txtl_model3_two_state
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── Model 4 real-only ──────────────────────────────────────────────────
+  - exp_name: M4_real_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_real_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_real_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── Model 5 real-only ──────────────────────────────────────────────────
+  - exp_name: M5_real_s0
     scaffold: txtl_resource_and_maturation_dna
     seed: 0
-    y0_theta_init: true
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -217,10 +289,12 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M5_drecipe_y0on_s1
+  - exp_name: M5_real_s1
     scaffold: txtl_resource_and_maturation_dna
     seed: 1
-    y0_theta_init: true
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -229,10 +303,12 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M5_drecipe_y0on_s2
+  - exp_name: M5_real_s2
     scaffold: txtl_resource_and_maturation_dna
     seed: 2
-    y0_theta_init: true
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -240,24 +316,9 @@ runs:
     endpoint_channels: [5]
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
-
-  - exp_name: M5_plain_y0on_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-    y0_theta_init: true
-
-  - exp_name: M5_plain_y0on_s1
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 1
-    y0_theta_init: true
-
-  - exp_name: M5_plain_y0on_s2
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 2
-    y0_theta_init: true
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PART B — SPARSE-K (six-vector kinetic) ARMS  (M6C in tex terms)
+  # PART C — SPARSE-K (six-vector kinetic) ARMS  (M6C in tex terms)
   # Plain loss only — keeps cross-scaffold K-comparison unbiased by D-recipe
   # knobs that were tuned on M5. Dense baselines for K=0 reference come from
   # Part A above.

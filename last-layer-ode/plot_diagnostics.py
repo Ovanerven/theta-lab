@@ -689,18 +689,17 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     # NEW samples from the test split with a "new_" filename prefix. Lets you
     # eyeball post-tube-opening behaviour without manually digging out indices.
     if extra_new_samples > 0:
-        src = getattr(raw_ds, "source_label", None)
+        src = getattr(raw_ds, "source_idx", None)
         if src is None:
-            print(f"[plot_predictions] extra_new_samples={extra_new_samples} requested but dataset has no source_label; skipping")
+            print(f"[plot_predictions] extra_new_samples={extra_new_samples} requested but dataset has no source_idx; skipping")
         else:
-            src_arr = np.array([str(s) for s in src])
             test_idx_arr = np.array(plotted_indices) if isinstance(plot_ds, torch.utils.data.Subset) else np.arange(len(plot_ds))
             # Use the full test split, not just the already-plotted slice
             if isinstance(plot_ds, torch.utils.data.Subset):
                 full_test_idx = np.asarray(plot_ds.indices, dtype=int)
             else:
                 full_test_idx = np.arange(len(plot_ds))
-            new_in_test = full_test_idx[src_arr[full_test_idx] == "new"]
+            new_in_test = full_test_idx[src[full_test_idx] == 1]  # 1 = new
             if len(new_in_test) == 0:
                 print(f"[plot_predictions] no NEW samples in test split; skipping {extra_new_samples} extras")
             else:
