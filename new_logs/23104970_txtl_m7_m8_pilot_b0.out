@@ -1,0 +1,34 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0
+Study: txtl_m7_m8_pilot | Run ID: 20260525_161122_M8_old_Khi1p0
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[8, 10], control_state_map={'DNA c': 11, 'NTPs': 0, 'FB': 0, 'Maltose': 0, 'AA': 1, 'T7RNAP': 2, 'Mg-Glut': 3, 'K-Glut': 4, 'PEG8000': 5, 'Lysate 2%PEG': 1}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model8_reagent_resource | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10].
+Lift by-name IC copy: m→m@7, p→p@9, DNA→DNA@11
+ep    1 | train 10.556258 | val 9.906500 | best 9.906500 | tf=1  [mm:9.8326  pm:9.9804] | 59.73s
+ep    2 | train 9.036005 | val 8.644808 | best 8.644808 | tf=1  [mm:4.8601  pm:12.4295] | 44.18s
+ep    3 | train 8.518080 | val 6.805502 | best 6.805502 | tf=1  [mm:4.4079  pm:9.2031] | 43.00s
+ep    4 | train 7.665764 | val 6.088713 | best 6.088713 | tf=1  [mm:3.5914  pm:8.5860] | 43.09s
+ep    5 | train 7.323486 | val 6.306135 | best 6.088713 | tf=1  [mm:3.2055  pm:9.4068] | 43.13s
+ep    6 | train 6.616890 | val 5.936773 | best 5.936773 | tf=1  [mm:3.2987  pm:8.5748] | 43.10s
+ep    7 | train 7.117448 | val 5.954826 | best 5.936773 | tf=1  [mm:3.3030  pm:8.6066] | 42.86s

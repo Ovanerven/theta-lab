@@ -1,31 +1,17 @@
-# Combined OLD-only ladder: covers tex Models 3-6 across both encoder output
+# OLD-only ladder: covers tex Models 3-6 + M8 across both encoder output
 # flavors (dense θ(t) = M6A, six-vector θ = M6C).
 #
-# Merges:
-#   - txtl_scaffold_ladder_old_full.yaml  (dense θ(t),  24 runs)
-#   - txtl_sparse_k_x_scaffold_old.yaml   (sparse-K θ,  24 runs)
-#
-# Total: 48 runs.
-#
-# Coverage map vs new_scaffolds.tex Models 1-6:
-#   M1 static endpoint baseline     — NOT included (not implemented as a scaffold)
-#   M2 sequence-to-trajectory       — NOT included (not implemented as a scaffold)
+# Coverage map vs new_scaffolds.tex Models 1-6, 8:
 #   M3 two-state ODE                — ✅ dense + sparse-K
 #   M4 three-state ODE              — ✅ dense + sparse-K
 #   M5 seven-state ODE              — ✅ dense + sparse-K, with y0_init axis
-#   M6A GRU + dense θ(t)            — ✅ implicit in every dense M5 arm
-#   M6B GRU + time input + dense    — NOT included (encoder_use_time toggle)
+#   M6A GRU + dense θ(t)            — ✅ implicit in every dense arm
 #   M6C GRU + six-vector θ          — ✅ sparse-K, K=6 arms
-#   M6D GRU + time + six-vector     — NOT included
-#   M6E LSTM/Transformer/Mamba      — NOT included (different encoder class)
+#   M8 reagent-resource             — ✅ dense drecipe (NEW: fixed by Lysate mapping)
+#                                      + sparse-K
 #
-# M8 is included on the sparse-K side only (its dense full-12-state variant
-# collapsed in the earlier ladder, see project_supervisor_mirror_audit.md /
-# the M8 multiplicative-saturation discussion). Treat M8 results here as
-# exploratory until the 8A ladder is rebuilt.
-#
-# M7 (synth no-expression) and M9 (NEW oxygen) are in separate sweeps because
-# they need different datasets.
+# M7 excluded: protein stuck (O-state issue, old_only has no oxygen signal).
+# M9 excluded: u_open=all-zero on old_only; oxygen experiments only in new data.
 #
 # Why OLD only: per new_scaffolds.tex's "Practical recommendation",
 # NEW data is structurally tied to Model 9 and synthetic no-expression data is
@@ -292,7 +278,41 @@ runs:
   - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
   - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
 
-  # ── Model 8 sparse-K (exploratory; full-12-state dense variant collapses) ──
+  # ── Model 8 dense (NEW — previously stuck; fixed by Lysate→AA mapping) ────
+  - exp_name: M8_drecipe_s0
+    scaffold: txtl_model8_reagent_resource
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M8_drecipe_s1
+    scaffold: txtl_model8_reagent_resource
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M8_drecipe_s2
+    scaffold: txtl_model8_reagent_resource
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── Model 8 sparse-K ───────────────────────────────────────────────────
   - {exp_name: M8_K1_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
   - {exp_name: M8_K1_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
   - {exp_name: M8_K3_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}

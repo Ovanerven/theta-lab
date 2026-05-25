@@ -1,0 +1,59 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_161058_M7_old_s1
+Study: txtl_m7_m8_pilot | Run ID: 20260525_161058_M7_old_s1
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[3, 5], control_state_map={'DNA c': 11, 'T7RNAP': 6, 'NTPs': 7, 'AA': 8, 'Mg-Glut': 9, 'K-Glut': 10, 'Lysate 2%PEG': 8}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model7_boundary_gated | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5].
+Lift by-name IC copy: R→R@0, O→O@1, m→m@2, p→p@4, DNA→DNA@11
+ep    1 | train 8.944002 | val 8.971208 | best 8.971208 | tf=1  [mm:4.3870  pm:22.6989] | 60.15s
+ep    2 | train 9.107347 | val 8.920967 | best 8.920967 | tf=1  [mm:4.3401  pm:22.5642] | 46.94s
+ep    3 | train 9.229928 | val 8.876524 | best 8.876524 | tf=1  [mm:4.3013  pm:22.5844] | 45.52s
+ep    4 | train 8.970232 | val 8.872287 | best 8.872287 | tf=1  [mm:4.3980  pm:22.4650] | 45.97s
+ep    5 | train 9.215299 | val 8.881035 | best 8.872287 | tf=1  [mm:4.3563  pm:22.4679] | 45.70s
+ep    6 | train 9.192870 | val 8.814635 | best 8.814635 | tf=1  [mm:4.2936  pm:22.3691] | 45.27s
+ep    7 | train 8.935105 | val 8.817046 | best 8.814635 | tf=1  [mm:4.2711  pm:22.3622] | 45.61s
+ep    8 | train 8.931521 | val 8.698351 | best 8.698351 | tf=1  [mm:4.2339  pm:22.1484] | 45.42s
+ep    9 | train 8.958552 | val 8.654863 | best 8.654863 | tf=1  [mm:4.1174  pm:22.0996] | 45.24s
+ep   10 | train 8.934491 | val 8.716875 | best 8.654863 | tf=1  [mm:4.1986  pm:22.1972] | 45.59s
+ep   11 | train 8.994846 | val 8.754992 | best 8.654863 | tf=1  [mm:4.2021  pm:22.2547] | 45.29s
+ep   12 | train 8.959407 | val 8.743009 | best 8.654863 | tf=1  [mm:4.1641  pm:22.2612] | 45.30s
+ep   13 | train 9.292059 | val 8.745569 | best 8.654863 | tf=1  [mm:4.1712  pm:22.3117] | 45.35s
+ep   14 | train 9.043333 | val 8.784680 | best 8.654863 | tf=1  [mm:4.2113  pm:22.3014] | 45.92s
+ep   15 | train 8.767024 | val 8.706039 | best 8.654863 | tf=1  [mm:4.1335  pm:22.2506] | 45.42s
+ep   16 | train 8.793790 | val 8.706326 | best 8.654863 | tf=1  [mm:4.1277  pm:22.2336] | 45.54s
+ep   17 | train 9.040364 | val 8.683793 | best 8.654863 | tf=1  [mm:4.0725  pm:22.2287] | 45.33s
+ep   18 | train 8.638115 | val 8.673504 | best 8.654863 | tf=1  [mm:4.0522  pm:22.2492] | 45.39s
+ep   19 | train 8.792549 | val 8.692632 | best 8.654863 | tf=1  [mm:4.0877  pm:22.2110] | 45.32s
+ep   20 | train 8.805503 | val 8.657511 | best 8.654863 | tf=1  [mm:4.0580  pm:22.2108] | 45.25s
+ep   21 | train 8.967690 | val 8.636912 | best 8.636912 | tf=1  [mm:4.0409  pm:22.1407] | 45.26s
+ep   22 | train 8.952991 | val 8.595282 | best 8.595282 | tf=1  [mm:4.0342  pm:22.0386] | 45.33s
+ep   23 | train 8.912538 | val 8.652875 | best 8.595282 | tf=1  [mm:4.0498  pm:22.1303] | 45.21s
+ep   24 | train 9.011446 | val 8.667389 | best 8.595282 | tf=1  [mm:4.0263  pm:22.2522] | 45.48s
+ep   25 | train 8.976462 | val 8.658665 | best 8.595282 | tf=1  [mm:4.0037  pm:22.2396] | 45.34s
+ep   26 | train 8.427452 | val 8.632305 | best 8.595282 | tf=1  [mm:4.0276  pm:22.1721] | 45.38s
+ep   27 | train 8.709777 | val 8.634294 | best 8.595282 | tf=1  [mm:4.0161  pm:22.1727] | 45.46s
+ep   28 | train 8.941672 | val 8.611366 | best 8.595282 | tf=1  [mm:3.9593  pm:22.1912] | 45.27s
+ep   29 | train 8.916030 | val 8.626556 | best 8.595282 | tf=1  [mm:3.9638  pm:22.2016] | 45.42s
+ep   30 | train 8.932683 | val 8.637431 | best 8.595282 | tf=1  [mm:3.9568  pm:22.2322] | 45.20s
+ep   31 | train 8.846856 | val 8.648593 | best 8.595282 | tf=1  [mm:3.9539  pm:22.2337] | 45.25s
+[2026-05-25T16:34:48.368] error: *** JOB 23104963 ON gcn100 CANCELLED AT 2026-05-25T16:34:48 DUE to SIGNAL Terminated ***

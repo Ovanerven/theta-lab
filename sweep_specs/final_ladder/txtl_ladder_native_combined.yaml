@@ -1,28 +1,32 @@
-# Combined OLD+NEW+SYNTH ladder: same 48 arms as txtl_ladder_old_combined.yaml,
-# but trained on txtl_native_combined.npz (691 old + 312 new + 2496 synth = 3499).
+# Combined OLD+NEW+SYNTH ladder — scaffolds M3–M9 (M7 confirmed fixed; M8 combined excluded).
 #
-# Key changes from old-only ladder:
-#   - dataset_path → txtl_native_combined.npz  (has source_label, 14 ctrl cols)
-#   - test_real_only: true    → val/test contain only real expts (1003 total real)
-#   - val_n/test_n: 125       → ~12.5% of 1003 real each; all synth goes to train
-#   - balance_source_sampler: true  → upsamples old/new to match synth in batches
-#   - gru_u_cols: [0..11]     → explicitly excludes is_new (col 12) and u_open (col 13);
-#                                  M3-M5-M8 don't model oxygen, u_open is M9's signal
-#   - encoder_use_log_dt: true → NOW ACTIVE (new data has shorter dt than old)
-#   - plot_extra_new_samples: 5 → plot 5 extra new-dataset samples at eval
-#   - stratify_by_source: true  → NOW FUNCTIONAL (old ladder: no-op, single source)
+# Key changes from original spec:
+#   - Reordered into Round 1 (1 seed per cell) → Round 2 (seed repetitions)
+#     so every scaffold/dataset/K combo is visible before any run is repeated.
+#   - Added M7 (Lysate+FB mapping fix confirmed working in pilot; pm actively decreasing)
+#   - M8 combined removed: NaN at ep1 even with n_substeps=2 — needs further diagnosis.
+#     M8 real_only arms retained (old_only pilot showed pm=8.6 at ep7, working).
+#   - Added M9 oxygen-dark arms (real_only + combined datasets, n_substeps=2, u_open included)
 #
-# Test split: 125 real (≈86 old + ≈38 new), stratified across 5 quantile bins on
-# (mm, pm) endpoints. All synthetic goes to train. Val: same 125 real, non-overlapping.
-# Remaining real (753) + all synth (2496) = 3249 train samples.
+# LaTeX justification (new_scaffolds.tex §M7, §M8, §M9):
+#   M7 "boundary-gated" → Lysate 2%PEG + FB mapped; O-state confirmed nonzero on real data
+#   M8 "reagent-resource" → real_only only (combined NaN, undiagnosed)
+#   M9 "oxygen-dark protein" → real_only only for u_open signal; combined ablation added
+#      (u_open=all-zero in old_only; not meaningful there)
 #
-# Coverage map vs new_scaffolds.tex Models 3-8:
-#   M3 two-state ODE             — ✅ dense + sparse-K
-#   M4 three-state ODE           — ✅ dense + sparse-K
-#   M5 seven-state ODE           — ✅ dense + sparse-K, with y0_init axis
-#   M6A GRU + dense θ(t)         — ✅ implicit in every dense arm
-#   M6C GRU + six-vector θ       — ✅ sparse-K, K=6 arms
-#   M8 reagent+resource sparse-K — ✅ exploratory (dense variant collapses)
+# Dataset legend:
+#   combined  = txtl_native_combined.npz   (691 old + 312 new + 2496 synth = 3499)
+#   real_only = txtl_native_real_only.npz  (691 old + 312 new = 1003)
+#
+# Coverage map vs new_scaffolds.tex:
+#   M3 two-state ODE          — dense drecipe/plain, real_only, sparse-K
+#   M4 three-state ODE        — dense drecipe/plain, real_only, sparse-K
+#   M5 seven-state ODE        — dense drecipe/plain, real_only, sparse-K
+#   M6A GRU + dense θ(t)      — implicit in every dense arm
+#   M6C GRU + six-vector θ    — sparse-K K=6 arms
+#   M7 boundary-gated ODE     — dense drecipe, real_only, sparse-K (NEW — pilot confirmed)
+#   M8 reagent-resource       — real_only only (combined excluded pending NaN diagnosis)
+#   M9 oxygen-dark protein    — dense drecipe on real_only/combined, sparse-K K=1/3/6 (NEW)
 
 study: txtl_ladder_native_combined
 runs_per_job: 1
@@ -34,167 +38,58 @@ base_config: configs/txtl_gru_new_baseline.yaml
 fixed:
   epochs: 100
   endpoint_r2: true
-  obs_idx: [3, 5]                              # dataset side: mm@3, pm@5
+  obs_idx: [3, 5]
   warmup_epochs: 5
   hidden: 600
   dataset_path: datasets/cell-free/txtl_native_combined.npz
   val_n: 125
   test_n: 125
   stratify_z_expr: false
-  test_real_only: true                         # val/test = real only; all synth → train
+  test_real_only: true
   stratified_split: true
   stratify_targets: [3, 5]
   stratify_bins: 5
-  stratify_by_source: true                     # balances old/new proportions in val/test bins
-  balance_source_sampler: true                 # upsamples old/new to match synth in batches
+  stratify_by_source: true
+  balance_source_sampler: true
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
-  encoder_use_log_dt: true                     # active: new data has different dt than old
-  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # 12 cols; excludes is_new(12) and u_open(13)
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # excludes is_new(12) and u_open(13)
   plot_extra_new_samples: 5
-  ckpt_every: 0                                # no periodic checkpoints; only model.pt (best) saved
-  y0_theta_init: false                         # overridden by M5_*_y0on_* arms
-  model_class: ode_rnn                         # overridden by sparse-K arms
-
-# ─── runs ──────────────────────────────────────────────────────────────────
-# Naming:
-#   Dense arms:  M{N}_{loss}[_y0on]_s{seed}
-#   Sparse arms: M{N}_K{anchors}_s{seed}
-#   loss ∈ {drecipe, plain}; seed ∈ {0,1,2} for dense, {1,2} for sparse
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn
 
 runs:
   # ═══════════════════════════════════════════════════════════════════════════
-  # PART A — DENSE θ(t) ARMS  (model_class = ode_rnn, M6A in tex terms)
+  # ROUND 1 — one representative run per (scaffold × dataset × loss × K)
+  # Run these first to get a full cross-scaffold picture before any repetitions.
   # ═══════════════════════════════════════════════════════════════════════════
 
-  # ── Model 3 dense ──────────────────────────────────────────────────────
-  - exp_name: M3_drecipe_s0
-    scaffold: txtl_model3_two_state
-    seed: 0
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
+  # ── Dense drecipe, combined (1 seed each) ──────────────────────────────
+  - {exp_name: M3_drecipe_s0, scaffold: txtl_model3_two_state,            seed: 0, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_drecipe_s0, scaffold: txtl_model4_three_state,          seed: 0, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_drecipe_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_drecipe_s0, scaffold: txtl_model7_boundary_gated,       seed: 0, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
 
-  - exp_name: M3_drecipe_s1
-    scaffold: txtl_model3_two_state
-    seed: 1
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
+  # ── Dense plain ablation, combined ─────────────────────────────────────
+  - {exp_name: M3_plain_s1, scaffold: txtl_model3_two_state,            seed: 1}
+  - {exp_name: M4_plain_s1, scaffold: txtl_model4_three_state,          seed: 1}
+  - {exp_name: M5_plain_s1, scaffold: txtl_resource_and_maturation_dna, seed: 1}
 
-  - exp_name: M3_drecipe_s2
-    scaffold: txtl_model3_two_state
-    seed: 2
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M3_plain_s1
-    scaffold: txtl_model3_two_state
-    seed: 1
-
-  # ── Model 4 dense ──────────────────────────────────────────────────────
-  - exp_name: M4_drecipe_s0
-    scaffold: txtl_model4_three_state
-    seed: 0
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M4_drecipe_s1
-    scaffold: txtl_model4_three_state
-    seed: 1
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M4_drecipe_s2
-    scaffold: txtl_model4_three_state
-    seed: 2
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M4_plain_s1
-    scaffold: txtl_model4_three_state
-    seed: 1
-
-  # ── Model 5 dense (no y0_init) ─────────────────────────────────────────
-  - exp_name: M5_drecipe_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M5_drecipe_s1
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 1
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M5_drecipe_s2
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 2
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M5_plain_s1
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 1
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # PART B — REAL-ONLY ABLATION  (synthetic data benefit check)
-  # Same drecipe recipe as Part A but trained on txtl_native_real_only.npz
-  # (691 old + 312 new = 1003 real; val/test = same 125+125 real → 753 real train).
-  # Controlled comparison: identical real train/val/test, synth stripped out.
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  # ── Model 3 real-only ──────────────────────────────────────────────────
-  - exp_name: M3_real_s0
-    scaffold: txtl_model3_two_state
+  # ── Real-only ablation, 1 seed (synthetic data benefit check) ──────────
+  - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 0, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 0, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_real_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_real_s0, scaffold: txtl_model7_boundary_gated,       seed: 0, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  # M8 real-only (combined NaN undiagnosed; real_only confirmed working in pilot)
+  - exp_name: M8_real_s0
+    scaffold: txtl_model8_reagent_resource
     seed: 0
     dataset_path: datasets/cell-free/txtl_native_real_only.npz
     balance_source_sampler: false
     test_real_only: false
+    n_substeps: 2
     use_ivtt_mse_loss: false
     species_weights: {3: 1.25, 5: 1.0}
     time_upweight: {5: [0.5, 3.0]}
@@ -203,155 +98,324 @@ runs:
     loss_normalizer_channels: 3
     loss_clamp_min: 1.0
 
-  - exp_name: M3_real_s1
-    scaffold: txtl_model3_two_state
-    seed: 1
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M3_real_s2
-    scaffold: txtl_model3_two_state
-    seed: 2
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  # ── Model 4 real-only ──────────────────────────────────────────────────
-  - exp_name: M4_real_s0
-    scaffold: txtl_model4_three_state
-    seed: 0
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M4_real_s1
-    scaffold: txtl_model4_three_state
-    seed: 1
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M4_real_s2
-    scaffold: txtl_model4_three_state
-    seed: 2
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  # ── Model 5 real-only ──────────────────────────────────────────────────
-  - exp_name: M5_real_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M5_real_s1
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 1
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  - exp_name: M5_real_s2
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 2
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false
-    use_ivtt_mse_loss: false
-    species_weights: {3: 1.25, 5: 1.0}
-    time_upweight: {5: [0.5, 3.0]}
-    lambda_endpoint: 0.1
-    endpoint_channels: [5]
-    loss_normalizer_channels: 3
-    loss_clamp_min: 1.0
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # PART C — SPARSE-K (six-vector kinetic) ARMS  (M6C in tex terms)
-  # Plain loss only — keeps cross-scaffold K-comparison unbiased by D-recipe
-  # knobs that were tuned on M5. Dense baselines for K=0 reference come from
-  # Part A above.
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  # ── Model 3 sparse-K ───────────────────────────────────────────────────
-  - {exp_name: M3_K1_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
-  - {exp_name: M3_K1_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
-  - {exp_name: M3_K3_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
-  - {exp_name: M3_K3_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
-  - {exp_name: M3_K6_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
-  - {exp_name: M3_K6_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
-
-  # ── Model 4 sparse-K ───────────────────────────────────────────────────
-  - {exp_name: M4_K1_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
-  - {exp_name: M4_K1_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
-  - {exp_name: M4_K3_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
-  - {exp_name: M4_K3_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
-  - {exp_name: M4_K6_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
-  - {exp_name: M4_K6_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
-
-  # ── Model 5 sparse-K ───────────────────────────────────────────────────
+  # ── Sparse-K K=1, 1 seed each ──────────────────────────────────────────
+  - {exp_name: M3_K1_s1, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M4_K1_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
   - {exp_name: M5_K1_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
-  - {exp_name: M5_K1_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
-  - {exp_name: M5_K3_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
-  - {exp_name: M5_K3_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
-  - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
-  - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  - {exp_name: M7_K1_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
 
-  # ── Model 8 sparse-K (exploratory; full-12-state dense variant collapses) ──
-  - {exp_name: M8_K1_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
-  - {exp_name: M8_K1_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
-  - {exp_name: M8_K3_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
-  - {exp_name: M8_K3_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
-  - {exp_name: M8_K6_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
-  - {exp_name: M8_K6_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  # ── Sparse-K K=3, 1 seed each ──────────────────────────────────────────
+  - {exp_name: M3_K3_s1, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M4_K3_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M5_K3_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M7_K3_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+
+  # ── Sparse-K K=6, 1 seed each ──────────────────────────────────────────
+  - {exp_name: M3_K6_s1, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M4_K6_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M7_K6_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+
+  # ── M9 oxygen-dark, real_only, 1 seed each ─────────────────────────────
+  # real_only used because: tube-opening signal (u_open) only exists in the 312
+  # new real samples; old_only has u_open=0 for every step (no oxygen experiments).
+  # gru_u_cols overridden to include u_open at col 12 of the real_only dataset.
+  - exp_name: M9_B_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # includes u_open=12
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_O0.5_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── M9 sparse-K (real_only, lambda_oxygen=0.1), 1 seed each ───────────────
+  - exp_name: M9_K1_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_K3_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 3
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_K6_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 6
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── M9 combined dataset (tests synthetic-data benefit for oxygen model) ───
+  # Uses the default combined.npz dataset from the fixed block.
+  # gru_u_cols adds u_open at col 13 (combined dataset column order).
+  - exp_name: M9_comb_s1
+    scaffold: txtl_model9_oxygen_dark
+    seed: 1
+    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]  # adds u_open=13; skips is_new=12
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ROUND 2 — seed repetitions for variance estimates
+  # Run after Round 1 is complete to confirm results aren't seed-sensitive.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── Dense drecipe extra seeds ───────────────────────────────────────────
+  - {exp_name: M3_drecipe_s1, scaffold: txtl_model3_two_state,            seed: 1, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M3_drecipe_s2, scaffold: txtl_model3_two_state,            seed: 2, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_drecipe_s1, scaffold: txtl_model4_three_state,          seed: 1, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_drecipe_s2, scaffold: txtl_model4_three_state,          seed: 2, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_drecipe_s1, scaffold: txtl_resource_and_maturation_dna, seed: 1, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_drecipe_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_drecipe_s1, scaffold: txtl_model7_boundary_gated,       seed: 1, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_drecipe_s2, scaffold: txtl_model7_boundary_gated,       seed: 2, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+
+  # ── Real-only extra seeds ───────────────────────────────────────────────
+  - {exp_name: M3_real_s1, scaffold: txtl_model3_two_state,            seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M3_real_s2, scaffold: txtl_model3_two_state,            seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_real_s1, scaffold: txtl_model4_three_state,          seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M4_real_s2, scaffold: txtl_model4_three_state,          seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_real_s1, scaffold: txtl_resource_and_maturation_dna, seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_real_s1, scaffold: txtl_model7_boundary_gated,       seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - {exp_name: M7_real_s2, scaffold: txtl_model7_boundary_gated,       seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, use_ivtt_mse_loss: false, species_weights: {3: 1.25, 5: 1.0}, time_upweight: {5: [0.5, 3.0]}, lambda_endpoint: 0.1, endpoint_channels: [5], loss_normalizer_channels: 3, loss_clamp_min: 1.0}
+  - exp_name: M8_real_s1
+    scaffold: txtl_model8_reagent_resource
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    n_substeps: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── Sparse-K extra seeds ────────────────────────────────────────────────
+  - {exp_name: M3_K1_s2, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M4_K1_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M5_K1_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M7_K1_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+
+  - {exp_name: M3_K3_s2, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M4_K3_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M5_K3_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M7_K3_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+
+  - {exp_name: M3_K6_s2, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  - {exp_name: M4_K6_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  - {exp_name: M7_K6_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+
+  # ── M9 extra seeds ──────────────────────────────────────────────────────
+  - exp_name: M9_B_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_O0.5_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── M9 sparse-K extra seeds ─────────────────────────────────────────────
+  - exp_name: M9_K1_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_K3_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 3
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_K6_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    model_class: ode_rnn_sparse_theta_v2
+    anchor_mode: uniform
+    n_theta_anchors: 6
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    balance_source_sampler: false
+    test_real_only: false
+    gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ── M9 combined extra seed ──────────────────────────────────────────────
+  - exp_name: M9_comb_s2
+    scaffold: txtl_model9_oxygen_dark
+    seed: 2
+    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+    n_substeps: 2
+    oxygen_protein_channel: 5
+    oxygen_u_open_name: "u_open"
+    lambda_oxygen: 0.1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0

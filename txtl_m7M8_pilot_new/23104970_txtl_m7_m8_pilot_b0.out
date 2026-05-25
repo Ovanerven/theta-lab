@@ -1,0 +1,107 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0
+Study: txtl_m7_m8_pilot | Run ID: 20260525_161122_M8_old_Khi1p0
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[8, 10], control_state_map={'DNA c': 11, 'NTPs': 0, 'FB': 0, 'Maltose': 0, 'AA': 1, 'T7RNAP': 2, 'Mg-Glut': 3, 'K-Glut': 4, 'PEG8000': 5, 'Lysate 2%PEG': 1}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model8_reagent_resource | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10].
+Lift by-name IC copy: m→m@7, p→p@9, DNA→DNA@11
+ep    1 | train 10.556258 | val 9.906500 | best 9.906500 | tf=1  [mm:9.8326  pm:9.9804] | 59.73s
+ep    2 | train 9.036005 | val 8.644808 | best 8.644808 | tf=1  [mm:4.8601  pm:12.4295] | 44.18s
+ep    3 | train 8.518080 | val 6.805502 | best 6.805502 | tf=1  [mm:4.4079  pm:9.2031] | 43.00s
+ep    4 | train 7.665764 | val 6.088713 | best 6.088713 | tf=1  [mm:3.5914  pm:8.5860] | 43.09s
+ep    5 | train 7.323486 | val 6.306135 | best 6.088713 | tf=1  [mm:3.2055  pm:9.4068] | 43.13s
+ep    6 | train 6.616890 | val 5.936773 | best 5.936773 | tf=1  [mm:3.2987  pm:8.5748] | 43.10s
+ep    7 | train 7.117448 | val 5.954826 | best 5.936773 | tf=1  [mm:3.3030  pm:8.6066] | 42.86s
+ep    8 | train 7.128100 | val 6.224781 | best 5.936773 | tf=1  [mm:3.2350  pm:9.2146] | 42.83s
+ep    9 | train 6.894452 | val 5.939439 | best 5.936773 | tf=1  [mm:3.3617  pm:8.5172] | 43.10s
+ep   10 | train 6.635928 | val 5.987061 | best 5.936773 | tf=1  [mm:3.1736  pm:8.8005] | 42.94s
+ep   11 | train 6.670493 | val 5.867776 | best 5.867776 | tf=1  [mm:3.2003  pm:8.5352] | 43.15s
+ep   12 | train 6.567556 | val 5.939476 | best 5.867776 | tf=1  [mm:3.2382  pm:8.6408] | 43.00s
+ep   13 | train 6.817048 | val 5.887992 | best 5.867776 | tf=1  [mm:3.1888  pm:8.5872] | 42.89s
+ep   14 | train 6.447934 | val 5.866539 | best 5.866539 | tf=1  [mm:3.1935  pm:8.5396] | 42.83s
+ep   15 | train 6.469832 | val 5.856733 | best 5.856733 | tf=1  [mm:3.1616  pm:8.5519] | 42.92s
+ep   16 | train 6.962519 | val 5.827445 | best 5.827445 | tf=1  [mm:3.2522  pm:8.4027] | 42.93s
+ep   17 | train 6.545047 | val 5.860960 | best 5.827445 | tf=1  [mm:3.1938  pm:8.5282] | 42.94s
+ep   18 | train 6.090153 | val 5.786326 | best 5.786326 | tf=1  [mm:3.1125  pm:8.4602] | 42.95s
+ep   19 | train 7.012686 | val 5.870175 | best 5.786326 | tf=1  [mm:3.2530  pm:8.4873] | 42.89s
+ep   20 | train 6.765083 | val 5.824327 | best 5.786326 | tf=1  [mm:3.1122  pm:8.5364] | 42.89s
+ep   21 | train 7.118265 | val 5.800464 | best 5.786326 | tf=1  [mm:3.1616  pm:8.4394] | 43.00s
+ep   22 | train 7.045893 | val 5.837377 | best 5.786326 | tf=1  [mm:3.1102  pm:8.5645] | 42.90s
+ep   23 | train 6.610253 | val 5.737665 | best 5.737665 | tf=1  [mm:3.0948  pm:8.3805] | 43.10s
+ep   24 | train 6.933467 | val 5.696618 | best 5.696618 | tf=1  [mm:2.9914  pm:8.4019] | 42.92s
+ep   25 | train 7.251318 | val 5.801102 | best 5.696618 | tf=1  [mm:3.0697  pm:8.5325] | 43.14s
+ep   26 | train 6.507918 | val 5.718170 | best 5.696618 | tf=1  [mm:3.0054  pm:8.4310] | 43.00s
+ep   27 | train 6.718091 | val 5.714310 | best 5.696618 | tf=1  [mm:3.0706  pm:8.3580] | 42.83s
+ep   28 | train 6.589481 | val 5.761572 | best 5.696618 | tf=1  [mm:3.0926  pm:8.4306] | 42.90s
+ep   29 | train 6.427716 | val 5.685699 | best 5.685699 | tf=1  [mm:2.9491  pm:8.4223] | 42.91s
+ep   30 | train 6.440408 | val 5.728175 | best 5.685699 | tf=1  [mm:3.0578  pm:8.3986] | 42.81s
+ep   31 | train 6.638910 | val 5.808945 | best 5.685699 | tf=1  [mm:2.9982  pm:8.6197] | 42.90s
+ep   32 | train 6.430604 | val 5.733128 | best 5.685699 | tf=1  [mm:3.0009  pm:8.4654] | 43.06s
+ep   33 | train 6.704441 | val 5.776361 | best 5.685699 | tf=1  [mm:2.9555  pm:8.5972] | 43.03s
+ep   34 | train 6.581321 | val 5.639213 | best 5.639213 | tf=1  [mm:2.9027  pm:8.3757] | 42.90s
+ep   35 | train 6.373053 | val 5.616618 | best 5.616618 | tf=1  [mm:2.8971  pm:8.3361] | 42.93s
+ep   36 | train 6.308248 | val 5.761322 | best 5.616618 | tf=1  [mm:3.0897  pm:8.4329] | 43.10s
+ep   37 | train 6.735839 | val 5.635069 | best 5.616618 | tf=1  [mm:2.9154  pm:8.3547] | 42.95s
+ep   38 | train 6.704823 | val 5.755712 | best 5.616618 | tf=1  [mm:3.2240  pm:8.2874] | 42.81s
+ep   39 | train 6.355273 | val 5.674632 | best 5.616618 | tf=1  [mm:2.9734  pm:8.3759] | 42.86s
+ep   40 | train 6.150298 | val 5.654120 | best 5.616618 | tf=1  [mm:2.9272  pm:8.3811] | 42.87s
+ep   41 | train 6.543788 | val 5.786049 | best 5.616618 | tf=1  [mm:3.2101  pm:8.3620] | 42.69s
+ep   42 | train 6.869332 | val 5.767892 | best 5.616618 | tf=1  [mm:3.0831  pm:8.4527] | 42.74s
+ep   43 | train 6.333358 | val 5.818710 | best 5.616618 | tf=1  [mm:3.1111  pm:8.5264] | 42.88s
+ep   44 | train 6.747238 | val 5.729056 | best 5.616618 | tf=1  [mm:3.0211  pm:8.4370] | 42.78s
+ep   45 | train 6.556359 | val 5.664565 | best 5.616618 | tf=1  [mm:2.9956  pm:8.3336] | 42.98s
+ep   46 | train 7.098103 | val 5.767930 | best 5.616618 | tf=1  [mm:3.0084  pm:8.5274] | 42.82s
+ep   47 | train 6.725622 | val 5.657882 | best 5.616618 | tf=1  [mm:2.9479  pm:8.3678] | 42.70s
+ep   48 | train 6.328849 | val 5.834202 | best 5.616618 | tf=1  [mm:3.2287  pm:8.4397] | 42.79s
+ep   49 | train 6.726966 | val 5.660765 | best 5.616618 | tf=1  [mm:2.9751  pm:8.3464] | 42.75s
+ep   50 | train 6.822065 | val 5.700566 | best 5.616618 | tf=1  [mm:2.9237  pm:8.4774] | 42.71s
+
+Test loss (best model): 6.648380  [mm:3.0036  pm:10.2932]
+Saved best model to experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/model.pt
+
+Training completed in 2170.84s (36.18m)
+Peak GPU memory: 8.88 GB
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10] (P=12)
+Loading checkpoint: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/model.pt
+[plot_predictions] n_samples=5, plot_ds_len=87
+[plot_predictions] y0.shape=(5, 12), u_seq.shape=(5, 1496, 13), y_seq.shape=(5, 1496, 12), dt_seq.shape=(5, 1496)
+Saved plots to experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/plots
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10] (P=12)
+Loading checkpoint: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/model.pt
+[plot] failed: FileNotFoundError: No checkpoint files matching ckpt_ep*.pt in: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/checkpoints
+Traceback (most recent call last):
+  File "/gpfs/home2/overven1/theta-lab/last-layer-ode/train.py", line 2407, in train
+    plot_epoch_prediction_overlays(
+  File "/gpfs/home2/overven1/theta-lab/last-layer-ode/plot_diagnostics.py", line 916, in plot_epoch_prediction_overlays
+    raise FileNotFoundError(f"No checkpoint files matching ckpt_ep*.pt in: {ckpt_dir}")
+FileNotFoundError: No checkpoint files matching ckpt_ep*.pt in: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/checkpoints
+
+Running endpoint R² analysis...
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10] (P=12)
+Loading checkpoint: experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/model.pt
+  R²(protein final) = -0.3165
+  R²(mRNA max)      = -0.4586
+Saved plot -> experiments/txtl_m7_m8_pilot/20260525_161122_M8_old_Khi1p0/endpoint_r2.png
+23104970       00:42:31               RUNNING 
+23104970.ba+   00:42:31               RUNNING 
+23104970.ex+   00:42:31               RUNNING 

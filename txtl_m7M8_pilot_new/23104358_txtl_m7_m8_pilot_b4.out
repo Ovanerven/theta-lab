@@ -1,0 +1,51 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_152049_M8_old_Khi1p0
+Study: txtl_m7_m8_pilot | Run ID: 20260525_152049_M8_old_Khi1p0
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[8, 10], control_state_map={'DNA c': 11, 'NTPs': 0, 'FB': 0, 'Maltose': 0, 'AA': 1, 'T7RNAP': 2, 'Mg-Glut': 3, 'K-Glut': 4, 'PEG8000': 5}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model8_reagent_resource | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10].
+Lift by-name IC copy: m→m@7, p→p@9, DNA→DNA@11
+ep    1 | train 15.950431 | val 15.446160 | best 15.446160 | tf=1  [mm:10.1071  pm:20.7852] | 61.34s
+ep    2 | train 13.404516 | val 13.054579 | best 13.054579 | tf=1  [mm:4.7156  pm:21.3936] | 44.48s
+ep    3 | train 12.952082 | val 12.104375 | best 12.104375 | tf=1  [mm:3.4907  pm:20.7181] | 43.37s
+ep    4 | train 12.343891 | val 11.807395 | best 11.807395 | tf=1  [mm:3.2482  pm:20.3666] | 43.13s
+ep    5 | train 12.388602 | val 11.649799 | best 11.649799 | tf=1  [mm:3.3585  pm:19.9411] | 43.05s
+ep    6 | train 12.057998 | val 11.608949 | best 11.608949 | tf=1  [mm:3.2842  pm:19.9337] | 42.90s
+ep    7 | train 12.218935 | val 11.593376 | best 11.593376 | tf=1  [mm:3.2339  pm:19.9529] | 43.18s
+ep    8 | train 12.142464 | val 11.592423 | best 11.592423 | tf=1  [mm:3.1921  pm:19.9928] | 42.95s
+ep    9 | train 12.027006 | val 11.560635 | best 11.560635 | tf=1  [mm:3.1728  pm:19.9485] | 43.10s
+ep   10 | train 12.380053 | val 11.615835 | best 11.560635 | tf=1  [mm:3.2669  pm:19.9647] | 42.95s
+ep   11 | train 12.191464 | val 11.555917 | best 11.555917 | tf=1  [mm:3.1321  pm:19.9797] | 43.22s
+ep   12 | train 11.675792 | val 11.528314 | best 11.528314 | tf=1  [mm:3.0246  pm:20.0320] | 43.03s
+ep   13 | train 11.593000 | val 11.503391 | best 11.503391 | tf=1  [mm:3.0537  pm:19.9531] | 42.99s
+ep   14 | train 11.742136 | val 11.509459 | best 11.503391 | tf=1  [mm:3.0776  pm:19.9413] | 42.92s
+ep   15 | train 12.043440 | val 11.468812 | best 11.468812 | tf=1  [mm:2.9472  pm:19.9904] | 42.99s
+ep   16 | train 12.439775 | val 11.546936 | best 11.468812 | tf=1  [mm:3.1205  pm:19.9734] | 43.00s
+ep   17 | train 11.735642 | val 11.511324 | best 11.468812 | tf=1  [mm:3.0690  pm:19.9536] | 43.04s
+ep   18 | train 12.035963 | val 11.531875 | best 11.468812 | tf=1  [mm:2.9735  pm:20.0903] | 43.13s
+ep   19 | train 12.343767 | val 11.725659 | best 11.468812 | tf=1  [mm:3.4186  pm:20.0327] | 43.00s
+ep   20 | train 11.835450 | val 11.515286 | best 11.468812 | tf=1  [mm:3.0371  pm:19.9935] | 43.01s
+ep   21 | train 12.579531 | val 11.431320 | best 11.431320 | tf=1  [mm:2.9228  pm:19.9398] | 43.12s
+ep   22 | train 12.185749 | val 11.462615 | best 11.431320 | tf=1  [mm:2.8895  pm:20.0357] | 43.14s
+ep   23 | train 12.083792 | val 11.421911 | best 11.421911 | tf=1  [mm:2.9551  pm:19.8887] | 43.19s
+[2026-05-25T15:37:46.096] error: *** JOB 23104358 ON gcn148 CANCELLED AT 2026-05-25T15:37:46 DUE to SIGNAL Terminated ***

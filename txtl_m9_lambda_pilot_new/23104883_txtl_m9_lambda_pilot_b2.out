@@ -1,0 +1,71 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m9_lambda_pilot/20260525_160449_M9_O0.5_s3
+Study: txtl_m9_lambda_pilot | Run ID: 20260525_160449_M9_O0.5_s3
+  stratify_by_source[old]: pool=691 → train=519 val=86 test=86
+  stratify_by_source[new]: pool=312 → train=234 val=39 test=39
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=125 n_val=125 n_train=753
+Partial-observability lift: scaffold.P=9, P_obs=7, obs_state_idx=[3, 6], control_state_map={'DNA c': 7, 'u_open': 8}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=1003 | train=753 | val=125 | test=125
+Dims: P_obs=7 | scaffold=txtl_model9_oxygen_dark | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 6].
+Lift by-name IC copy: R→R@0, O→O2@1, m→m@2, p→p@4, DNA→DNA@7
+[L_oxygen] active: lambda=0.5 u_open_col=12 pred_ch=1 target_ch=1
+ep    1 | train 5.441548 | val 4.806288 | best 4.806288 | tf=1  [mm:2.2540  pm:4.8736] | 107.60s
+ep    2 | train 6.762126 | val 4.173650 | best 4.173650 | tf=1  [mm:2.0737  pm:4.1224] | 93.82s
+ep    3 | train 4.508869 | val 3.486053 | best 3.486053 | tf=1  [mm:1.9062  pm:3.5724] | 93.12s
+ep    4 | train 3.798388 | val 3.042909 | best 3.042909 | tf=1  [mm:2.1466  pm:3.1866] | 92.55s
+ep    5 | train 3.663897 | val 3.026464 | best 3.026464 | tf=1  [mm:2.1373  pm:2.9884] | 92.90s
+ep    6 | train 3.457359 | val 2.809549 | best 2.809549 | tf=1  [mm:2.0715  pm:2.9570] | 93.01s
+ep    7 | train 3.646751 | val 2.931279 | best 2.809549 | tf=1  [mm:2.2312  pm:3.0910] | 93.52s
+ep    8 | train 3.169848 | val 3.076555 | best 2.809549 | tf=1  [mm:2.2702  pm:2.9013] | 93.12s
+ep    9 | train 3.229792 | val 2.801469 | best 2.801469 | tf=1  [mm:2.0210  pm:2.9471] | 93.18s
+ep   10 | train 2.927034 | val 3.010307 | best 2.801469 | tf=1  [mm:1.8917  pm:2.8675] | 93.19s
+ep   11 | train 3.045563 | val 2.955445 | best 2.801469 | tf=1  [mm:2.2358  pm:2.8337] | 92.87s
+ep   12 | train 2.774981 | val 2.804294 | best 2.801469 | tf=1  [mm:1.9536  pm:3.0624] | 92.97s
+ep   13 | train 2.756934 | val 2.871769 | best 2.801469 | tf=1  [mm:1.8162  pm:2.9208] | 92.89s
+ep   14 | train 2.423889 | val 2.907033 | best 2.801469 | tf=1  [mm:1.7610  pm:2.9692] | 93.20s
+ep   15 | train 2.489174 | val 3.021603 | best 2.801469 | tf=1  [mm:1.8995  pm:2.8421] | 92.68s
+ep   16 | train 2.156393 | val 3.233081 | best 2.801469 | tf=1  [mm:1.9716  pm:3.2821] | 93.29s
+ep   17 | train 2.182542 | val 3.346212 | best 2.801469 | tf=1  [mm:2.1035  pm:3.6277] | 92.71s
+ep   18 | train 2.140904 | val 3.163295 | best 2.801469 | tf=1  [mm:2.0652  pm:3.1425] | 92.60s
+ep   19 | train 1.910447 | val 2.748679 | best 2.748679 | tf=1  [mm:1.6357  pm:2.8772] | 92.68s
+ep   20 | train 1.760306 | val 2.947046 | best 2.748679 | tf=1  [mm:1.5371  pm:3.3195] | 92.85s
+ep   21 | train 1.664837 | val 2.904336 | best 2.748679 | tf=1  [mm:1.3907  pm:3.3375] | 92.94s
+ep   22 | train 1.550404 | val 3.287659 | best 2.748679 | tf=1  [mm:1.6138  pm:3.6713] | 92.54s
+ep   23 | train 1.508563 | val 2.947319 | best 2.748679 | tf=1  [mm:1.6366  pm:3.1721] | 92.64s
+ep   24 | train 1.559897 | val 2.768195 | best 2.748679 | tf=1  [mm:1.3813  pm:3.0016] | 92.93s
+ep   25 | train 1.452982 | val 2.738164 | best 2.738164 | tf=1  [mm:1.1941  pm:2.9155] | 93.12s
+ep   26 | train 1.210190 | val 3.172602 | best 2.738164 | tf=1  [mm:1.4789  pm:3.4473] | 92.45s
+ep   27 | train 1.170145 | val 3.426081 | best 2.738164 | tf=1  [mm:1.9344  pm:3.5351] | 92.93s
+ep   28 | train 1.271501 | val 2.739982 | best 2.738164 | tf=1  [mm:1.4885  pm:2.7544] | 92.61s
+ep   29 | train 1.155789 | val 2.898806 | best 2.738164 | tf=1  [mm:1.4506  pm:3.1257] | 92.38s
+ep   30 | train 1.031911 | val 2.671970 | best 2.671970 | tf=1  [mm:1.2486  pm:2.7778] | 92.45s
+ep   31 | train 1.088224 | val 2.728948 | best 2.671970 | tf=1  [mm:1.2024  pm:2.8216] | 92.14s
+ep   32 | train 0.985803 | val 3.064673 | best 2.671970 | tf=1  [mm:1.4377  pm:3.3690] | 92.02s
+ep   33 | train 0.926308 | val 2.846849 | best 2.671970 | tf=1  [mm:1.3249  pm:2.9216] | 92.11s
+ep   34 | train 0.861743 | val 3.078345 | best 2.671970 | tf=1  [mm:1.3685  pm:3.1068] | 92.56s
+ep   35 | train 0.887995 | val 3.132154 | best 2.671970 | tf=1  [mm:1.4194  pm:3.2654] | 92.56s
+ep   36 | train 0.847916 | val 2.571621 | best 2.571621 | tf=1  [mm:1.0967  pm:2.7401] | 92.67s
+ep   37 | train 0.817489 | val 2.758120 | best 2.571621 | tf=1  [mm:1.2276  pm:2.8480] | 92.98s
+ep   38 | train 0.767901 | val 2.714396 | best 2.571621 | tf=1  [mm:1.2850  pm:2.6734] | 92.95s
+ep   39 | train 0.748133 | val 2.782012 | best 2.571621 | tf=1  [mm:1.2434  pm:3.0365] | 92.83s
+ep   40 | train 0.722285 | val 2.859266 | best 2.571621 | tf=1  [mm:1.2292  pm:3.1687] | 92.36s
+ep   41 | train 0.756983 | val 2.616575 | best 2.571621 | tf=1  [mm:1.0382  pm:2.7149] | 92.82s

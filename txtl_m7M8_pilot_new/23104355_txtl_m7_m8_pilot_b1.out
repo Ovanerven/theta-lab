@@ -1,0 +1,49 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_152043_M7_old_s2
+Study: txtl_m7_m8_pilot | Run ID: 20260525_152043_M7_old_s2
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[3, 5], control_state_map={'DNA c': 11, 'T7RNAP': 6, 'NTPs': 7, 'AA': 8, 'Mg-Glut': 9, 'K-Glut': 10}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model7_boundary_gated | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5].
+Lift by-name IC copy: R→R@0, O→O@1, m→m@2, p→p@4, DNA→DNA@11
+ep    1 | train 8.971155 | val 8.904453 | best 8.904453 | tf=1  [mm:4.4260  pm:22.4580] | 58.29s
+ep    2 | train 9.331196 | val 9.005622 | best 8.904453 | tf=1  [mm:4.3818  pm:22.6892] | 46.45s
+ep    3 | train 8.949737 | val 8.827112 | best 8.827112 | tf=1  [mm:4.3687  pm:22.3319] | 45.92s
+ep    4 | train 9.075831 | val 8.826323 | best 8.826323 | tf=1  [mm:4.3505  pm:22.3285] | 45.82s
+ep    5 | train 9.057129 | val 8.818141 | best 8.818141 | tf=1  [mm:4.3916  pm:22.3521] | 45.64s
+ep    6 | train 8.914790 | val 8.741840 | best 8.741840 | tf=1  [mm:4.3078  pm:22.2215] | 45.72s
+ep    7 | train 9.209431 | val 8.768086 | best 8.741840 | tf=1  [mm:4.2777  pm:22.2301] | 45.63s
+ep    8 | train 8.999685 | val 8.731496 | best 8.731496 | tf=1  [mm:4.2922  pm:22.1792] | 45.80s
+ep    9 | train 9.027296 | val 8.672376 | best 8.672376 | tf=1  [mm:4.2453  pm:22.0740] | 45.63s
+ep   10 | train 9.094330 | val 8.739745 | best 8.672376 | tf=1  [mm:4.2337  pm:22.2032] | 45.62s
+ep   11 | train 9.173191 | val 8.704409 | best 8.672376 | tf=1  [mm:4.2588  pm:22.1661] | 45.75s
+ep   12 | train 9.114054 | val 8.707536 | best 8.672376 | tf=1  [mm:4.2493  pm:22.1623] | 45.76s
+ep   13 | train 8.821682 | val 8.728540 | best 8.672376 | tf=1  [mm:4.2420  pm:22.2112] | 45.72s
+ep   14 | train 9.104140 | val 8.737742 | best 8.672376 | tf=1  [mm:4.2347  pm:22.2444] | 45.64s
+ep   15 | train 8.702610 | val 8.729824 | best 8.672376 | tf=1  [mm:4.2388  pm:22.2056] | 45.57s
+ep   16 | train 8.888574 | val 8.658759 | best 8.658759 | tf=1  [mm:4.0711  pm:22.2255] | 45.59s
+ep   17 | train 8.997322 | val 8.686440 | best 8.658759 | tf=1  [mm:4.0869  pm:22.2191] | 45.66s
+ep   18 | train 8.726787 | val 8.703469 | best 8.658759 | tf=1  [mm:4.0862  pm:22.2934] | 45.82s
+ep   19 | train 8.565299 | val 8.656796 | best 8.656796 | tf=1  [mm:4.0343  pm:22.2410] | 45.68s
+ep   20 | train 8.669023 | val 8.723431 | best 8.656796 | tf=1  [mm:4.2330  pm:22.2783] | 45.77s
+ep   21 | train 8.914628 | val 8.657273 | best 8.656796 | tf=1  [mm:4.0479  pm:22.2749] | 45.65s
+[2026-05-25T15:37:42.105] error: *** JOB 23104355 ON gcn106 CANCELLED AT 2026-05-25T15:37:42 DUE to SIGNAL Terminated ***

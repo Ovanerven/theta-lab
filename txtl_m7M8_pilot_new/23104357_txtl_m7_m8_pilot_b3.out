@@ -1,0 +1,34 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/txtl_m7_m8_pilot/20260525_152043_M7_comb_s2
+Study: txtl_m7_m8_pilot | Run ID: 20260525_152043_M7_comb_s2
+test_real_only: train=753 real + 2496 synth; val=125 real; test=125 real
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=125 n_val=125 n_train=3249
+balance_source_sampler: train counts by source = {0: 520, 1: 233, 2: 2496}
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[3, 5], control_state_map={'DNA c': 11, 'T7RNAP': 6, 'NTPs': 7, 'AA': 8, 'Mg-Glut': 9, 'K-Glut': 10}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=3499 | train=3249 | val=125 | test=125
+Dims: P_obs=7 | scaffold=txtl_model7_boundary_gated | U=14
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5].
+Lift by-name IC copy: R→R@0, O→O@1, m→m@2, p→p@4, DNA→DNA@11
+ep    1 | train 6.647974 | val 8.280400 | best 8.280400 | tf=1  [mm:5.1121  pm:20.5809] | 257.08s
+ep    2 | train 6.513932 | val 8.098970 | best 8.098970 | tf=1  [mm:4.7926  pm:20.4562] | 244.48s
+ep    3 | train 6.227575 | val 8.110629 | best 8.098970 | tf=1  [mm:4.7756  pm:20.4415] | 245.96s
+ep    4 | train 6.268799 | val 8.044740 | best 8.044740 | tf=1  [mm:4.7323  pm:20.3127] | 245.56s
+[2026-05-25T15:37:44.582] error: *** JOB 23104357 ON gcn147 CANCELLED AT 2026-05-25T15:37:44 DUE to SIGNAL Terminated ***

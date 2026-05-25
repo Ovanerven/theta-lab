@@ -1,0 +1,20 @@
+$ python -u last-layer-ode/train.py --config configs/txtl_gru_new_baseline.yaml --set study=txtl_m9_smoke --set out_root=experiments --set exp_name=M9_O0.5_s2 --set epochs=100 --set endpoint_r2=True --set obs_idx='[3, 5]' --set warmup_epochs=5 --set hidden=600 --set scaffold=txtl_model9_oxygen_dark --set dataset_path=datasets/cell-free/txtl_native_real_only.npz --set val_n=125 --set test_n=125 --set stratify_z_expr=False --set test_real_only=False --set stratified_split=True --set stratify_targets='[3, 5]' --set stratify_bins=5 --set stratify_by_source=True --set subtract_channel_min=True --set subtract_channel_min_cols='[3, 5]' --set encoder_use_log_dt=True --set plot_extra_new_samples=5 --set y0_theta_init=False --set loss_clamp_min=1.0 --set n_substeps=2 --set oxygen_protein_channel=5 --set oxygen_u_open_name=u_open --set seed=2 --set lambda_oxygen=0.5
+
+Using device: cuda
+Experiment: experiments/txtl_m9_smoke/20260525_161637_M9_O0.5_s2
+Study: txtl_m9_smoke | Run ID: 20260525_161637_M9_O0.5_s2
+  stratify_by_source[old]: pool=691 → train=519 val=86 test=86
+  stratify_by_source[new]: pool=312 → train=234 val=39 test=39
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=125 n_val=125 n_train=753
+/home/bob-van-sluijs/anaconda3/envs/oliver_env/lib/python3.13/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+Partial-observability lift: scaffold.P=9, P_obs=7, obs_state_idx=[3, 6], control_state_map={'DNA c': 7, 'u_open': 8}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=1003 | train=753 | val=125 | test=125
+Dims: P_obs=7 | scaffold=txtl_model9_oxygen_dark | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 6].
+Lift by-name IC copy: R→R@0, O→O2@1, m→m@2, p→p@4, DNA→DNA@7
+[L_oxygen] active: lambda=0.5 u_open_col=12 pred_ch=1 target_ch=1
+ep    1 | train 5.737257 | val 5.113517 | best 5.113517 | tf=1  [mm:2.3009  pm:5.3812] | 67.75s
