@@ -29,7 +29,7 @@
 study: txtl_m7_m8_pilot
 runs_per_job: 1
 time: "02:30:00"
-partition: gpu_a100
+partition: gpu_h100
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
