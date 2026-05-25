@@ -1,0 +1,268 @@
+# Model 9 (oxygen / tube-opening) OFAT sweep on OLD+NEW data.
+#
+# Goal: figure out if M9 can train, and which of the tex's M9-specific levers
+# matter. Adds ONE feature at a time on top of a clean baseline so each delta
+# is attributable.
+#
+# Dataset: txtl_native_real_only.npz (691 OLD + 312 NEW). M9's tube_opened
+# state stays at 0 for OLD samples (sink_mask=1 throughout, no oxygen rescue),
+# and flips 0→1 at step 150 for NEW samples. M9's structure handles both
+# regimes coherently, which is why OLD+NEW (not NEW-only) is the right
+# training set — OLD provides bulk trajectory supervision, NEW provides the
+# oxygen-specific signal.
+#
+# OFAT layout:
+#   Group 0  — baseline                          (3 runs)
+#   Group 1  — L_oxygen ladder (λ_O ∈ {0.1,0.5,1.0,2.0})  (12 runs)
+#   Group 2  — +D-recipe                         (3 runs)
+#   Group 3  — +encoder_use_time                 (3 runs)
+#   Group 4  — +L_smooth (l2_reg, γ ∈ {0.01,0.1})        (6 runs)
+#   Group 5  — +y0_theta_init                    (3 runs)
+#   Group 6  — best-stack combo                  (3 runs)
+#   Group 7  — NEW-only sanity (best config)     (3 runs)
+#
+# Total: 36 runs × 3 seeds (where applicable).
+# After the L_oxygen ladder identifies λ_O*, Group 6 stacks the winning
+# extras (D-recipe + λ_O* + any other axis that helps in isolation).
+#
+# Why no full crossing: 5+ axes would explode to hundreds of runs. OFAT
+# answers "does this lever matter at all?" cheaply; full crossing is
+# reserved for follow-up if multiple levers turn out to help.
+
+study: txtl_m9_ofat
+runs_per_job: 1
+time: "03:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]                              # mm@3, pm@5
+  warmup_epochs: 5
+  hidden: 600
+  scaffold: txtl_model9_oxygen_dark
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true                     # CRITICAL on OLD+NEW: keep source ratios in splits
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true                     # NEW has variable lengths; log_dt is informative there
+  plot_extra_new_samples: 5
+  y0_theta_init: false                         # overridden in Group 5
+  # ── M9 numerical stability (REQUIRED — without these every M9 arm NaNs at ep 1)
+  # M9 has multiplicative dynamics chains (R·V_TX·DNA, k_ox·O2·P_dark, k_fold·p)
+  # that explode through log1p with random initial θ. loss_clamp_min creates a
+  # dead-zone in the loss for small values; n_substeps=2 subdivides integration
+  # so per-step deltas stay finite. Both are no-ops once training stabilises.
+  loss_clamp_min: 1.0
+  n_substeps: 1
+  # L_oxygen plumbing defaults (override λ in run blocks)
+  oxygen_protein_channel: 5                    # raw idx of pm
+  oxygen_u_open_name: "u_open"
+
+# ─── runs ──────────────────────────────────────────────────────────────────
+# Naming: M9_{group}_{tag}_s{seed}
+# Group tags:
+#   B   baseline (plain loss, no extras)
+#   O{λ} L_oxygen with weight λ
+#   D   D-recipe
+#   T   encoder_use_time
+#   S{γ} L_smooth (l2_reg) with γ
+#   Y   y0_theta_init
+#   STK best-stack combo (D + best L_oxygen)
+#   NEW NEW-only sanity check
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 0 — BASELINE (plain MSE, no extras)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M9_B_s0, seed: 0}
+  - {exp_name: M9_B_s1, seed: 1}
+  - {exp_name: M9_B_s2, seed: 2}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 1 — L_OXYGEN LADDER (the central question: does L_oxygen help, and at
+  # what weight? Baseline = plain loss to isolate the L_oxygen effect.)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M9_O0.1_s0, seed: 0, lambda_oxygen: 0.1}
+  - {exp_name: M9_O0.1_s1, seed: 1, lambda_oxygen: 0.1}
+  - {exp_name: M9_O0.1_s2, seed: 2, lambda_oxygen: 0.1}
+
+  - {exp_name: M9_O0.5_s0, seed: 0, lambda_oxygen: 0.5}
+  - {exp_name: M9_O0.5_s1, seed: 1, lambda_oxygen: 0.5}
+  - {exp_name: M9_O0.5_s2, seed: 2, lambda_oxygen: 0.5}
+
+  - {exp_name: M9_O1.0_s0, seed: 0, lambda_oxygen: 1.0}
+  - {exp_name: M9_O1.0_s1, seed: 1, lambda_oxygen: 1.0}
+  - {exp_name: M9_O1.0_s2, seed: 2, lambda_oxygen: 1.0}
+
+  - {exp_name: M9_O2.0_s0, seed: 0, lambda_oxygen: 2.0}
+  - {exp_name: M9_O2.0_s1, seed: 1, lambda_oxygen: 2.0}
+  - {exp_name: M9_O2.0_s2, seed: 2, lambda_oxygen: 2.0}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 2 — +D-RECIPE (composable loss: species_weights + time_upweight +
+  # λ_endpoint + normalizer + clamp_min). Tests whether D-recipe helps M9
+  # the same way it helped M5.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: M9_D_s0
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_D_s1
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_D_s2
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 3 — +ENCODER_USE_TIME (concat τ=k/(K-1) ∈ [0,1] to encoder feature).
+  # Hypothesis: tube-opening event is at a fixed t (step 150 in NEW), so
+  # explicit time may help the encoder bind θ-changes to that event.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M9_T_s0, seed: 0, encoder_use_time: true}
+  - {exp_name: M9_T_s1, seed: 1, encoder_use_time: true}
+  - {exp_name: M9_T_s2, seed: 2, encoder_use_time: true}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 4 — +L_SMOOTH (l2 on Δθ between adjacent timesteps).
+  # Tex recommends this for kinetic-trajectory models for interpretability.
+  # Risk: damps the rapid θ change M9 needs at tube opening — that's why we
+  # test two γ values, one mild (0.01) and one stronger (0.1).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M9_S0.01_s0, seed: 0, l2_regularization: true, lambda_reg: 0.01}
+  - {exp_name: M9_S0.01_s1, seed: 1, l2_regularization: true, lambda_reg: 0.01}
+  - {exp_name: M9_S0.01_s2, seed: 2, l2_regularization: true, lambda_reg: 0.01}
+
+  - {exp_name: M9_S0.1_s0,  seed: 0, l2_regularization: true, lambda_reg: 0.1}
+  - {exp_name: M9_S0.1_s1,  seed: 1, l2_regularization: true, lambda_reg: 0.1}
+  - {exp_name: M9_S0.1_s2,  seed: 2, l2_regularization: true, lambda_reg: 0.1}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 5 — +Y0_THETA_INIT (initialise θ_head from observed y0).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M9_Y_s0, seed: 0, y0_theta_init: true}
+  - {exp_name: M9_Y_s1, seed: 1, y0_theta_init: true}
+  - {exp_name: M9_Y_s2, seed: 2, y0_theta_init: true}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 6 — BEST-STACK COMBO (D-recipe + presumptive λ_O = 0.5).
+  # Once Group 1 results come in, edit lambda_oxygen here to the winning λ
+  # and re-run if it differs from 0.5. Also includes encoder_use_time since
+  # it has good theoretical justification for M9.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: M9_STK_s0
+    seed: 0
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_STK_s1
+    seed: 1
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_STK_s2
+    seed: 2
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Group 7 — NEW-ONLY SANITY (best stack on NEW data only).
+  # Confirms whether the OLD bulk is helping or just diluting the NEW signal.
+  # If NEW-only with the same recipe matches OLD+NEW performance on the NEW
+  # test split, then OLD isn't carrying its weight (potential follow-up:
+  # source-weighted loss to boost NEW gradient contribution).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - exp_name: M9_NEW_s0
+    seed: 0
+    dataset_path: datasets/cell-free/txtl_native_new_only.npz
+    val_n: 39
+    test_n: 39
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_NEW_s1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_new_only.npz
+    val_n: 39
+    test_n: 39
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M9_NEW_s2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_new_only.npz
+    val_n: 39
+    test_n: 39
+    lambda_oxygen: 0.5
+    encoder_use_time: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0

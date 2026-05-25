@@ -1,0 +1,301 @@
+# Combined OLD-only ladder: covers tex Models 3-6 across both encoder output
+# flavors (dense θ(t) = M6A, six-vector θ = M6C).
+#
+# Merges:
+#   - txtl_scaffold_ladder_old_full.yaml  (dense θ(t),  24 runs)
+#   - txtl_sparse_k_x_scaffold_old.yaml   (sparse-K θ,  24 runs)
+#
+# Total: 48 runs.
+#
+# Coverage map vs new_scaffolds.tex Models 1-6:
+#   M1 static endpoint baseline     — NOT included (not implemented as a scaffold)
+#   M2 sequence-to-trajectory       — NOT included (not implemented as a scaffold)
+#   M3 two-state ODE                — ✅ dense + sparse-K
+#   M4 three-state ODE              — ✅ dense + sparse-K
+#   M5 seven-state ODE              — ✅ dense + sparse-K, with y0_init axis
+#   M6A GRU + dense θ(t)            — ✅ implicit in every dense M5 arm
+#   M6B GRU + time input + dense    — NOT included (encoder_use_time toggle)
+#   M6C GRU + six-vector θ          — ✅ sparse-K, K=6 arms
+#   M6D GRU + time + six-vector     — NOT included
+#   M6E LSTM/Transformer/Mamba      — NOT included (different encoder class)
+#
+# M8 is included on the sparse-K side only (its dense full-12-state variant
+# collapsed in the earlier ladder, see project_supervisor_mirror_audit.md /
+# the M8 multiplicative-saturation discussion). Treat M8 results here as
+# exploratory until the 8A ladder is rebuilt.
+#
+# M7 (synth no-expression) and M9 (NEW oxygen) are in separate sweeps because
+# they need different datasets.
+#
+# Why OLD only: per new_scaffolds.tex's "Practical recommendation",
+# NEW data is structurally tied to Model 9 and synthetic no-expression data is
+# tied to Model 7.
+
+study: txtl_ladder_old_combined
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]                              # dataset side: mm@3, pm@5
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true                     # no-op on OLD (one source) but kept for consistency
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true                     # constant dt on OLD → no-op
+  plot_extra_new_samples: 0
+  y0_theta_init: false                         # overridden by M5_*_y0on_* arms
+  model_class: ode_rnn                         # overridden by sparse-K arms
+
+# ─── runs ──────────────────────────────────────────────────────────────────
+# Naming:
+#   Dense arms:  M{N}_{loss}[_y0on]_s{seed}
+#   Sparse arms: M{N}_K{anchors}_s{seed}
+#   loss ∈ {drecipe, plain}; seed ∈ {0,1,2} for dense, {1,2} for sparse
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PART A — DENSE θ(t) ARMS  (model_class = ode_rnn, M6A in tex terms)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── Model 3 dense ──────────────────────────────────────────────────────
+  - exp_name: M3_drecipe_s0
+    scaffold: txtl_model3_two_state
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_drecipe_s1
+    scaffold: txtl_model3_two_state
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_drecipe_s2
+    scaffold: txtl_model3_two_state
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M3_plain_s0
+    scaffold: txtl_model3_two_state
+    seed: 0
+
+  - exp_name: M3_plain_s1
+    scaffold: txtl_model3_two_state
+    seed: 1
+
+  - exp_name: M3_plain_s2
+    scaffold: txtl_model3_two_state
+    seed: 2
+
+  # ── Model 4 dense ──────────────────────────────────────────────────────
+  - exp_name: M4_drecipe_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_drecipe_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_drecipe_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M4_plain_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+
+  - exp_name: M4_plain_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+
+  - exp_name: M4_plain_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+
+  # ── Model 5 dense (no y0_init) ─────────────────────────────────────────
+  - exp_name: M5_drecipe_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_plain_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+
+  - exp_name: M5_plain_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+
+  - exp_name: M5_plain_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+
+  # ── Model 5 dense + y0_theta_init ──────────────────────────────────────
+  - exp_name: M5_drecipe_y0on_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_y0on_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_drecipe_y0on_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    y0_theta_init: true
+    use_ivtt_mse_loss: false
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    loss_normalizer_channels: 3
+    loss_clamp_min: 1.0
+
+  - exp_name: M5_plain_y0on_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    y0_theta_init: true
+
+  - exp_name: M5_plain_y0on_s1
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 1
+    y0_theta_init: true
+
+  - exp_name: M5_plain_y0on_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    y0_theta_init: true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PART B — SPARSE-K (six-vector kinetic) ARMS  (M6C in tex terms)
+  # Plain loss only — keeps cross-scaffold K-comparison unbiased by D-recipe
+  # knobs that were tuned on M5. Dense baselines for K=0 reference come from
+  # Part A above.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── Model 3 sparse-K ───────────────────────────────────────────────────
+  - {exp_name: M3_K1_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M3_K1_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M3_K3_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M3_K3_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M3_K6_s1, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M3_K6_s2, scaffold: txtl_model3_two_state,        model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+
+  # ── Model 4 sparse-K ───────────────────────────────────────────────────
+  - {exp_name: M4_K1_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M4_K1_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M4_K3_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M4_K3_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M4_K6_s1, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M4_K6_s2, scaffold: txtl_model4_three_state,      model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+
+  # ── Model 5 sparse-K ───────────────────────────────────────────────────
+  - {exp_name: M5_K1_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M5_K1_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M5_K3_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M5_K3_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+
+  # ── Model 8 sparse-K (exploratory; full-12-state dense variant collapses) ──
+  - {exp_name: M8_K1_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M8_K1_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M8_K3_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M8_K3_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M8_K6_s1, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M8_K6_s2, scaffold: txtl_model8_reagent_resource, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}

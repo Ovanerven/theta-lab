@@ -1,0 +1,62 @@
+# M9 smoke sweep — 8 runs for M4 mini.
+#
+# Answers two questions cheaply:
+#   1. Does M9 train at all with the stability fixes? (Group 0, 2 seeds)
+#   2. Does L_oxygen help, and at what scale? (Group 1, λ ∈ {0.1, 0.5, 2.0}, 2 seeds)
+#
+# n_substeps=1 (saves 2x compute vs the ofat spec's conservative n_substeps=2).
+# 97.4% of NEW steps are ≤10 min; RK4 handles that fine. Switch to n_substeps=2
+# only if you see NaN or loss diverging after ~10 epochs.
+#
+# If results look good: promote lambda_oxygen winner into txtl_m9_ofat Group 6
+# (best-stack) and run that as the next phase.
+
+study: txtl_m9_smoke
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  scaffold: txtl_model9_oxygen_dark
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  y0_theta_init: false
+  loss_clamp_min: 1.0
+  n_substeps: 2                   # required: M9 multiplicative chains (R·V_TX·DNA, k_ox·O2·P_dark) NaN at ep 1 without substeps
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+runs:
+  # ── Group 0: baseline (no L_oxygen) ────────────────────────────────────
+  - {exp_name: M9_B_s2, seed: 2}
+  - {exp_name: M9_B_s3, seed: 3}
+
+  # ── Group 1: L_oxygen ladder ────────────────────────────────────────────
+  # Three points spanning 20x range — enough to see if the loss helps and
+  # where the sweet spot is. Drop λ=1.0 (redundant between 0.5 and 2.0).
+  - {exp_name: M9_O0.1_s2, seed: 2, lambda_oxygen: 0.1}
+  - {exp_name: M9_O0.1_s3, seed: 3, lambda_oxygen: 0.1}
+
+  - {exp_name: M9_O0.5_s2, seed: 2, lambda_oxygen: 0.5}
+  - {exp_name: M9_O0.5_s3, seed: 3, lambda_oxygen: 0.5}
+
+  - {exp_name: M9_O2.0_s2, seed: 2, lambda_oxygen: 2.0}
+  - {exp_name: M9_O2.0_s3, seed: 3, lambda_oxygen: 2.0}

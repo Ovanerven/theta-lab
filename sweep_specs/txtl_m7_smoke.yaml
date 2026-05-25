@@ -1,0 +1,49 @@
+# M7 (TXTLModel7_BoundaryGatedScaffold) smoke test — 2 seeds, 5 epochs.
+#
+# Key question: do the Michaelis-Menten resource gates learn on real data?
+# Expect slow learning if K-constant init is large (saturation makes gates ≈0
+# at t=0, so gradients through the gate are small but non-zero — unlike M8 which
+# has resource ICs = 0 → gates identically zero).
+#
+# Call this a pass if val R² (protein) > 0.0 and loss is decreasing.
+# Call it a fail if val R² < -0.3 or loss plateaus flat from epoch 1.
+#
+# Synthetic data is explicitly excluded (use_synthetic_data: false) because
+# txtl_combined.npz has no source_label field so balance_source_sampler and
+# source_loss_weights cannot rebalance the 24:1 synth:real ratio. Real-only
+# training uses 312 experiments (232 train / 40 val / 40 test after stratified
+# split on mm+pm peak values).
+
+study: txtl_m7_smoke
+runs_per_job: 2
+time: "00:20:00"
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 5
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 0
+  scaffold: txtl_model7_boundary_gated
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  use_synthetic_data: false        # real only: 312 samples, avoids 24:1 synth:real imbalance
+  val_n: 40
+  test_n: 40
+  stratify_z_expr: false           # no synth in split
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: false
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+runs:
+  - {exp_name: M7_s1, seed: 1}
+  - {exp_name: M7_s2, seed: 2}
