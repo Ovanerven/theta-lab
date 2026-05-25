@@ -997,7 +997,7 @@ class TXTLModel7_BoundaryGatedScaffold(MechanisticScaffold):
         self.theta_lo_vec = [1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5,
                              1e-4, 1e-4, 1e-4, 1e-4, 1e-4]
         self.theta_hi_vec = [5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3,
-                             1e2,  1e2,  1e2,  1e2,  1e2]
+                             1.0,  1.0,  1.0,  1.0,  1.0]  # K_T7..K_K: 1e2→1.0 (prevents dead-gate init)
         # (mm, pm) -> (mm, pm) at scaffold idx 3, 5
         self.obs_state_idx = [3, 5]
         self.control_state_map = {
@@ -1090,7 +1090,7 @@ class TXTLModel8_ReagentResourceScaffold(MechanisticScaffold):
         self.theta_hi_vec = [
             1.2e-1, 8e-2,
             1e-3, 1e-3, 1e-3, 1e-3,
-            1e2, 1e2, 1e2, 1e2, 1e2, 1e2,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0,   # K_E..K_W: 1e2→1.0 (prevents 6-gate vanishing product)
             1e-2, 3.5e-3, 3.5e-4,
             1e-2,
         ]

@@ -1,0 +1,101 @@
+# M7 pilot — 50 epochs on two data regimes.
+#
+# Goal: confirm M7 trains on OLD-only (real) AND on combined (old+new+synth)
+# before locking configs into the full sweep.  K bounds were tightened in this
+# commit (K_T7..K_K: 1e2 → 1.0) to fix the slow-gate init problem identified
+# in the smoke test.
+#
+# Dataset breakdown:
+#   old  : txtl_native_old_only.npz  — 691 real experiments (old protocol)
+#   comb : txtl_native_combined.npz  — 691 old + 312 new + 2496 synth = 3499
+#
+# Timing estimates (A100):
+#   old  : ~33s/ep × 50 = ~28 min per run  →  ~59 SBU each
+#   comb : ~120s/ep × 50 = ~100 min per run → ~213 SBU each
+# Total: 2×59 + 2×213 ≈ 544 SBU
+#
+# Pass criterion at ep50: val loss clearly decreasing, R²(protein) > -0.1.
+# Fail: loss plateaus or R²(protein) < -0.3.
+
+study: txtl_m7_pilot
+runs_per_job: 1
+time: "02:30:00"
+partition: gpu_a100
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 50
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  scaffold: txtl_model7_boundary_gated
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  ckpt_every: 0                        # no intermediate checkpoints (disk)
+
+runs:
+  # ── OLD native only — real data only, no synthetic ─────────────────────────
+  - exp_name: M7_old_s1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    stratified_split: true
+    stratify_targets: [3, 5]
+    stratify_bins: 5
+    stratify_by_source: false
+    encoder_use_log_dt: true           # no-op for old (constant dt), kept for consistency
+
+  - exp_name: M7_old_s2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_old_only.npz
+    val_n: 87
+    test_n: 87
+    stratify_z_expr: false
+    stratified_split: true
+    stratify_targets: [3, 5]
+    stratify_bins: 5
+    stratify_by_source: false
+    encoder_use_log_dt: true
+
+  # ── Combined (old + new + synth) — synthetic data included ─────────────────
+  - exp_name: M7_comb_s1
+    seed: 1
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+    stratify_z_expr: false
+    stratified_split: true
+    stratify_targets: [3, 5]
+    stratify_bins: 5
+    stratify_by_source: true
+    balance_source_sampler: true
+    encoder_use_log_dt: true
+    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # excludes DNA c(2), is_new(12), u_open(13)
+    plot_extra_new_samples: 5
+
+  - exp_name: M7_comb_s2
+    seed: 2
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    val_n: 125
+    test_n: 125
+    test_real_only: true
+    stratify_z_expr: false
+    stratified_split: true
+    stratify_targets: [3, 5]
+    stratify_bins: 5
+    stratify_by_source: true
+    balance_source_sampler: true
+    encoder_use_log_dt: true
+    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    plot_extra_new_samples: 5

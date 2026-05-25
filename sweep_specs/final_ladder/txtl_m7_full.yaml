@@ -1,0 +1,46 @@
+# M7 (TXTLModel7_BoundaryGatedScaffold) full 100-epoch run.
+#
+# Smoke test (5 ep, 2 seeds) passed:
+#   - Loss clearly decreasing both seeds (12.5→1.2 train, 2.95→1.49 val for s1)
+#   - val R²(protein) = -0.22 (above -0.3 fail threshold, as expected for slow-gate regime)
+#   - Consistent with spec prediction: large K-constant init → slow but non-zero gradients
+#
+# Goal here: confirm positive R²(protein) and convergence over 100 epochs.
+# Same data/loss config as smoke test; 3 seeds for robustness.
+
+study: txtl_m7_full
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  scaffold: txtl_model7_boundary_gated
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  use_synthetic_data: false
+  val_n: 40
+  test_n: 40
+  stratify_z_expr: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: false
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+runs:
+  - {exp_name: M7_s0, seed: 0}
+  - {exp_name: M7_s1, seed: 1}
+  - {exp_name: M7_s2, seed: 2}
