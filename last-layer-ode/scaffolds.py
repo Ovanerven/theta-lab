@@ -1194,7 +1194,7 @@ class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
             3e-5, 3e-5,             # V_TX, V_TL
             1e-5, 5e-5,             # k_dm, k_matm
             1e-5, 1e-7, 1e-7,       # k_fold, k_degp, k_deg_dark
-            1e-5,                   # k_ox
+            1e-6,                   # k_ox  (lo kept at 1e-6; slow dark-state maturation)
             1e-3, 1e-7,             # c_ox, c_met
         ]
         self.theta_hi_vec = [
@@ -1202,8 +1202,15 @@ class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
             1.2e-1, 8e-2,
             1e-2, 3.5e-3,
             3.5e-3, 1e-3, 1e-3,
-            1e-1,
-            1e2, 1e-3,
+            # k_ox hi was 1e-1 /min/nM. At O2=250 nM that gives eigenvalue
+            # 25/min. With dt~50 min and n_substeps=2 (hdt=25 min):
+            # |λ*hdt|=625 → RK4 catastrophically unstable → gradient explosion.
+            # sfGFP maturation half-life ~7 min at O2=250 → k_ox*250=0.1/min
+            # → k_ox ≈ 4e-4 /min/nM. Setting hi=4e-4 gives |λ*hdt|=2.5 ✓.
+            4e-4,
+            # c_ox hi was 1e2. Stoichiometry of O2 per maturation is ~1 (not 100).
+            # With k_ox=4e-4 and c_ox=1: O2 eigenvalue at P_dark=100 is 1 ✓.
+            1e0, 1e-3,
         ]
         # (mm, pm) -> (mm @ idx 3, P_fluor @ idx 6)
         self.obs_state_idx = [3, 6]

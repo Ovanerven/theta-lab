@@ -1,0 +1,83 @@
+# Major-model sweep: validate the BIG axes before tuning anything.
+#
+# Goal: figure out (1) which scaffold actually trains, (2) which model-class
+# variant matters, (3) whether the combined (real-new + synth) dataset beats
+# real-only or real-new+real-old setups. Variations like number of anchors,
+# multiple seeds, encoder_use_time, gate_obs, etc. are deliberately deferred
+# to a follow-up sweep once we know the main ideas converge.
+#
+# Pre-launch checklist (build any missing datasets):
+#   # NEW real + synth no-go
+#   python scripts/build_txtl_combined_npz.py --real-dir next_steps/real_data \
+#     --output datasets/cell-free/txtl_combined.npz --dna-conc-multiplier 30.0 \
+#     --mode randomized --n-random-per-template 3 --seed 7
+#
+#   # NEW real + synth + LEGACY real (resampled to combined t_obs)
+#   python scripts/build_legacy_in_combined_format.py \
+#     --data-dir datasets/cell-free/data_parsed_pruned \
+#     --reference-npz datasets/cell-free/txtl_combined.npz \
+#     --merge \
+#     --output datasets/cell-free/txtl_combined_plus_legacy.npz
+#
+#   # LEGACY real only (no NEW, no synth) — for "old-only" ablation
+#   python scripts/build_legacy_in_combined_format.py \
+#     --data-dir datasets/cell-free/data_parsed_pruned \
+#     --reference-npz datasets/cell-free/txtl_combined.npz \
+#     --output datasets/cell-free/txtl_legacy_in_combined.npz
+
+study: txtl_new_scaffolds_ofat
+runs_per_job: 1
+time: "10:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  dataset_path: datasets/cell-free/txtl_combined.npz
+  val_n: 975
+  test_n: 975
+  stratify_z_expr: true
+  epochs: 100
+  batch_size: 100
+  endpoint_r2: true
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════
+  # AXIS 1 — SCAFFOLD (does each one train at all?). All on combined npz,
+  # default Model 5 = baseline. Single seed; multi-seed comes later.
+  # ═══════════════════════════════════════════════════════════════════════
+  # Model 5 (7-state TXTL) = baseline / current best
+  - {exp_name: scaffold_model5_baseline, seed: 1}
+  # Model 3 — two-state observable ODE (P=3)
+  - {exp_name: scaffold_model3, seed: 1, scaffold: txtl_model3_two_state}
+  # Model 4 — three-state TX-TL-maturation (P=4)
+  - {exp_name: scaffold_model4, seed: 1, scaffold: txtl_model4_three_state}
+  # Model 7 — boundary-gated + zero-trajectory loss (P=12)
+  - {exp_name: scaffold_model7, seed: 1, scaffold: txtl_model7_boundary_gated, lambda_zero_traj: 0.005}
+  # Model 8 — explicit reagent-resource (P=12)
+  - {exp_name: scaffold_model8, seed: 1, scaffold: txtl_model8_reagent_resource}
+  # Model 9 — oxygen-dark protein maturation (P=9)
+  - {exp_name: scaffold_model9, seed: 1, scaffold: txtl_model9_oxygen_dark}
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # AXIS 2 — MODEL TYPE (does sparse-θ change the picture?). Same K, same
+  # interp, both on Model 5 — head-to-head between the V1 wrapper and the
+  # V2 single-pass implementation.
+  # ═══════════════════════════════════════════════════════════════════════
+  # V1 = two-pass wrapper around OdeRNN (subsample dense θ post-hoc). JIT off.
+  - {exp_name: modeltype_sparse_v1_k6, seed: 1, model_class: ode_rnn_sparse_theta,    n_theta_anchors: 6, anchor_interp: piecewise, jit_scripting: true}
+  # V2 = single-pass (θ-head fires only K times). JIT on. Faster + faithful.
+  - {exp_name: modeltype_sparse_v2_k6, seed: 1, model_class: ode_rnn_sparse_theta_v2, n_theta_anchors: 6}
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # AXIS 3 — DATASET (combined vs real-only vs real+legacy). Baseline scaffold
+  # so dataset is the only varying knob.
+  # ═══════════════════════════════════════════════════════════════════════
+  # Real NEW only (drop synth from txtl_combined.npz at load time)
+  - {exp_name: dataset_real_new_only, seed: 1, use_synthetic_data: false}
+  # Real NEW + LEGACY + synth (the merged combined+legacy file)
+  - {exp_name: dataset_combined_plus_legacy, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz}
+  # Real NEW + LEGACY only (synth ablated from the merged file)
+  - {exp_name: dataset_real_all, seed: 1, dataset_path: datasets/cell-free/txtl_combined_plus_legacy.npz, use_synthetic_data: false}
+  # LEGACY real only (no NEW, no synth)
+  - {exp_name: dataset_legacy_only, seed: 1, dataset_path: datasets/cell-free/txtl_legacy_in_combined.npz}

@@ -15,3 +15,5 @@ old.zip
 datasets/cell-free/txtl_combined.npz
 datasets/cell-free/txtl_combined_plus_legacy.npz
 datasets/cell-free/txtl_legacy_in_combined.npz
+
+*.zip

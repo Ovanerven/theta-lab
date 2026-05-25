@@ -37,7 +37,7 @@ no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
-  epochs: 100
+  epochs: 50
   endpoint_r2: true
   obs_idx: [3, 5]                              # mm@3, pm@5
   warmup_epochs: 5
@@ -63,7 +63,7 @@ fixed:
   # dead-zone in the loss for small values; n_substeps=2 subdivides integration
   # so per-step deltas stay finite. Both are no-ops once training stabilises.
   loss_clamp_min: 1.0
-  n_substeps: 2
+  n_substeps: 1
   # L_oxygen plumbing defaults (override λ in run blocks)
   oxygen_protein_channel: 5                    # raw idx of pm
   oxygen_u_open_name: "u_open"

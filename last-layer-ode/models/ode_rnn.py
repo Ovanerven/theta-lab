@@ -346,7 +346,7 @@ class OdeRNN(nn.Module):
                 )
             u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
         if u_transform == "sqrt" or u_transform == "cumsum_sqrt" or u_transform == "minmax_sqrt":
-            u_gru = u_gru.clamp_min(0.0).sqrt()
+            u_gru = u_gru.clamp_min(1e-6).sqrt()
 
         # Per-sample logit bias from y0 MLP (None when y0_theta_init=False).
         if self.y0_mlp is not None:
@@ -386,12 +386,14 @@ class OdeRNN(nn.Module):
 
             y_in_feat = torch.index_select(y_in, dim=1, index=self.gru_y_idx) if self._has_gru_y_cols else y_in
             if y_transform == "sqrt":
-                y_in_feat = y_in_feat.clamp_min(0.0).sqrt()
+                y_in_feat = y_in_feat.clamp_min(1e-6).sqrt()
             elif y_transform == "sqrt_clamp1":
-                # Supervisor's transform: sqrt first, then clamp at 1.
-                # sqrt(0)=0 → clamped to 1, so failing experiments (pm≈0) still
-                # give the GRU a non-zero, non-degenerate signal of 1.0 instead of 0.
-                y_in_feat = y_in_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+                # Clamp to 1.0 BEFORE sqrt so gradient = 1/(2*sqrt(x)) stays finite.
+                # sqrt(0) has gradient 1/(2*0)=inf which NaN-s the backward pass.
+                # clamp_min(1.0) preserves the forward output (values <1 → 1.0, same
+                # as the old clamp_min(0).sqrt().clamp_min(1.0) path) while making
+                # the gradient 0 for unexpressed states (x<1, gradient of clamp=0).
+                y_in_feat = y_in_feat.clamp_min(1.0).sqrt()
             elif y_transform == "log1p":
                 y_in_feat = torch.log1p(y_in_feat.clamp_min(0.0))
             feat_parts = [u_gru_k_feat, y_in_feat]
@@ -467,7 +469,8 @@ class OdeRNN(nn.Module):
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y +       hdt * k3,  theta)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            y  = y.clamp(0.0, 1e5)
+        return y
 
     def _rk4_substeps_basal(
         self,
