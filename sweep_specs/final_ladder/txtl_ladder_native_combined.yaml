@@ -103,18 +103,21 @@ runs:
   - {exp_name: M4_K1_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
   - {exp_name: M5_K1_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
   - {exp_name: M7_K1_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1}
+  - {exp_name: M8_K1_s1, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   # ── Sparse-K K=3, 1 seed each ──────────────────────────────────────────
   - {exp_name: M3_K3_s1, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
   - {exp_name: M4_K3_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
   - {exp_name: M5_K3_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
   - {exp_name: M7_K3_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1}
+  - {exp_name: M8_K3_s1, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   # ── Sparse-K K=6, 1 seed each ──────────────────────────────────────────
   - {exp_name: M3_K6_s1, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
   - {exp_name: M4_K6_s1, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
   - {exp_name: M5_K6_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
   - {exp_name: M7_K6_s1, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1}
+  - {exp_name: M8_K6_s1, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 1, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   # ── M9 oxygen-dark, real_only, 1 seed each ─────────────────────────────
   # real_only used because: tube-opening signal (u_open) only exists in the 312
@@ -287,16 +290,19 @@ runs:
   - {exp_name: M4_K1_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
   - {exp_name: M5_K1_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
   - {exp_name: M7_K1_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2}
+  - {exp_name: M8_K1_s2, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   - {exp_name: M3_K3_s2, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
   - {exp_name: M4_K3_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
   - {exp_name: M5_K3_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
   - {exp_name: M7_K3_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2}
+  - {exp_name: M8_K3_s2, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   - {exp_name: M3_K6_s2, scaffold: txtl_model3_two_state,            model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
   - {exp_name: M4_K6_s2, scaffold: txtl_model4_three_state,          model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
   - {exp_name: M5_K6_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
   - {exp_name: M7_K6_s2, scaffold: txtl_model7_boundary_gated,       model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2}
+  - {exp_name: M8_K6_s2, scaffold: txtl_model8_reagent_resource,     model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, seed: 2, dataset_path: datasets/cell-free/txtl_native_real_only.npz, balance_source_sampler: false, test_real_only: false, n_substeps: 2}
 
   # ── M9 extra seeds ──────────────────────────────────────────────────────
   - exp_name: M9_B_s2
