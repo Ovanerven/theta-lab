@@ -1,12 +1,10 @@
 # M7 (TXTLModel7_BoundaryGatedScaffold) full 100-epoch run.
 #
-# Smoke test (5 ep, 2 seeds) passed:
-#   - Loss clearly decreasing both seeds (12.5→1.2 train, 2.95→1.49 val for s1)
-#   - val R²(protein) = -0.22 (above -0.3 fail threshold, as expected for slow-gate regime)
-#   - Consistent with spec prediction: large K-constant init → slow but non-zero gradients
-#
-# Goal here: confirm positive R²(protein) and convergence over 100 epochs.
-# Same data/loss config as smoke test; 3 seeds for robustness.
+# Smoke test (5 ep, 2 seeds) passed on txtl_combined real-only (312 samples).
+# This spec uses txtl_native_old_only (691 real samples) — same dataset as the
+# main ladder — so results are directly comparable to M3-M5 baselines.
+# K bounds fixed: K_T7..K_K theta_hi 1e2 → 1.0 (see scaffolds.py commit).
+# Pilot (txtl_m7_m8_pilot.yaml) should confirm convergence before running this.
 
 study: txtl_m7_full
 runs_per_job: 1
@@ -21,15 +19,15 @@ fixed:
   warmup_epochs: 5
   hidden: 600
   scaffold: txtl_model7_boundary_gated
-  dataset_path: datasets/cell-free/txtl_combined.npz
-  use_synthetic_data: false
-  val_n: 40
-  test_n: 40
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  val_n: 87
+  test_n: 87
   stratify_z_expr: false
   stratified_split: true
   stratify_targets: [3, 5]
   stratify_bins: 5
   stratify_by_source: false
+  encoder_use_log_dt: true
   use_ivtt_mse_loss: false
   species_weights: {3: 1.25, 5: 1.0}
   time_upweight: {5: [0.5, 3.0]}
@@ -39,6 +37,7 @@ fixed:
   loss_clamp_min: 1.0
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
+  ckpt_every: 0
 
 runs:
   - {exp_name: M7_s0, seed: 0}

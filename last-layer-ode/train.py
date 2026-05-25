@@ -1294,6 +1294,12 @@ class TrainConfig:
     # Example:  pin_theta: {0: 0.0}  pins θ[0] to 0.
     pin_theta: dict[int, float] | None = None
 
+    # Override per-parameter bounds without touching the scaffold.
+    # Dict of {theta_idx: new_hi}. Useful for testing different K-constant ranges
+    # without editing scaffolds.py.  Example (M8 K-bounds sweep):
+    #   theta_hi_override: {6: 0.1, 7: 0.1, 8: 0.1, 9: 0.1, 10: 0.1, 11: 0.1}
+    theta_hi_override: dict[int, float] | None = None
+
     # K-anchor sparse-θ readout (tex Models B2/B3). When using model_class
     # "ode_rnn_sparse_theta", set n_theta_anchors (typical 1, 3, or 6). None =
     # dense per-step θ (default; pair with the regular ode_rnn / ode_rnn_basal_v2).
@@ -1643,6 +1649,24 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                       f"clamped at eps={_pin_eps:.0e}. Applied: {_pin_applied}")
             else:
                 print(f"pin_theta: collapsed θ entries {sorted(cfg.pin_theta)} to constants {[cfg.pin_theta[k] for k in sorted(cfg.pin_theta)]}")
+
+        if cfg.theta_hi_override:
+            if not cfg.pin_theta:  # vectors not yet copied; copy now
+                lo_vec = list(scaffold.theta_lo_vec) if scaffold.theta_lo_vec is not None \
+                    else [float(cfg.theta_lo)] * scaffold.theta_dim
+                hi_vec = list(scaffold.theta_hi_vec) if scaffold.theta_hi_vec is not None \
+                    else [float(cfg.theta_hi)] * scaffold.theta_dim
+            for k, v in cfg.theta_hi_override.items():
+                idx = int(k)
+                if not (0 <= idx < scaffold.theta_dim):
+                    raise ValueError(
+                        f"theta_hi_override index {idx} out of range for scaffold "
+                        f"'{cfg.scaffold}' (theta_dim={scaffold.theta_dim})"
+                    )
+                hi_vec[idx] = float(v)
+            scaffold.theta_lo_vec = lo_vec
+            scaffold.theta_hi_vec = hi_vec
+            print(f"theta_hi_override: updated θ hi bounds at indices {sorted(cfg.theta_hi_override)}")
 
         if scaffold.P != P_obs and (
             getattr(scaffold, "obs_state_idx", None) is None
