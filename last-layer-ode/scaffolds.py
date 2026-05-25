@@ -1003,6 +1003,7 @@ class TXTLModel7_BoundaryGatedScaffold(MechanisticScaffold):
         self.control_state_map = {
             "DNA c": 11, "T7RNAP": 6, "NTPs": 7, "AA": 8,
             "Mg-Glut": 9, "K-Glut": 10,
+            "Lysate 2%PEG": 8,  # lysate is primary AA source; deposits into AA state
         }
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
@@ -1099,6 +1100,7 @@ class TXTLModel8_ReagentResourceScaffold(MechanisticScaffold):
         self.control_state_map = {
             "DNA c": 11, "NTPs": 0, "FB": 0, "Maltose": 0,
             "AA": 1, "T7RNAP": 2, "Mg-Glut": 3, "K-Glut": 4, "PEG8000": 5,
+            "Lysate 2%PEG": 1,  # lysate is primary AA source; deposits into A state
         }
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
