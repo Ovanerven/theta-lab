@@ -1,0 +1,51 @@
+# M9 lambda_oxygen pilot — 4 runs on Snellius.
+#
+# Baseline (M9_B_s2, M9_B_s3) confirmed M9 trains on CUDA:
+#   R²(protein) ≈ 0.158, R²(mRNA) ≈ 0.30–0.38 at 100 epochs.
+#   Train/val gap opens from ep~30 (train→0.21, val→1.48).
+#   lambda_oxygen acts as regularisation on the unobserved O2 channel.
+#
+# Strategy: one seed each for λ=0.1 and λ=2.0, two seeds for λ=0.5.
+#   λ=0.5 gets two seeds because it spans the interesting middle range;
+#   if it closes the train/val gap even partially it's the winner.
+#
+# SBU estimate: 4 runs × ~213 SBU = ~852 SBU.
+# Remaining budget after M7/M8 pilot (~1088): ~6013 SBU — well within limits.
+
+study: txtl_m9_lambda_pilot
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  scaffold: txtl_model9_oxygen_dark
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  y0_theta_init: false
+  loss_clamp_min: 1.0
+  n_substeps: 2
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+runs:
+  - {exp_name: M9_O0.1_s2, seed: 2, lambda_oxygen: 0.1}
+  - {exp_name: M9_O0.5_s2, seed: 2, lambda_oxygen: 0.5}
+  - {exp_name: M9_O0.5_s3, seed: 3, lambda_oxygen: 0.5}
+  - {exp_name: M9_O2.0_s2, seed: 2, lambda_oxygen: 2.0}
