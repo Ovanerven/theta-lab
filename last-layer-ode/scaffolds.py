@@ -1004,6 +1004,11 @@ class TXTLModel7_BoundaryGatedScaffold(MechanisticScaffold):
             "DNA c": 11, "T7RNAP": 6, "NTPs": 7, "AA": 8,
             "Mg-Glut": 9, "K-Glut": 10,
             "Lysate 2%PEG": 8,  # lysate is primary AA source; deposits into AA state
+            "FB": 7,            # feed buffer carries NTPs in old recipe.
+                                # On combined dataset, 75.5% of old samples have
+                                # explicit NTPs=0 while FB cumulates to ~2400.
+                                # Without this map g_NTP→0 → g_expr→0 → entire
+                                # production chain dies for those samples.
         }
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:

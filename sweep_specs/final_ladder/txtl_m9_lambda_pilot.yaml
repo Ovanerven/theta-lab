@@ -15,7 +15,7 @@
 study: txtl_m9_lambda_pilot
 runs_per_job: 1
 time: "02:00:00"
-partition: gpu_a100
+partition: gpu_h100
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
@@ -45,7 +45,11 @@ fixed:
   oxygen_u_open_name: "u_open"
 
 runs:
+  # Refocused on λ=0.1 — higher λ values (0.5, 2.0) have shown NaN risk in
+  # prior runs, so we lock in 0.1 as the safe default with 3 seeds for
+  # seed-variance error bars. One λ=0.5 seed retained as a comparison point
+  # in case 0.1 is under-regularised; dropped λ=2.0 entirely.
+  - {exp_name: M9_O0.1_s1, seed: 1, lambda_oxygen: 0.1}
   - {exp_name: M9_O0.1_s2, seed: 2, lambda_oxygen: 0.1}
+  - {exp_name: M9_O0.1_s3, seed: 3, lambda_oxygen: 0.1}
   - {exp_name: M9_O0.5_s2, seed: 2, lambda_oxygen: 0.5}
-  - {exp_name: M9_O0.5_s3, seed: 3, lambda_oxygen: 0.5}
-  - {exp_name: M9_O2.0_s2, seed: 2, lambda_oxygen: 2.0}

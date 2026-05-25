@@ -46,6 +46,10 @@ fixed:
 runs:
   # ═══════════════════════════════════════════════════════════════════════════
   # M7 — BoundaryGatedScaffold
+  # Re-enabled to test the FB→NTPs scaffold fix (scaffolds.py:1007). Previously
+  # 75% of old samples (and 15% of combined) had NTPs=0 → g_NTP=0 → g_expr=0
+  # → pm chain dead. With FB mapped to state 7, every sample now receives NTPs
+  # via either explicit NTPs control or the FB feed buffer.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # ── M7 OLD native only (691 real, no synth) ───────────────────────────────
@@ -140,42 +144,50 @@ runs:
   # ═══════════════════════════════════════════════════════════════════════════
 
   # ── M8 OLD native only ────────────────────────────────────────────────────
-  - exp_name: M8_old_Khi1p0
-    scaffold: txtl_model8_reagent_resource
-    seed: 1
-    model_class: ode_rnn_sparse_theta_v2
-    anchor_mode: uniform
-    n_theta_anchors: 1
-    dataset_path: datasets/cell-free/txtl_native_old_only.npz
-    val_n: 87
-    test_n: 87
-    stratify_z_expr: false
-    test_real_only: false
-    stratified_split: true
-    stratify_targets: [3, 5]
-    stratify_bins: 5
-    stratify_by_source: true
-    # scaffold default: K_E..K_W hi = 1.0 (committed fix)
+  # COMMENTED OUT: M8_old_Khi1p0 and Khi0p1 are already running cleanly
+  # (job 23104970/23104971, ep42 with pm≈8.4 declining). No need to rerun.
+  #
+  # - exp_name: M8_old_Khi1p0
+  #   scaffold: txtl_model8_reagent_resource
+  #   seed: 1
+  #   model_class: ode_rnn_sparse_theta_v2
+  #   anchor_mode: uniform
+  #   n_theta_anchors: 1
+  #   dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  #   val_n: 87
+  #   test_n: 87
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   stratified_split: true
+  #   stratify_targets: [3, 5]
+  #   stratify_bins: 5
+  #   stratify_by_source: true
+  #
+  # - exp_name: M8_old_Khi0p1
+  #   scaffold: txtl_model8_reagent_resource
+  #   seed: 1
+  #   model_class: ode_rnn_sparse_theta_v2
+  #   anchor_mode: uniform
+  #   n_theta_anchors: 1
+  #   dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  #   val_n: 87
+  #   test_n: 87
+  #   stratify_z_expr: false
+  #   test_real_only: false
+  #   stratified_split: true
+  #   stratify_targets: [3, 5]
+  #   stratify_bins: 5
+  #   stratify_by_source: true
+  #   theta_hi_override: {6: 0.1, 7: 0.1, 8: 0.1, 9: 0.1, 10: 0.1, 11: 0.1}
 
-  - exp_name: M8_old_Khi0p1
-    scaffold: txtl_model8_reagent_resource
-    seed: 1
-    model_class: ode_rnn_sparse_theta_v2
-    anchor_mode: uniform
-    n_theta_anchors: 1
-    dataset_path: datasets/cell-free/txtl_native_old_only.npz
-    val_n: 87
-    test_n: 87
-    stratify_z_expr: false
-    test_real_only: false
-    stratified_split: true
-    stratify_targets: [3, 5]
-    stratify_bins: 5
-    stratify_by_source: true
-    theta_hi_override: {6: 0.1, 7: 0.1, 8: 0.1, 9: 0.1, 10: 0.1, 11: 0.1}
-
-  # ── M8 COMBINED ───────────────────────────────────────────────────────────
-  - exp_name: M8_comb_Khi1p0
+  # ── M8 COMBINED — 5-epoch NaN-test with n_substeps=2 ──────────────────────
+  # Previous M8_comb runs NaN'd at ep1 with n_substeps=1. This pilot tests
+  # whether n_substeps=2 stabilises integration on the combined dataset
+  # (which has wider reagent-bolus magnitudes than old_only). Reduced to 5
+  # epochs since this is a stability test, not a convergence test — if ep1-5
+  # all show finite loss, we know n_substeps=2 fixes the NaN and can launch
+  # the 50-epoch full M8_comb runs separately.
+  - exp_name: M8_comb_Khi1p0_nsub2
     scaffold: txtl_model8_reagent_resource
     seed: 1
     model_class: ode_rnn_sparse_theta_v2
@@ -193,8 +205,10 @@ runs:
     balance_source_sampler: true
     gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     plot_extra_new_samples: 5
+    epochs: 5
+    n_substeps: 2
 
-  - exp_name: M8_comb_Khi0p1
+  - exp_name: M8_comb_Khi0p1_nsub2
     scaffold: txtl_model8_reagent_resource
     seed: 1
     model_class: ode_rnn_sparse_theta_v2
@@ -213,3 +227,5 @@ runs:
     gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     plot_extra_new_samples: 5
     theta_hi_override: {6: 0.1, 7: 0.1, 8: 0.1, 9: 0.1, 10: 0.1, 11: 0.1}
+    epochs: 5
+    n_substeps: 2
