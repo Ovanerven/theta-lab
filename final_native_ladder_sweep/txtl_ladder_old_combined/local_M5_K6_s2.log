@@ -1,0 +1,61 @@
+$ python -u last-layer-ode/train.py --config configs/txtl_gru_new_baseline.yaml --set study=txtl_ladder_old_combined --set out_root=experiments --set exp_name=M5_K6_s2 --set epochs=100 --set endpoint_r2=True --set obs_idx='[3, 5]' --set warmup_epochs=5 --set hidden=600 --set dataset_path=datasets/cell-free/txtl_native_old_only.npz --set val_n=87 --set test_n=87 --set stratify_z_expr=False --set test_real_only=False --set stratified_split=True --set stratify_targets='[3, 5]' --set stratify_bins=5 --set stratify_by_source=True --set subtract_channel_min=True --set subtract_channel_min_cols='[3, 5]' --set encoder_use_log_dt=True --set plot_extra_new_samples=0 --set y0_theta_init=False --set scaffold=txtl_resource_and_maturation_dna --set model_class=ode_rnn_sparse_theta_v2 --set anchor_mode=uniform --set n_theta_anchors=6 --set seed=2
+
+Using device: cuda
+Experiment: experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2
+Study: txtl_ladder_old_combined | Run ID: 20260525_075542_M5_K6_s2
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+/home/bob-van-sluijs/anaconda3/envs/oliver_env/lib/python3.13/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_resource_and_maturation_dna | U=13
+Species: mm, pm
+Supervising only species indices: [3, 5]
+ep    1 | train 4.194563 | val 3.265541 | best 3.265541 | tf=1  [mm:1.9877  pm:4.5433] | 28.22s
+ep    2 | train 5.033305 | val 4.618777 | best 3.265541 | tf=1  [mm:4.9160  pm:4.3216] | 23.55s
+ep    3 | train 4.114192 | val 2.882470 | best 2.882470 | tf=1  [mm:1.9707  pm:3.7943] | 23.32s
+ep    4 | train 3.804814 | val 3.755021 | best 2.882470 | tf=1  [mm:3.3901  pm:4.1200] | 23.18s
+ep    5 | train 4.100524 | val 2.999454 | best 2.882470 | tf=1  [mm:2.1095  pm:3.8894] | 23.17s
+ep    6 | train 3.595387 | val 2.825182 | best 2.825182 | tf=1  [mm:1.9951  pm:3.6553] | 23.17s
+ep    7 | train 3.542149 | val 2.875647 | best 2.825182 | tf=1  [mm:1.9279  pm:3.8234] | 23.18s
+ep    8 | train 3.543244 | val 2.841859 | best 2.825182 | tf=1  [mm:1.9270  pm:3.7567] | 23.12s
+ep    9 | train 3.772958 | val 2.728729 | best 2.728729 | tf=1  [mm:1.9175  pm:3.5400] | 23.12s
+ep   10 | train 3.396304 | val 2.942631 | best 2.728729 | tf=1  [mm:2.3719  pm:3.5134] | 22.98s
+ep   11 | train 3.381707 | val 2.753860 | best 2.728729 | tf=1  [mm:1.9160  pm:3.5918] | 23.22s
+ep   12 | train 3.294586 | val 2.866961 | best 2.728729 | tf=1  [mm:2.0301  pm:3.7038] | 23.25s
+ep   13 | train 3.325876 | val 2.778880 | best 2.728729 | tf=1  [mm:2.0998  pm:3.4580] | 23.28s
+ep   14 | train 3.465665 | val 3.042000 | best 2.728729 | tf=1  [mm:1.9211  pm:4.1629] | 23.31s
+ep   15 | train 3.639925 | val 2.769119 | best 2.728729 | tf=1  [mm:2.0429  pm:3.4953] | 23.26s
+ep   16 | train 3.411328 | val 2.774451 | best 2.728729 | tf=1  [mm:2.0264  pm:3.5226] | 23.19s
+ep   17 | train 3.453122 | val 2.818040 | best 2.728729 | tf=1  [mm:1.8983  pm:3.7378] | 23.35s
+ep   18 | train 3.152594 | val 2.707136 | best 2.707136 | tf=1  [mm:1.9493  pm:3.4649] | 23.25s
+ep   19 | train 3.440645 | val 2.782850 | best 2.707136 | tf=1  [mm:1.9836  pm:3.5821] | 23.40s
+ep   20 | train 3.251705 | val 2.715306 | best 2.707136 | tf=1  [mm:1.9793  pm:3.4513] | 23.33s
+ep   21 | train 3.283169 | val 2.751024 | best 2.707136 | tf=1  [mm:1.9057  pm:3.5963] | 23.28s
+ep   22 | train 3.355293 | val 3.005275 | best 2.707136 | tf=1  [mm:2.2386  pm:3.7719] | 23.40s
+ep   23 | train 3.082882 | val 2.922122 | best 2.707136 | tf=1  [mm:2.2940  pm:3.5502] | 23.30s
+ep   24 | train 3.098425 | val 2.818293 | best 2.707136 | tf=1  [mm:2.0360  pm:3.6006] | 23.23s
+ep   25 | train 2.869387 | val 3.112980 | best 2.707136 | tf=1  [mm:2.5879  pm:3.6380] | 23.17s
+ep   26 | train 3.204070 | val 2.913285 | best 2.707136 | tf=1  [mm:2.1539  pm:3.6727] | 23.21s
+ep   27 | train 3.696627 | val 3.616014 | best 2.707136 | tf=1  [mm:3.4871  pm:3.7450] | 23.10s
+ep   28 | train nan | val nan | best 2.707136 | tf=1  [mm:nan  pm:nan] | 22.96s
+NaN detected at epoch 28 — stopping early.
+
+Test loss (best model): 2.543365  [mm:2.1496  pm:2.9371]
+Saved best model to experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/model.pt
+
+Training completed in 658.58s (10.98m)
+Peak GPU memory: 8.72 GB
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/model.pt
+[plot_predictions] n_samples=5, plot_ds_len=87
+[plot_predictions] y0.shape=(5, 7), u_seq.shape=(5, 1496, 13), y_seq.shape=(5, 1496, 7), dt_seq.shape=(5, 1496)
+Saved plots to experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/plots
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/model.pt
+[epoch overlay] saved: experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/plots/pred_overlays_sample000.png
+
+Running endpoint R² analysis...
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/model.pt
+  R²(protein final) = -0.2724
+  R²(mRNA max)      = -0.2507
+Saved plot -> experiments/txtl_ladder_old_combined/20260525_075542_M5_K6_s2/endpoint_r2.png

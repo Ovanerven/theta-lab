@@ -1,0 +1,137 @@
+$ python -u last-layer-ode/train.py --config configs/txtl_gru_new_baseline.yaml --set study=txtl_ladder_old_combined --set out_root=experiments --set exp_name=M4_plain_s2 --set epochs=100 --set endpoint_r2=True --set obs_idx='[3, 5]' --set warmup_epochs=5 --set hidden=600 --set dataset_path=datasets/cell-free/txtl_native_old_only.npz --set val_n=87 --set test_n=87 --set stratify_z_expr=False --set test_real_only=False --set stratified_split=True --set stratify_targets='[3, 5]' --set stratify_bins=5 --set stratify_by_source=True --set subtract_channel_min=True --set subtract_channel_min_cols='[3, 5]' --set encoder_use_log_dt=True --set plot_extra_new_samples=0 --set y0_theta_init=False --set model_class=ode_rnn --set scaffold=txtl_model4_three_state --set seed=2
+
+Using device: cuda
+Experiment: experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2
+Study: txtl_ladder_old_combined | Run ID: 20260524_233200_M4_plain_s2
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=87 n_val=87 n_train=517
+/home/bob-van-sluijs/anaconda3/envs/oliver_env/lib/python3.13/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+Partial-observability lift: scaffold.P=4, P_obs=7, obs_state_idx=[0, 2], control_state_map={'DNA c': 3}
+The model compiled successfully
+LR warmup: 5 epochs (2.00e-03 target)
+Data: N=691 | train=517 | val=87 | test=87
+Dims: P_obs=7 | scaffold=txtl_model4_three_state | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[0, 2].
+Lift by-name IC copy: DNA→DNA@3
+ep    1 | train 4.997772 | val 4.063977 | best 4.063977 | tf=1  [mm:3.0221  pm:5.1058] | 18.02s
+ep    2 | train 4.588337 | val 3.705908 | best 3.705908 | tf=1  [mm:3.1510  pm:4.2608] | 15.10s
+ep    3 | train 4.463139 | val 3.263715 | best 3.263715 | tf=1  [mm:2.4411  pm:4.0863] | 15.00s
+ep    4 | train 4.020201 | val 3.365304 | best 3.263715 | tf=1  [mm:2.7348  pm:3.9958] | 14.98s
+ep    5 | train 3.719988 | val 3.093566 | best 3.093566 | tf=1  [mm:2.1512  pm:4.0360] | 14.95s
+ep    6 | train 3.612477 | val 3.175843 | best 3.093566 | tf=1  [mm:2.4667  pm:3.8850] | 14.95s
+ep    7 | train 3.462686 | val 2.772826 | best 2.772826 | tf=1  [mm:2.1310  pm:3.4146] | 14.92s
+ep    8 | train 3.371344 | val 3.067599 | best 2.772826 | tf=1  [mm:2.7909  pm:3.3443] | 14.95s
+ep    9 | train 3.519470 | val 2.707978 | best 2.707978 | tf=1  [mm:2.0711  pm:3.3448] | 15.00s
+ep   10 | train 3.261411 | val 2.847769 | best 2.707978 | tf=1  [mm:2.2857  pm:3.4099] | 14.95s
+ep   11 | train 3.184025 | val 2.829642 | best 2.707978 | tf=1  [mm:2.0371  pm:3.6222] | 14.94s
+ep   12 | train 2.932568 | val 2.868649 | best 2.707978 | tf=1  [mm:2.1022  pm:3.6351] | 15.00s
+ep   13 | train 3.163917 | val 2.546418 | best 2.546418 | tf=1  [mm:1.9218  pm:3.1710] | 14.95s
+ep   14 | train 2.615954 | val 2.297590 | best 2.297590 | tf=1  [mm:1.7263  pm:2.8689] | 15.02s
+ep   15 | train 2.539058 | val 2.569460 | best 2.297590 | tf=1  [mm:1.6654  pm:3.4735] | 14.90s
+ep   16 | train 2.412887 | val 2.560193 | best 2.297590 | tf=1  [mm:1.7305  pm:3.3899] | 14.91s
+ep   17 | train 2.692881 | val 2.692718 | best 2.297590 | tf=1  [mm:1.7816  pm:3.6038] | 14.95s
+ep   18 | train 2.340461 | val 2.473967 | best 2.297590 | tf=1  [mm:1.3893  pm:3.5586] | 14.96s
+ep   19 | train 2.021773 | val 2.419299 | best 2.297590 | tf=1  [mm:1.4977  pm:3.3409] | 14.92s
+ep   20 | train 1.953341 | val 2.403384 | best 2.297590 | tf=1  [mm:1.5251  pm:3.2817] | 14.97s
+ep   21 | train 1.741309 | val 2.367718 | best 2.297590 | tf=1  [mm:1.5181  pm:3.2173] | 14.95s
+ep   22 | train 1.740907 | val 2.608717 | best 2.297590 | tf=1  [mm:1.5096  pm:3.7078] | 14.94s
+ep   23 | train 1.825361 | val 2.518628 | best 2.297590 | tf=1  [mm:1.3870  pm:3.6502] | 15.01s
+ep   24 | train 1.616434 | val 2.561695 | best 2.297590 | tf=1  [mm:1.4127  pm:3.7107] | 14.96s
+ep   25 | train 1.609768 | val 2.432968 | best 2.297590 | tf=1  [mm:1.2886  pm:3.5773] | 14.92s
+ep   26 | train 1.381574 | val 2.315185 | best 2.297590 | tf=1  [mm:1.5077  pm:3.1227] | 14.95s
+ep   27 | train 1.380531 | val 2.547369 | best 2.297590 | tf=1  [mm:1.6041  pm:3.4906] | 14.93s
+ep   28 | train 1.320444 | val 2.100454 | best 2.100454 | tf=1  [mm:1.3352  pm:2.8657] | 14.94s
+ep   29 | train 1.100844 | val 2.371588 | best 2.100454 | tf=1  [mm:1.4531  pm:3.2901] | 14.90s
+ep   30 | train 1.187719 | val 2.694216 | best 2.100454 | tf=1  [mm:1.5505  pm:3.8379] | 15.02s
+ep   31 | train 1.141397 | val 2.226714 | best 2.100454 | tf=1  [mm:1.2850  pm:3.1685] | 14.98s
+ep   32 | train 1.171953 | val 2.504496 | best 2.100454 | tf=1  [mm:1.4710  pm:3.5380] | 14.92s
+ep   33 | train 1.153504 | val 2.519721 | best 2.100454 | tf=1  [mm:1.6521  pm:3.3873] | 14.91s
+ep   34 | train 1.056594 | val 2.118249 | best 2.100454 | tf=1  [mm:1.3404  pm:2.8961] | 14.94s
+ep   35 | train 1.039684 | val 2.541222 | best 2.100454 | tf=1  [mm:1.2256  pm:3.8568] | 14.96s
+ep   36 | train 0.926480 | val 2.493273 | best 2.100454 | tf=1  [mm:1.7440  pm:3.2425] | 15.00s
+ep   37 | train 0.983548 | val 2.407101 | best 2.100454 | tf=1  [mm:1.4922  pm:3.3220] | 15.00s
+ep   38 | train 0.892736 | val 2.582240 | best 2.100454 | tf=1  [mm:1.6241  pm:3.5404] | 14.99s
+ep   39 | train 0.775361 | val 2.450080 | best 2.100454 | tf=1  [mm:1.4686  pm:3.4316] | 14.91s
+ep   40 | train 0.836581 | val 2.099100 | best 2.099100 | tf=1  [mm:1.3274  pm:2.8708] | 14.98s
+ep   41 | train 0.791901 | val 2.516718 | best 2.099100 | tf=1  [mm:1.2872  pm:3.7462] | 14.96s
+ep   42 | train 0.759293 | val 2.523777 | best 2.099100 | tf=1  [mm:1.5209  pm:3.5267] | 15.00s
+ep   43 | train 0.762716 | val 2.292027 | best 2.099100 | tf=1  [mm:1.2220  pm:3.3620] | 14.95s
+ep   44 | train 0.766948 | val 2.485124 | best 2.099100 | tf=1  [mm:1.4730  pm:3.4972] | 14.90s
+ep   45 | train 0.702186 | val 2.243705 | best 2.099100 | tf=1  [mm:1.2811  pm:3.2064] | 14.98s
+ep   46 | train 0.689284 | val 2.105598 | best 2.099100 | tf=1  [mm:1.3015  pm:2.9097] | 14.96s
+ep   47 | train 0.735864 | val 2.274337 | best 2.099100 | tf=1  [mm:1.3718  pm:3.1769] | 15.01s
+ep   48 | train 0.721949 | val 2.075510 | best 2.075510 | tf=1  [mm:1.3091  pm:2.8419] | 14.92s
+ep   49 | train 0.729386 | val 3.159708 | best 2.075510 | tf=1  [mm:1.2897  pm:5.0297] | 14.92s
+ep   50 | train 0.707640 | val 2.017458 | best 2.017458 | tf=1  [mm:1.2560  pm:2.7790] | 14.94s
+ep   51 | train 0.676059 | val 2.248119 | best 2.017458 | tf=1  [mm:1.3020  pm:3.1943] | 14.97s
+ep   52 | train 0.678569 | val 2.250409 | best 2.017458 | tf=1  [mm:1.4659  pm:3.0349] | 14.94s
+ep   53 | train 0.613294 | val 2.227165 | best 2.017458 | tf=1  [mm:1.2606  pm:3.1938] | 14.98s
+ep   54 | train 0.577915 | val 2.318054 | best 2.017458 | tf=1  [mm:1.5361  pm:3.1000] | 15.00s
+ep   55 | train 0.616176 | val 2.225834 | best 2.017458 | tf=1  [mm:1.4300  pm:3.0217] | 14.88s
+ep   56 | train 0.553182 | val 2.147124 | best 2.017458 | tf=1  [mm:1.2228  pm:3.0715] | 14.97s
+ep   57 | train 0.483039 | val 2.211280 | best 2.017458 | tf=1  [mm:1.3731  pm:3.0494] | 14.93s
+ep   58 | train 0.557955 | val 2.356827 | best 2.017458 | tf=1  [mm:1.3111  pm:3.4026] | 14.95s
+ep   59 | train 0.483681 | val 2.168013 | best 2.017458 | tf=1  [mm:1.3073  pm:3.0287] | 15.05s
+ep   60 | train 0.473397 | val 2.193472 | best 2.017458 | tf=1  [mm:1.1879  pm:3.1991] | 14.89s
+ep   61 | train 0.447625 | val 2.533536 | best 2.017458 | tf=1  [mm:1.6617  pm:3.4053] | 14.94s
+ep   62 | train 0.488870 | val 2.471719 | best 2.017458 | tf=1  [mm:1.3618  pm:3.5816] | 14.91s
+ep   63 | train 0.524930 | val 2.267367 | best 2.017458 | tf=1  [mm:1.4402  pm:3.0946] | 14.90s
+ep   64 | train 0.470514 | val 2.399955 | best 2.017458 | tf=1  [mm:1.2758  pm:3.5241] | 15.04s
+ep   65 | train 0.504223 | val 2.449353 | best 2.017458 | tf=1  [mm:1.1937  pm:3.7050] | 14.97s
+ep   66 | train 0.509179 | val 2.518927 | best 2.017458 | tf=1  [mm:1.3636  pm:3.6743] | 15.04s
+ep   67 | train 0.557903 | val 2.154767 | best 2.017458 | tf=1  [mm:1.2785  pm:3.0310] | 14.94s
+ep   68 | train 0.579270 | val 2.929267 | best 2.017458 | tf=1  [mm:1.1803  pm:4.6783] | 14.95s
+ep   69 | train 0.619017 | val 2.324978 | best 2.017458 | tf=1  [mm:1.3617  pm:3.2882] | 14.97s
+ep   70 | train 0.599432 | val 2.967677 | best 2.017458 | tf=1  [mm:1.3299  pm:4.6054] | 15.05s
+ep   71 | train 0.557531 | val 2.194716 | best 2.017458 | tf=1  [mm:1.1617  pm:3.2277] | 14.99s
+ep   72 | train 0.525027 | val 2.882407 | best 2.017458 | tf=1  [mm:1.1046  pm:4.6603] | 15.00s
+ep   73 | train 0.533118 | val 2.137110 | best 2.017458 | tf=1  [mm:1.4770  pm:2.7973] | 14.94s
+ep   74 | train 0.522258 | val 2.588173 | best 2.017458 | tf=1  [mm:1.3725  pm:3.8038] | 14.76s
+ep   75 | train 0.568435 | val 2.518590 | best 2.017458 | tf=1  [mm:1.7865  pm:3.2507] | 14.71s
+ep   76 | train 0.544790 | val 2.404152 | best 2.017458 | tf=1  [mm:1.3244  pm:3.4839] | 14.71s
+ep   77 | train 0.443985 | val 2.425917 | best 2.017458 | tf=1  [mm:1.3010  pm:3.5508] | 14.77s
+ep   78 | train 0.480889 | val 2.784025 | best 2.017458 | tf=1  [mm:1.4721  pm:4.0960] | 15.07s
+ep   79 | train 0.506099 | val 2.393843 | best 2.017458 | tf=1  [mm:1.6147  pm:3.1730] | 15.01s
+ep   80 | train 0.502558 | val 3.041371 | best 2.017458 | tf=1  [mm:1.3343  pm:4.7485] | 14.99s
+ep   81 | train 0.498217 | val 2.750606 | best 2.017458 | tf=1  [mm:1.8320  pm:3.6692] | 14.96s
+ep   82 | train 0.503627 | val 2.939683 | best 2.017458 | tf=1  [mm:1.2809  pm:4.5984] | 14.92s
+ep   83 | train 0.528855 | val 2.467428 | best 2.017458 | tf=1  [mm:1.3395  pm:3.5954] | 14.98s
+ep   84 | train 0.556353 | val 3.198649 | best 2.017458 | tf=1  [mm:1.2446  pm:5.1527] | 14.89s
+ep   85 | train 0.515672 | val 2.268865 | best 2.017458 | tf=1  [mm:1.5795  pm:2.9582] | 14.96s
+ep   86 | train 0.468569 | val 2.949671 | best 2.017458 | tf=1  [mm:1.3495  pm:4.5498] | 14.95s
+ep   87 | train 0.484726 | val 2.310839 | best 2.017458 | tf=1  [mm:1.3957  pm:3.2260] | 14.97s
+ep   88 | train 0.575516 | val 3.031000 | best 2.017458 | tf=1  [mm:1.4318  pm:4.6302] | 14.92s
+ep   89 | train 0.494289 | val 2.437923 | best 2.017458 | tf=1  [mm:1.5548  pm:3.3210] | 14.90s
+ep   90 | train 0.435824 | val 2.311980 | best 2.017458 | tf=1  [mm:1.3670  pm:3.2570] | 14.90s
+ep   91 | train 0.375571 | val 2.539203 | best 2.017458 | tf=1  [mm:1.3838  pm:3.6946] | 14.91s
+ep   92 | train 0.362782 | val 2.512233 | best 2.017458 | tf=1  [mm:1.4405  pm:3.5840] | 14.91s
+ep   93 | train 0.386838 | val 2.701580 | best 2.017458 | tf=1  [mm:1.4337  pm:3.9694] | 14.84s
+ep   94 | train 0.362057 | val 2.880647 | best 2.017458 | tf=1  [mm:1.7559  pm:4.0054] | 14.90s
+ep   95 | train 0.348556 | val 3.062256 | best 2.017458 | tf=1  [mm:1.4316  pm:4.6929] | 14.96s
+ep   96 | train 0.373410 | val 2.834337 | best 2.017458 | tf=1  [mm:1.6201  pm:4.0485] | 14.93s
+ep   97 | train 0.377121 | val 2.800517 | best 2.017458 | tf=1  [mm:1.7833  pm:3.8177] | 14.91s
+ep   98 | train 0.358298 | val 2.530886 | best 2.017458 | tf=1  [mm:1.2468  pm:3.8150] | 14.94s
+ep   99 | train 0.373680 | val 2.405185 | best 2.017458 | tf=1  [mm:1.4815  pm:3.3289] | 14.88s
+ep  100 | train 0.492964 | val 2.552236 | best 2.017458 | tf=0  [mm:1.1970  pm:3.9075] | 14.93s
+
+Test loss (best model): 1.727845  [mm:1.2680  pm:2.1877]
+Saved best model to experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/model.pt
+
+Training completed in 1503.54s (25.06m)
+Peak GPU memory: 9.11 GB
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[0, 2] (P=4)
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/model.pt
+[plot_predictions] n_samples=5, plot_ds_len=87
+[plot_predictions] y0.shape=(5, 4), u_seq.shape=(5, 1496, 13), y_seq.shape=(5, 1496, 4), dt_seq.shape=(5, 1496)
+Saved plots to experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/plots
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[0, 2] (P=4)
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/model.pt
+[epoch overlay] saved: experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/plots/pred_overlays_sample000.png
+
+Running endpoint R² analysis...
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[0, 2] (P=4)
+Loading checkpoint: experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/model.pt
+  R²(protein final) = 0.2491
+  R²(mRNA max)      = 0.1715
+Saved plot -> experiments/txtl_ladder_old_combined/20260524_233200_M4_plain_s2/endpoint_r2.png

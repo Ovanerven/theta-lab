@@ -802,8 +802,46 @@ def _make_split_indices(
                 f"n_real={n_real}. Reduce val_n/test_n or disable the flag."
             )
 
+        # When stratify_by_source is also set, split OLD and NEW pools
+        # independently within the real pool — same logic as the standalone
+        # stratify_by_source path, but scoped to z_expr==1 samples only.
+        # This produces the same test set as real_only runs so combined vs
+        # real_only comparisons evaluate on identical samples.
+        if (stratify_by_source and source_idx is not None
+                and stratified_split and stratify_targets):
+            P = int(y_seq.shape[-1])
+            targets = [int(t) for t in stratify_targets if 0 <= int(t) < P]
+            if targets:
+                real_src = source_idx[real_idx]
+                sources_present = sorted(int(s) for s in np.unique(real_src) if int(s) >= 0)
+                if len(sources_present) >= 2:
+                    pools = {s: real_idx[real_src == s] for s in sources_present}
+                    sizes_arr = np.array([len(pools[s]) for s in sources_present], dtype=np.int64)
+                    take_test_per_src = _allocate_counts(sizes_arr, int(n_test))
+                    take_val_per_src  = _allocate_counts(sizes_arr, int(n_val))
+                    tr_parts, va_parts, te_parts = [], [], []
+                    src_name = {0: "old", 1: "new", 2: "synth"}
+                    for src, n_te, n_va in zip(sources_present, take_test_per_src, take_val_per_src):
+                        pool = pools[src]
+                        tr_s, va_s, te_s = _stratified_yield_split(
+                            pool, y_seq, lengths, int(n_va), int(n_te),
+                            stratify_bins, targets, rng,
+                        )
+                        tr_parts.append(tr_s); va_parts.append(va_s); te_parts.append(te_s)
+                        print(f"  test_real_only+stratify_by_source[{src_name.get(src, str(src))}]: "
+                              f"pool={len(pool)} → train={len(tr_s)} val={len(va_s)} test={len(te_s)}")
+                    real_train = np.concatenate(tr_parts)
+                    val_idx   = np.concatenate(va_parts)
+                    test_idx  = np.concatenate(te_parts)
+                    train_idx = np.concatenate([real_train, synth_idx])
+                    rng.shuffle(test_idx); rng.shuffle(val_idx); rng.shuffle(train_idx)
+                    print(f"test_real_only: train={len(real_train)} real + {len(synth_idx)} synth; "
+                          f"val={len(val_idx)} real; test={len(test_idx)} real")
+                    return train_idx, val_idx, test_idx
+                # Only one source in real pool → fall through to non-source path below.
+
         if stratified_split and stratify_targets:
-            # Endpoint-stratify within the real pool only.
+            # Endpoint-stratify within the real pool only (no per-source split).
             P = int(y_seq.shape[-1])
             targets = [int(t) for t in stratify_targets if 0 <= int(t) < P]
             if not targets:
