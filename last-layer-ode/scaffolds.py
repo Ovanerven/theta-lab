@@ -1297,7 +1297,92 @@ class TXTLModel7_FullFixed(MechanisticScaffold):
         dm   = g_expr * R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
         dmm  = kmatm * m_p - kdm * mm_p
         dp   = g_expr * R_p * V_TL * (m_p + mm_p) - kmt * p_p
-        dpm  = O_p * kmt * p_p  # Fix 2: g_expr removed — maturation is autonomous
+        dpm  = kmt * p_p  # Fix 2: g_expr removed; O removed — maturation fully autonomous
+
+        zero = torch.zeros_like(DNA)
+        return torch.stack(
+            (dR, dO, dm, dmm, dp, dpm, zero, zero, zero, zero, zero, zero),
+            dim=-1,
+        )
+
+
+class TXTLModel7_BgFixed(MechanisticScaffold):
+    """
+    M7 with all fixes from TXTLModel7_FullFixed PLUS learnable per-reagent
+    background concentrations that prevent zero-gate collapse on real data.
+
+    Root cause: g_expr = g_T7 * g_NTP * g_AA * g_Mg * g_K collapses to 0
+    whenever any reagent bolus is 0.  For ~16% of real samples K-Glut=0,
+    yet those samples still express because lysate provides background K.
+    No adjustment of K_K (half-saturation) can fix this; g_K = K_p/(K_K+K_p)
+    is 0 when K_p=0 regardless of K_K.
+
+    Fix: add learned background offsets (T7_bg, NTP_bg, AA_bg, Mg_bg, K_bg)
+    to each gate.  The GRU encoder predicts sample-specific backgrounds,
+    effectively learning "this K-Glut=0 sample still has background K from
+    lysate."  Synth kill detection is unaffected: zero DNA kills production
+    via the R*V_TX*DNA term regardless of g_expr.
+
+    theta (17): [lam, lam_O, V_TX, k_dm, V_TL, kmt, kmatm,
+                  K_T7, K_NTP, K_AA, K_Mg, K_K,
+                  T7_bg, NTP_bg, AA_bg, Mg_bg, K_bg]
+    """
+    def __init__(self):
+        super().__init__(P=12, theta_dim=17)
+        self.state_names = [
+            "R", "O", "m", "mm", "p", "pm",
+            "T7", "NTP", "AA", "Mg", "K_ion", "DNA",
+        ]
+        self.theta_lo_vec = [
+            1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5,   # kinetics (same as FullFixed)
+            1.0,   5.0,  10.0, 0.5,  1.0,                 # K_T7..K_K (nL scale)
+            0.1,   0.1,  0.1,  0.1,  0.1,                 # T7_bg, NTP_bg, AA_bg, Mg_bg, K_bg
+        ]
+        self.theta_hi_vec = [
+            5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 1.0e-3, 3.5e-3,
+            5000., 15000., 20000., 2000., 8000.,
+            200., 2000., 2000., 500., 2000.,               # background upper bounds (nL scale)
+        ]
+        self.obs_state_idx = [3, 5]
+        self.control_state_map = {
+            "DNA c": 11, "T7RNAP": 6, "NTPs": 7, "AA": 8,
+            "Mg-Glut": 9, "K-Glut": 10,
+            "Lysate 2%PEG": 8,
+            "FB": 7,
+        }
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O, m, mm, p, pm, T7, NTP, AA, Mg, K_ion, DNA = y.unbind(dim=-1)
+        (lam, lam_O, V_TX, kdm, V_TL, kmt, kmatm,
+         K_T7, K_NTP, K_AA, K_Mg, K_K,
+         T7_bg, NTP_bg, AA_bg, Mg_bg, K_bg) = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O_p   = torch.clamp_min(O,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+        T7_eff  = torch.clamp_min(T7,     0.0) + T7_bg
+        NTP_eff = torch.clamp_min(NTP,    0.0) + NTP_bg
+        AA_eff  = torch.clamp_min(AA,     0.0) + AA_bg
+        Mg_eff  = torch.clamp_min(Mg,     0.0) + Mg_bg
+        K_eff   = torch.clamp_min(K_ion,  0.0) + K_bg
+
+        eps = 1e-12
+        g_T7  = T7_eff  / (K_T7  + T7_eff  + eps)
+        g_NTP = NTP_eff / (K_NTP + NTP_eff + eps)
+        g_AA  = AA_eff  / (K_AA  + AA_eff  + eps)
+        g_Mg  = Mg_eff  / (K_Mg  + Mg_eff  + eps)
+        g_K   = K_eff   / (K_K   + K_eff   + eps)
+        g_expr = g_T7 * g_NTP * g_AA * g_Mg * g_K
+
+        dR   = -lam * R_p
+        dO   = -lam_O * O_p
+        dm   = g_expr * R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = g_expr * R_p * V_TL * (m_p + mm_p) - kmt * p_p
+        dpm  = kmt * p_p
 
         zero = torch.zeros_like(DNA)
         return torch.stack(
@@ -1491,6 +1576,108 @@ class TXTLModel8_PeakedFixed(MechanisticScaffold):
 
         dE  = -k_E * E_p
         dA  = -k_A * A_p
+        dT  = -k_T * T_p
+        dMg = torch.zeros_like(Mg)
+        dK  = torch.zeros_like(K_ion)
+        dC  = torch.zeros_like(C)
+        dW  = beta_W * (v_TX + v_TL) - k_W * W_p
+
+        dm   = v_TX - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = v_TL - kmt * p_p
+        dpm  = kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack(
+            (dE, dA, dT, dMg, dK, dC, dW, dm, dmm, dp, dpm, dDNA),
+            dim=-1,
+        )
+
+
+class TXTLModel8_BgFixed(MechanisticScaffold):
+    """
+    M8 with all fixes from TXTLModel8_FullFixed PLUS learnable per-resource
+    background concentrations that prevent zero-gate collapse on real data.
+
+    Same root cause as M7: K_ion=0 (16% real samples, no K-Glut bolus) →
+    f_K=0 → v_TX=v_TL=0 → predicted mm=pm=0 despite actual expression.
+
+    Fix: add per-resource background offsets (E_bg, A_bg, Mg_bg, K_bg, C_bg)
+    to the Michaelis gates.  The GRU encoder learns sample-specific offsets,
+    effectively learning background resource availability from lysate.
+
+    Note: T_p (T7 polymerase) enters v_TX as a direct multiplier, not a gate,
+    so T_bg is not needed here — it would require a structural change.  The
+    dominant zero-gate issue in real data is K and potentially C (PEG crowding,
+    mostly addressed already by Fix 4 / Lysate→[A,C] mapping).
+
+    theta (21): [alpha_TX, alpha_TL, k_E, k_A, k_T, k_W,
+                  K_E, K_A, K_Mg, K_K, K_C, K_W,
+                  kdm, kmatm, kmt, beta_W,
+                  E_bg, A_bg, Mg_bg, K_bg, C_bg]
+    """
+    def __init__(self):
+        super().__init__(P=12, theta_dim=21)
+        self.state_names = [
+            "E", "A", "T", "Mg", "K_ion", "C", "W",
+            "m", "mm", "p", "pm", "DNA",
+        ]
+        self.theta_lo_vec = [
+            3e-5, 3e-5,                         # alpha_TX, alpha_TL
+            1e-7, 1e-7, 1e-7, 1e-7,             # k_E, k_A, k_T, k_W
+            5.0,  10.0, 0.5,  1.0, 5.0, 1e-4,   # K_E, K_A, K_Mg, K_K, K_C (nL), K_W
+            1e-5, 5e-5, 1e-5,                   # k_dm, k_matm, k_mt
+            1e-6,                               # beta_W
+            0.1, 0.1, 0.1, 0.1, 0.1,            # E_bg, A_bg, Mg_bg, K_bg, C_bg
+        ]
+        self.theta_hi_vec = [
+            1.2e-1, 8e-2,
+            1e-3, 1e-3, 1e-3, 1e-3,
+            15000., 20000., 2000., 8000., 8000., 100.,
+            1e-2, 3.5e-3, 3.5e-4,
+            1e-2,
+            2000., 2000., 500., 2000., 500.,     # background upper bounds (nL scale)
+        ]
+        self.obs_state_idx = [8, 10]
+        self.control_state_map = {
+            "DNA c": 11, "NTPs": 0, "FB": 0, "Maltose": 0,
+            "AA": 1, "T7RNAP": 2, "Mg-Glut": 3, "K-Glut": 4, "PEG8000": 5,
+            "Lysate 2%PEG": [1, 5],
+        }
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        E, A, T, Mg, K_ion, C, W, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        (alpha_TX, alpha_TL,
+         k_E, k_A, k_T, k_W,
+         K_E, K_A, K_Mg, K_K, K_C, K_W,
+         kdm, kmatm, kmt, beta_W,
+         E_bg, A_bg, Mg_bg, K_bg, C_bg) = theta.unbind(dim=-1)
+
+        T_p   = torch.clamp_min(T,   0.0)
+        W_p   = torch.clamp_min(W,   0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+        E_eff  = torch.clamp_min(E,     0.0) + E_bg
+        A_eff  = torch.clamp_min(A,     0.0) + A_bg
+        Mg_eff = torch.clamp_min(Mg,    0.0) + Mg_bg
+        K_eff  = torch.clamp_min(K_ion, 0.0) + K_bg
+        C_eff  = torch.clamp_min(C,     0.0) + C_bg
+
+        eps = 1e-12
+        f_E  = E_eff  / (K_E  + E_eff  + eps)
+        f_A  = A_eff  / (K_A  + A_eff  + eps)
+        f_Mg = Mg_eff / (K_Mg + Mg_eff + eps)
+        f_K  = K_eff  / (K_K  + K_eff  + eps)
+        f_C  = C_eff  / (K_C  + C_eff  + eps)
+        f_W  = 1.0    / (1.0  + W_p / (K_W + eps))
+
+        v_TX = alpha_TX * DNA_p * T_p * f_E * f_Mg * f_K * f_C * f_W
+        v_TL = alpha_TL * (m_p + mm_p) * f_A * f_E * f_Mg * f_K * f_C * f_W
+
+        dE  = -k_E * torch.clamp_min(E, 0.0)
+        dA  = -k_A * torch.clamp_min(A, 0.0)
         dT  = -k_T * T_p
         dMg = torch.zeros_like(Mg)
         dK  = torch.zeros_like(K_ion)
@@ -2716,9 +2903,11 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model7_boundary_gated":   TXTLModel7_BoundaryGatedScaffold(),
     "txtl_model7_kfix":             TXTLModel7_KBoundsFixed(),       # ablation: K bounds only
     "txtl_model7_fixed":            TXTLModel7_FullFixed(),           # all M7 fixes
+    "txtl_model7_bg_fixed":         TXTLModel7_BgFixed(),             # + per-reagent learned background
     "txtl_model8_reagent_resource": TXTLModel8_ReagentResourceScaffold(),
     "txtl_model8_fixed":            TXTLModel8_FullFixed(),           # all M8 fixes
     "txtl_model8_peaked_fixed":     TXTLModel8_PeakedFixed(),         # + peaked Mg/K gates (tex §8)
+    "txtl_model8_bg_fixed":         TXTLModel8_BgFixed(),             # + per-resource learned background
     "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),

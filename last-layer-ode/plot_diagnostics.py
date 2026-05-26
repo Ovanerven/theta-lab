@@ -189,7 +189,9 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         for j, name in enumerate(list(ds.control_names)):
             target = scaffold.control_state_map.get(str(name).strip())
             if target is not None:
-                jump[j, int(target)] = 1.0
+                targets = list(target) if isinstance(target, (list, tuple)) else [target]
+                for t in targets:
+                    jump[j, int(t)] = 1.0
         dataset_obs_idx = list(cfg.get("obs_idx") or scaffold.obs_state_idx)
         if len(dataset_obs_idx) != len(scaffold.obs_state_idx):
             raise ValueError(

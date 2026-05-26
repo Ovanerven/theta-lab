@@ -2486,7 +2486,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 pred, _, _ = model(y0, u_seq, dt_seq, obs_idx, **model_kwargs)
                 pred = pred[:, :, obs_idx]
                 y_seq = y_seq[:, :, obs_idx]
-                loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss)
+                loss = loss_fn(pred, y_seq, batch_lengths, use_log_loss=use_log_loss,
+                               clamp_min=float(cfg.loss_clamp_min))
                 te_total += float(loss.item())
                 sp = loss_fn_per_species(pred, y_seq, batch_lengths, use_log_loss=use_log_loss).detach().cpu()
                 sp_total = sp if sp_total is None else sp_total + sp
