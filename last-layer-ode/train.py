@@ -1791,7 +1791,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         for j, name in enumerate(list(ds.control_names)):
             target = scaffold.control_state_map.get(str(name).strip())
             if target is not None:
-                u_to_y_jump[j, int(target)] = 1.0
+                # Support single int OR list[int] targets (e.g. Lysate → [AA, PEG])
+                targets = list(target) if isinstance(target, (list, tuple)) else [target]
+                for t in targets:
+                    u_to_y_jump[j, int(t)] = 1.0
         print(f"Partial-observability lift: scaffold.P={scaffold.P}, P_obs={P_obs}, "
               f"obs_state_idx={scaffold.obs_state_idx}, "
               f"control_state_map={scaffold.control_state_map}")

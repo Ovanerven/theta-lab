@@ -1,0 +1,103 @@
+# M7 / M8 fix-comparison sweep — 5 runs × 20 epochs on real data only.
+#
+# Purpose: verify the four bug fixes identified by root-cause analysis before
+# reintroducing synthetic data into the full sweep.
+#
+# Fixes being tested:
+#   Fix 1 (K bounds)  — Michaelis K bounds rescaled from [1e-4, 1.0] to nL-
+#                        compatible ranges; previously gates were always ≈1.0
+#                        (confirmed: optimizer pushed all K_X to max in dashboards).
+#   Fix 2 (dpm gate)  — g_expr removed from dpm in M7; chromophore maturation
+#                        doesn't require T7/NTPs/AAs/Mg/K.
+#   Fix 3 (kmt hi)    — kmt upper bound raised 3.5e-4 → 1.0e-3 in M7; back-
+#                        of-envelope showed observed pm rises require kmt above
+#                        the old ceiling.
+#   Fix 4 (Lysate→C)  — Lysate 2%PEG now also boluses M8's crowding state C
+#                        (PEG is literally in the product name); fixes 8% of
+#                        experiments that had C=0 → f_C=0 → zero production.
+#
+# Runs:
+#   M7_orig     — original M7 (no fixes), baseline
+#   M8_orig     — original M8 (no fixes), baseline
+#   M7_kfix     — M7 with Fix 1 only (K bounds), ablation to isolate key fix
+#   M7_fixed    — M7 with Fixes 1+2+3 (K bounds + dpm + kmt)
+#   M8_fixed    — M8 with Fixes 1+4  (K bounds + Lysate→C)
+#
+# Run locally:
+#   python launch_sweep.py sweep_specs/m7_m8_fix_comparison.yaml --local --max-parallel 1
+
+study: m7_m8_fix_comparison
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_drecipe: &drecipe
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+fixed:
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  epochs: 20
+  warmup_epochs: 3
+  batch_size: 100
+  lr: 0.002
+  weight_decay: 0.0018
+  seed: 0
+  split_seed: 42
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  test_real_only: false
+  use_synthetic_data: false           # real data only — no synth swamping
+  balance_source_sampler: false
+  hidden: 600
+  num_layers: 2
+  dropout: 0.2
+  model_class: ode_rnn
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  y0_theta_init: false
+  use_ivtt_mse_loss: false
+  jit_scripting: true
+  ckpt_every: 0
+  endpoint_r2: true
+  plot_extra_new_samples: 3
+  <<: *drecipe
+
+runs:
+  # ── Baselines (original scaffolds, no fixes) ──────────────────────────────
+  - exp_name: M7_orig
+    scaffold: txtl_model7_boundary_gated
+    n_substeps: 1
+
+  - exp_name: M8_orig
+    scaffold: txtl_model8_reagent_resource
+    n_substeps: 2
+
+  # ── Ablation: M7 with Fix 1 only (K bounds rescaled, nothing else) ────────
+  - exp_name: M7_kfix
+    scaffold: txtl_model7_kfix
+    n_substeps: 1
+
+  # ── Full fixes ────────────────────────────────────────────────────────────
+  - exp_name: M7_fixed
+    scaffold: txtl_model7_fixed
+    n_substeps: 1
+
+  - exp_name: M8_fixed
+    scaffold: txtl_model8_fixed
+    n_substeps: 2
