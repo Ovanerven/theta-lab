@@ -1,23 +1,10 @@
-# Diagnostic sweep: how much does synth weight hurt real-data protein prediction?
+# Synth-data diagnostic sweep — focused on the two new mechanisms:
+#   1. Physical subsampling (synth_max_samples)
+#   2. Per-channel pm mask for synth (synth_obs_mask_channels)
+#   3. Both combined
+# Plus anchor_real as the upper-bound reference.
 #
-# The final_native_ladder_sweep showed M5_real (real_only) crushes M5_drecipe
-# (combined+synth) on protein endpoint R²: 0.41 vs 0.09.
-# balance_source_sampler=true gives OLD/NEW/SYNTH each 1/3 of gradient — but
-# synth trajectories all have pm≈0 (no-expression), so even 1/3 synth pulls
-# protein predictions toward zero.
-#
-# This sweep tests source_loss_weights.synth at a range of values to find the
-# crossover where combined+synth starts matching real_only on protein R².
-# M5 + D-recipe, seed=0 only, 10 epochs to see val pm loss trend.
 # Run locally: python launch_sweep.py sweep_specs/synth_weight_diag.yaml --local --max-parallel 1
-#
-# Runs (6 total):
-#   anchor_real   — real_only dataset, no synth at all  (upper bound)
-#   synth_w1p0    — combined, balance=true, synth weight=1.0 (current default)
-#   synth_w0p2    — combined, balance=true, synth weight=0.2
-#   synth_w0p05   — combined, balance=true, synth weight=0.05
-#   synth_w0p01   — combined, balance=true, synth weight=0.01
-#   no_synth      — combined npz, use_synthetic_data=false (synth stripped at load)
 
 study: synth_weight_diag
 runs_per_job: 1
@@ -46,7 +33,7 @@ fixed:
   val_n: 125
   test_n: 125
   stratify_z_expr: false
-  test_real_only: true            # always evaluate on real samples only
+  test_real_only: true
   stratified_split: true
   stratify_targets: [3, 5]
   stratify_bins: 5
@@ -54,63 +41,51 @@ fixed:
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
   encoder_use_log_dt: true
-  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # exclude is_new@12, u_open@13
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
   y0_theta_init: false
   model_class: ode_rnn
   dataset_path: datasets/cell-free/txtl_native_combined.npz
-  balance_source_sampler: true
   <<: *drecipe
 
 runs:
-  # ── Anchor: real data only, no synth ──────────────────────────────────────
-  - exp_name: anchor_real
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    balance_source_sampler: false
-    test_real_only: false          # real_only npz has no synth, so no need to filter
+  # ── Reference: real data only (no synth at all) ───────────────────────────
+  # - exp_name: anchor_real
+  #   dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  #   balance_source_sampler: false
+  #   test_real_only: false
 
-  # ── Combined + balance_source_sampler, varying synth loss weight ───────────
-  # synth weight = 1.0: current default (1/3 gradient each)
-  - exp_name: synth_w1p0
-    # no source_loss_weights → uniform weight (default)
+  # ── Subsample: keep 150 synth rows (≈6% of 2496) ─────────────────────────
+  # - exp_name: synth_sub150
+  #   synth_max_samples: 150
+  #   balance_source_sampler: false
 
-  # synth weight = 0.2: synth still in batch but 5× less loss contribution
-  - exp_name: synth_w0p2
-    source_loss_weights: {synth: 0.2}
+  # ── Channel mask: zero pm in loss for synth, keep mm gradient ─────────────
+  # - exp_name: synth_mask_pm
+  #   synth_obs_mask_channels: [5]
+  #   balance_source_sampler: true
 
-  # synth weight = 0.05: synth at ~20× less loss contribution
-  - exp_name: synth_w0p05
-    source_loss_weights: {synth: 0.05}
+  # ── Combined: subsample + pm mask ─────────────────────────────────────────
+  # - exp_name: synth_sub150_mask_pm
+  #   synth_max_samples: 150
+  #   synth_obs_mask_channels: [5]
+  #   balance_source_sampler: false
 
-  # synth weight = 0.01: synth almost silent (50× less)
-  - exp_name: synth_w0p01
-    source_loss_weights: {synth: 0.01}
+  # ── Subsampling × pm-mask ablation ────────────────────────────────────────
+  # All three keep balance_source_sampler=true so the only axis that changes
+  # is the number of unique synth samples (and therefore how many times each
+  # synth sample is replayed per epoch). Lets us isolate whether the masked-pm
+  # win at 2496 comes from having many diverse synth mm trajectories or whether
+  # a fraction is already enough.
+  #
+  #   sub500  → 500 synth, each seen ~5× per epoch (vs 2496 → ~1×)
+  #   sub1000 → 1000 synth, each seen ~2.5× per epoch
+  #   mask_pm → 2496 synth (already ran: +0.306 vs baseline)
+  - exp_name: synth_sub500_mask_pm
+    synth_max_samples: 500
+    synth_obs_mask_channels: [5]
+    balance_source_sampler: true
 
-  # ── Strip synth entirely at load time (use_synthetic_data=false) ───────────
-  # Same combined npz file but z_expr==0 rows dropped before split.
-  # Different from anchor_real: split is seeded the same way as combined runs
-  # (uses combined's train/val/test pools), so this isolates the synth effect
-  # from any split difference.
-  - exp_name: no_synth_in_combined
-    use_synthetic_data: false
-    balance_source_sampler: false  # no synth rows → sampler only sees old/new
-
-  # ── Channel mask: keep synth in batch but zero pm channel in loss ──────────
-  # synth samples still contribute mRNA + scaffold structural gradients,
-  # but can no longer teach "protein=0" on expressing samples.
-  # balance_source_sampler stays true so synth still appears 1/3 of batches.
-  - exp_name: synth_mask_pm
-    synth_obs_mask_channels: [5]   # raw pm index
-
-  # ── Physical subsampling: keep only N synth rows in the dataset ────────────
-  # synth_max_samples=150 ≈ same expected gradient as synth_w0p05 (0.05×2496≈125)
-  # but no wasted compute on the other 2346 synth samples.
-  # balance_source_sampler=false: with 150 synth vs 1003 real the imbalance is
-  # mild (13% synth) so no need to re-inflate synth presence in batches.
-  - exp_name: synth_sub150
-    synth_max_samples: 150
-    balance_source_sampler: false
-
-  # synth_max_samples=30 ≈ synth_w0p01 (0.01×2496≈25), but compute-efficient.
-  - exp_name: synth_sub30
-    synth_max_samples: 30
-    balance_source_sampler: false
+  - exp_name: synth_sub1000_mask_pm
+    synth_max_samples: 1000
+    synth_obs_mask_channels: [5]
+    balance_source_sampler: true
