@@ -21,7 +21,7 @@
 
 study: synth_weight_diag
 runs_per_job: 1
-time: "00:30:00"
+time: "02:00:00"
 partition: gpu_a100
 no_plot: true
 base_config: configs/txtl_gru_new_baseline.yaml
@@ -38,7 +38,7 @@ _drecipe: &drecipe
 fixed:
   scaffold: txtl_resource_and_maturation_dna
   seed: 0
-  epochs: 10
+  epochs: 20
   warmup_epochs: 2
   endpoint_r2: true
   obs_idx: [3, 5]
