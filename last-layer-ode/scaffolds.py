@@ -1397,6 +1397,118 @@ class TXTLModel8_FullFixed(MechanisticScaffold):
         )
 
 
+class TXTLModel8_PeakedFixed(MechanisticScaffold):
+    """
+    M8 faithful to tex §8 — all prior fixes PLUS peaked (bell-shaped) Mg and K gates.
+
+    The tex (lines 723–729) specifies a PEAKED response for Mg and K:
+      "use a peaked response if too little and too much are both bad"
+      f_Mg = (Mg/(K_Mg+Mg)) * (K_iMg² / (K_iMg² + Mg²))   [n=2 Hill inhibition]
+      f_K  = (K /(K_K +K )) * (K_iK²  / (K_iK²  + K² ))
+
+    This matters because the synth data contains overdose conditions
+    (soft_high_Mg_30mM_final, soft_high_K_300mM_final) where M8's plain saturation
+    gate cannot distinguish "saturated good" from "inhibitory overdose".
+
+    All fixes from TXTLModel8_FullFixed are retained:
+      Fix 1 — K_sat bounds rescaled to nL (K_E, K_A, K_Mg, K_K, K_C).
+      Fix 4 — Lysate 2%PEG → both A (amino acids) AND C (PEG crowding).
+
+    New parameters (theta_dim 16 → 18):
+      K_iMg  — Mg inhibition constant  [nL]; bell peaks near √(K_Mg · K_iMg)
+      K_iK   — K  inhibition constant  [nL]; same
+    Bounds calibrated so the bell peak lands near the typical bolus concentration:
+      Mg mean non-zero bolus ≈ 176 nL  → K_iMg range [100, 5000] nL
+      K  mean non-zero bolus ≈ 306 nL  → K_iK  range [200, 8000] nL
+    """
+    def __init__(self):
+        super().__init__(P=12, theta_dim=18)
+        self.state_names = [
+            "E", "A", "T", "Mg", "K_ion", "C", "W",
+            "m", "mm", "p", "pm", "DNA",
+        ]
+        self.theta_lo_vec = [
+            3e-5, 3e-5,                         # alpha_TX, alpha_TL
+            1e-7, 1e-7, 1e-7, 1e-7,             # k_E, k_A, k_T, k_W
+            5.0,  10.0, 0.5,  1.0, 5.0, 1e-4,   # K_E, K_A, K_Mg, K_K, K_C (nL), K_W
+            100., 200.,                          # K_iMg, K_iK  (inhibition onsets, nL)
+            1e-5, 5e-5, 1e-5,                   # k_dm, k_matm, k_mt
+            1e-6,                               # beta_W
+        ]
+        self.theta_hi_vec = [
+            1.2e-1, 8e-2,
+            1e-3, 1e-3, 1e-3, 1e-3,
+            15000., 20000., 2000., 8000., 8000., 100.,
+            5000., 8000.,                        # K_iMg, K_iK upper bounds
+            1e-2, 3.5e-3, 3.5e-4,
+            1e-2,
+        ]
+        self.obs_state_idx = [8, 10]
+        self.control_state_map = {
+            "DNA c": 11, "NTPs": 0, "FB": 0, "Maltose": 0,
+            "AA": 1, "T7RNAP": 2, "Mg-Glut": 3, "K-Glut": 4, "PEG8000": 5,
+            "Lysate 2%PEG": [1, 5],  # Fix 4: lysate → A AND C
+        }
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        E, A, T, Mg, K_ion, C, W, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        (alpha_TX, alpha_TL,
+         k_E, k_A, k_T, k_W,
+         K_E, K_A, K_Mg, K_K, K_C, K_W,
+         K_iMg, K_iK,
+         kdm, kmatm, kmt, beta_W) = theta.unbind(dim=-1)
+
+        E_p   = torch.clamp_min(E,     0.0)
+        A_p   = torch.clamp_min(A,     0.0)
+        T_p   = torch.clamp_min(T,     0.0)
+        Mg_p  = torch.clamp_min(Mg,    0.0)
+        K_p   = torch.clamp_min(K_ion, 0.0)
+        C_p   = torch.clamp_min(C,     0.0)
+        W_p   = torch.clamp_min(W,     0.0)
+        m_p   = torch.clamp_min(m,     0.0)
+        mm_p  = torch.clamp_min(mm,    0.0)
+        p_p   = torch.clamp_min(p,     0.0)
+        DNA_p = torch.clamp_min(DNA,   0.0)
+
+        eps = 1e-12
+
+        f_E  = E_p  / (K_E  + E_p  + eps)
+        f_A  = A_p  / (K_A  + A_p  + eps)
+        f_C  = C_p  / (K_C  + C_p  + eps)
+        f_W  = 1.0  / (1.0  + W_p / (K_W + eps))
+
+        # Peaked (bell-shaped) gates for Mg and K: tex §8 eqs (723-729).
+        # f(X) = saturation(X) × inhibition(X)
+        #      = X/(K_sat+X) × K_inh²/(K_inh²+X²)   [n=2 Hill inhibition, fixed]
+        # Peak occurs near X_peak ≈ (K_sat · K_inh²/2)^(1/3).
+        K_iMg_sq = (K_iMg + eps) ** 2
+        K_iK_sq  = (K_iK  + eps) ** 2
+        f_Mg = (Mg_p / (K_Mg + Mg_p + eps)) * (K_iMg_sq / (K_iMg_sq + Mg_p ** 2 + eps))
+        f_K  = (K_p  / (K_K  + K_p  + eps)) * (K_iK_sq  / (K_iK_sq  + K_p  ** 2 + eps))
+
+        v_TX = alpha_TX * DNA_p * T_p * f_E * f_Mg * f_K * f_C * f_W
+        v_TL = alpha_TL * (m_p + mm_p) * f_A * f_E * f_Mg * f_K * f_C * f_W
+
+        dE  = -k_E * E_p
+        dA  = -k_A * A_p
+        dT  = -k_T * T_p
+        dMg = torch.zeros_like(Mg)
+        dK  = torch.zeros_like(K_ion)
+        dC  = torch.zeros_like(C)
+        dW  = beta_W * (v_TX + v_TL) - k_W * W_p
+
+        dm   = v_TX - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = v_TL - kmt * p_p
+        dpm  = kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack(
+            (dE, dA, dT, dMg, dK, dC, dW, dm, dmm, dp, dpm, dDNA),
+            dim=-1,
+        )
+
+
 class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
     """
     Model 9 (oxygen-limited dark-protein maturation) from new_scaffolds.tex.
@@ -2606,6 +2718,7 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model7_fixed":            TXTLModel7_FullFixed(),           # all M7 fixes
     "txtl_model8_reagent_resource": TXTLModel8_ReagentResourceScaffold(),
     "txtl_model8_fixed":            TXTLModel8_FullFixed(),           # all M8 fixes
+    "txtl_model8_peaked_fixed":     TXTLModel8_PeakedFixed(),         # + peaked Mg/K gates (tex §8)
     "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),

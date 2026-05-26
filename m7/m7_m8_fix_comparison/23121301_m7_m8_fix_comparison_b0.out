@@ -1,0 +1,84 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig
+Study: m7_m8_fix_comparison | Run ID: 20260526_152725_M7_orig
+ODEDataset: use_synthetic_data=False → dropping 0 synth rows, keeping 1003 real.
+  stratify_by_source[old]: pool=691 → train=519 val=86 test=86
+  stratify_by_source[new]: pool=312 → train=234 val=39 test=39
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=125 n_val=125 n_train=753
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[3, 5], control_state_map={'DNA c': 11, 'T7RNAP': 6, 'NTPs': 7, 'AA': 8, 'Mg-Glut': 9, 'K-Glut': 10, 'Lysate 2%PEG': 8, 'FB': 7}
+The model compiled successfully
+LR warmup: 3 epochs (2.00e-03 target)
+Data: N=1003 | train=753 | val=125 | test=125
+Dims: P_obs=7 | scaffold=txtl_model7_boundary_gated | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5].
+Lift by-name IC copy: R→R@0, O→O@1, m→m@2, p→p@4, DNA→DNA@11
+ep    1 | train 4.167097 | val 3.176529 | best 3.176529 | tf=1  [mm:3.1682  pm:6.4782] | 75.26s
+ep    2 | train 8.452354 | val 3.127033 | best 3.127033 | tf=1  [mm:3.0886  pm:6.7397] | 62.45s
+ep    3 | train 4.763203 | val 3.288707 | best 3.127033 | tf=1  [mm:3.5898  pm:6.5085] | 61.78s
+ep    4 | train 4.169416 | val 3.012327 | best 3.012327 | tf=1  [mm:3.0086  pm:6.4154] | 61.86s
+ep    5 | train 3.846937 | val 2.844085 | best 2.844085 | tf=1  [mm:2.8127  pm:6.2564] | 61.68s
+ep    6 | train 3.718530 | val 2.875608 | best 2.844085 | tf=1  [mm:2.7574  pm:6.4616] | 61.60s
+ep    7 | train 3.592215 | val 2.989007 | best 2.844085 | tf=1  [mm:3.0651  pm:6.3532] | 61.52s
+ep    8 | train 3.543549 | val 3.086990 | best 2.844085 | tf=1  [mm:2.7616  pm:6.6383] | 61.53s
+ep    9 | train 3.591344 | val 3.387802 | best 2.844085 | tf=1  [mm:2.7486  pm:7.3123] | 61.80s
+ep   10 | train 3.423365 | val 3.041146 | best 2.844085 | tf=1  [mm:2.5797  pm:7.0141] | 61.76s
+ep   11 | train 3.399732 | val 3.310792 | best 2.844085 | tf=1  [mm:2.7582  pm:7.1298] | 61.60s
+ep   12 | train 3.408803 | val 3.514311 | best 2.844085 | tf=1  [mm:2.6000  pm:7.8066] | 61.82s
+ep   13 | train 3.332770 | val 3.166124 | best 2.844085 | tf=1  [mm:2.5760  pm:7.0116] | 61.55s
+ep   14 | train 3.207423 | val 3.314630 | best 2.844085 | tf=1  [mm:2.5114  pm:7.2735] | 61.55s
+ep   15 | train 3.327969 | val 2.927195 | best 2.844085 | tf=1  [mm:2.6368  pm:6.5609] | 61.42s
+ep   16 | train 3.146816 | val 2.974744 | best 2.844085 | tf=1  [mm:2.6666  pm:6.6463] | 61.61s
+ep   17 | train 3.083450 | val 3.195804 | best 2.844085 | tf=1  [mm:2.4942  pm:7.0106] | 61.79s
+ep   18 | train 3.073866 | val 2.875610 | best 2.844085 | tf=1  [mm:2.4934  pm:6.4500] | 61.85s
+ep   19 | train 2.991902 | val 2.910410 | best 2.844085 | tf=1  [mm:2.5205  pm:6.4996] | 61.63s
+ep   20 | train 3.019521 | val 3.055498 | best 2.844085 | tf=1  [mm:2.5277  pm:6.7373] | 61.55s
+
+Test loss (best model): nan  [mm:3.0263  pm:9.5511]
+Saved best model to experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/model.pt
+
+Training completed in 1254.88s (20.91m)
+Peak GPU memory: 9.30 GB
+ODEDataset: use_synthetic_data=False → dropping 0 synth rows, keeping 1003 real.
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5] (P=12)
+Loading checkpoint: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/model.pt
+[plot_predictions] n_samples=5, plot_ds_len=125
+[plot_predictions] y0.shape=(5, 12), u_seq.shape=(5, 1416, 13), y_seq.shape=(5, 1416, 12), dt_seq.shape=(5, 1416)
+[plot_predictions] plotting 3 extra NEW samples: idx=[np.int64(702), np.int64(754), np.int64(874)]
+Saved plots to experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/plots
+ODEDataset: use_synthetic_data=False → dropping 0 synth rows, keeping 1003 real.
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5] (P=12)
+Loading checkpoint: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/model.pt
+[plot] failed: FileNotFoundError: No checkpoint files matching ckpt_ep*.pt in: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/checkpoints
+Traceback (most recent call last):
+  File "/gpfs/home2/overven1/theta-lab/last-layer-ode/train.py", line 2541, in train
+    plot_epoch_prediction_overlays(
+  File "/gpfs/home2/overven1/theta-lab/last-layer-ode/plot_diagnostics.py", line 916, in plot_epoch_prediction_overlays
+    raise FileNotFoundError(f"No checkpoint files matching ckpt_ep*.pt in: {ckpt_dir}")
+FileNotFoundError: No checkpoint files matching ckpt_ep*.pt in: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/checkpoints
+
+Running endpoint R² analysis...
+ODEDataset: use_synthetic_data=False → dropping 0 synth rows, keeping 1003 real.
+[rebuild] partial-obs lift: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[3, 5] (P=12)
+Loading checkpoint: experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/model.pt
+  R²(protein final) = -0.3443
+  R²(mRNA max)      = -0.3512
+Saved plot -> experiments/m7_m8_fix_comparison/20260526_152725_M7_orig/endpoint_r2.png
+23121301       00:27:02               RUNNING 
+23121301.ba+   00:27:02               RUNNING 
+23121301.ex+   00:27:02               RUNNING 

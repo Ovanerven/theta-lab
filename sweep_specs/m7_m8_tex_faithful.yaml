@@ -1,0 +1,122 @@
+# M7 / M8 tex-faithful sweep — 4 runs × 20 epochs.
+#
+# Purpose: test the two fixes identified from new_scaffolds.tex that were
+# MISSING from the first fix-comparison sweep:
+#
+#   Fix A (M7) — lambda_zero_traj=0.005
+#     The tex (§7, lines 585–610) says M7's core mechanism is a boundary
+#     classification loss L_zero that penalises predicted mm/pm on synthetic
+#     kill samples (z_expr=0). Without it M7 is just M5 with Michaelis gates.
+#     Requires the COMBINED dataset (real_only has zero z_expr=0 samples).
+#     The old major-model sweep used lambda_zero_traj=0.005 for M7.
+#
+#   Fix B (M8) — peaked Mg/K inhibitory gates
+#     The tex (§8, lines 723–729) specifies a bell-shaped f_Mg / f_K:
+#       f_Mg = (Mg/(K_Mg+Mg)) × (K_iMg²/(K_iMg²+Mg²))
+#     Current M8 only uses plain saturation → cannot distinguish
+#     "saturated-good" from "inhibitory-overdose" (soft_high_Mg/K conditions).
+#     Scaffold: txtl_model8_peaked_fixed  (theta_dim 16→18; new K_iMg, K_iK).
+#
+# Runs (4 total):
+#   M7_fixed_real      — M7_fixed, real_only, no zero_traj  (reference: what
+#                        we already tested; included here for same-run context)
+#   M7_fixed_boundary  — M7_fixed, combined,  lambda_zero_traj=0.005
+#   M8_fixed_real      — M8_fixed (plain gates), real_only   (prior reference)
+#   M8_peaked_real     — M8_peaked_fixed, real_only           (NEW peaked gates)
+#
+# NOTE: M7_fixed_boundary uses the combined dataset specifically to activate
+# the boundary loss — synth samples provide the z_expr=0 kill labels.
+# balance_source_sampler=true upweights real samples to counteract synth bulk.
+#
+# Run on cluster:
+#   python launch_sweep.py sweep_specs/m7_m8_tex_faithful.yaml
+
+study: m7_m8_tex_faithful
+runs_per_job: 1
+time: "01:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_drecipe: &drecipe
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+fixed:
+  epochs: 20
+  warmup_epochs: 3
+  batch_size: 100
+  lr: 0.002
+  weight_decay: 0.0018
+  seed: 0
+  split_seed: 42
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  test_real_only: false
+  hidden: 600
+  num_layers: 2
+  dropout: 0.2
+  model_class: ode_rnn
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  y0_theta_init: false
+  jit_scripting: true
+  ckpt_every: 0
+  endpoint_r2: true
+  plot_extra_new_samples: 3
+  <<: *drecipe
+
+runs:
+  # ── M7: reference (real_only, no boundary loss) ───────────────────────────
+  # Repeats the M7_fixed result from the first sweep in this sweep's context.
+  - exp_name: M7_fixed_real
+    scaffold: txtl_model7_fixed
+    n_substeps: 1
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    use_synthetic_data: false
+    balance_source_sampler: false
+
+  # ── M7: tex-faithful (combined dataset + kill-boundary loss) ─────────────
+  # lambda_zero_traj activates L_zero on z_expr=0 (synth kill) samples.
+  # balance_source_sampler upweights real samples vs synth bulk.
+  # Combined dataset has 14 control cols (adds is_new@12, u_open@13);
+  # gru_u_cols override keeps the same 11 reagent inputs, skips is_new/u_open.
+  - exp_name: M7_fixed_boundary
+    scaffold: txtl_model7_fixed
+    n_substeps: 1
+    dataset_path: datasets/cell-free/txtl_native_combined.npz
+    use_synthetic_data: true
+    balance_source_sampler: true
+    lambda_zero_traj: 0.005
+    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+  # ── M8: reference (real_only, plain saturation gates) ────────────────────
+  - exp_name: M8_fixed_real
+    scaffold: txtl_model8_fixed
+    n_substeps: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    use_synthetic_data: false
+    balance_source_sampler: false
+
+  # ── M8: tex-faithful (peaked Mg/K inhibitory gates) ──────────────────────
+  # txtl_model8_peaked_fixed adds K_iMg and K_iK (theta_dim 16→18).
+  # Real_only first — if peaked gates help here, also run on combined.
+  - exp_name: M8_peaked_real
+    scaffold: txtl_model8_peaked_fixed
+    n_substeps: 2
+    dataset_path: datasets/cell-free/txtl_native_real_only.npz
+    use_synthetic_data: false
+    balance_source_sampler: false

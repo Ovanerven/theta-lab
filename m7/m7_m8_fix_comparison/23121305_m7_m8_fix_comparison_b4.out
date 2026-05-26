@@ -1,0 +1,44 @@
+============================================================================================== 
+Warning! Mixing Conda and module environments may lead to corruption of the
+user environment. 
+We do not recommend users mixing those two environments unless absolutely
+necessary. Note that 
+SURF does not provide any support for Conda environment.
+For more information, please refer to our software policy page:
+https://servicedesk.surf.nl/wiki/display/WIKI/Software+policy+Snellius#SoftwarepolicySnellius-UseofAnacondaandMinicondaenvironmentsonSnellius 
+
+Remember that many packages have already been installed on the system and can
+be loaded using 
+the 'module load <package__name>' command. If you are uncertain if a package is
+already available 
+on the system, please use 'module avail' or 'module spider' to search for it.
+============================================================================================== 
+Using device: cuda
+Experiment: experiments/m7_m8_fix_comparison/20260526_152836_M8_fixed
+Study: m7_m8_fix_comparison | Run ID: 20260526_152836_M8_fixed
+ODEDataset: use_synthetic_data=False → dropping 0 synth rows, keeping 1003 real.
+  stratify_by_source[old]: pool=691 → train=519 val=86 test=86
+  stratify_by_source[new]: pool=312 → train=234 val=39 test=39
+Split: stratified | seed=42 | bins=5 | targets=[3, 5] | n_test=125 n_val=125 n_train=753
+Partial-observability lift: scaffold.P=12, P_obs=7, obs_state_idx=[8, 10], control_state_map={'DNA c': 11, 'NTPs': 0, 'FB': 0, 'Maltose': 0, 'AA': 1, 'T7RNAP': 2, 'Mg-Glut': 3, 'K-Glut': 4, 'PEG8000': 5, 'Lysate 2%PEG': [1, 5]}
+The model compiled successfully
+LR warmup: 3 epochs (2.00e-03 target)
+Data: N=1003 | train=753 | val=125 | test=125
+Dims: P_obs=7 | scaffold=txtl_model8_fixed | U=13
+Species: mm, pm
+Partial-observability lift active: dataset_obs_idx=[3, 5] → scaffold_obs_idx=[8, 10].
+Lift by-name IC copy: m→m@7, p→p@9, DNA→DNA@11
+ep    1 | train 6.702170 | val 5.817209 | best 5.817209 | tf=1  [mm:6.0976  pm:11.4108] | 145.02s
+ep    2 | train 4.910874 | val 3.706327 | best 3.706327 | tf=1  [mm:4.7243  pm:7.3952] | 123.90s
+ep    3 | train 4.551075 | val 3.010962 | best 3.010962 | tf=1  [mm:2.8214  pm:6.4291] | 122.48s
+ep    4 | train 3.944251 | val 2.980256 | best 2.980256 | tf=1  [mm:2.7160  pm:6.4813] | 122.57s
+ep    5 | train 4.001354 | val 3.020470 | best 2.980256 | tf=1  [mm:2.8624  pm:6.4204] | 122.57s
+ep    6 | train 3.947564 | val 3.242478 | best 2.980256 | tf=1  [mm:2.9202  pm:6.9114] | 122.02s
+ep    7 | train 4.066314 | val 2.968983 | best 2.968983 | tf=1  [mm:2.7499  pm:6.2668] | 122.04s
+ep    8 | train 3.926219 | val 2.879065 | best 2.879065 | tf=1  [mm:2.7161  pm:6.1999] | 123.31s
+ep    9 | train 3.830558 | val 2.988848 | best 2.879065 | tf=1  [mm:3.3182  pm:6.0993] | 123.27s
+ep   10 | train 3.793831 | val 2.867902 | best 2.867902 | tf=1  [mm:2.6557  pm:6.3479] | 123.10s
+ep   11 | train 3.767211 | val 3.097786 | best 2.867902 | tf=1  [mm:2.7901  pm:6.5929] | 123.12s
+ep   12 | train 3.850082 | val 2.890650 | best 2.867902 | tf=1  [mm:2.7717  pm:6.4771] | 123.25s
+ep   13 | train 3.699433 | val 2.892653 | best 2.867902 | tf=1  [mm:2.6828  pm:6.5202] | 123.05s
+ep   14 | train 3.604915 | val 3.547995 | best 2.867902 | tf=1  [mm:3.3302  pm:7.6805] | 123.06s
