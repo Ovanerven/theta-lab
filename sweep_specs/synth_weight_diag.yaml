@@ -93,3 +93,24 @@ runs:
   - exp_name: no_synth_in_combined
     use_synthetic_data: false
     balance_source_sampler: false  # no synth rows → sampler only sees old/new
+
+  # ── Channel mask: keep synth in batch but zero pm channel in loss ──────────
+  # synth samples still contribute mRNA + scaffold structural gradients,
+  # but can no longer teach "protein=0" on expressing samples.
+  # balance_source_sampler stays true so synth still appears 1/3 of batches.
+  - exp_name: synth_mask_pm
+    synth_obs_mask_channels: [5]   # raw pm index
+
+  # ── Physical subsampling: keep only N synth rows in the dataset ────────────
+  # synth_max_samples=150 ≈ same expected gradient as synth_w0p05 (0.05×2496≈125)
+  # but no wasted compute on the other 2346 synth samples.
+  # balance_source_sampler=false: with 150 synth vs 1003 real the imbalance is
+  # mild (13% synth) so no need to re-inflate synth presence in batches.
+  - exp_name: synth_sub150
+    synth_max_samples: 150
+    balance_source_sampler: false
+
+  # synth_max_samples=30 ≈ synth_w0p01 (0.01×2496≈25), but compute-efficient.
+  - exp_name: synth_sub30
+    synth_max_samples: 30
+    balance_source_sampler: false

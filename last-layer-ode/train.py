@@ -36,7 +36,8 @@ class ODEDataset(Dataset):
                 and collate_varlen pads each batch to its own max.
     """
 
-    def __init__(self, npz_path: str | Path, *, use_synthetic_data: bool = True):
+    def __init__(self, npz_path: str | Path, *, use_synthetic_data: bool = True,
+                 synth_max_samples: int | None = None, seed: int = 0):
         d = np.load(str(npz_path), allow_pickle=True)
         # Optional ablation: drop synthetic no-go rows (z_expr == 0) before any
         # other field is processed. Useful for A/B-testing whether the synth
@@ -47,6 +48,26 @@ class ODEDataset(Dataset):
             n_kept = int(_filter_mask.sum())
             n_drop = int((~_filter_mask).sum())
             print(f"ODEDataset: use_synthetic_data=False → dropping {n_drop} synth rows, keeping {n_kept} real.")
+        # Optional hard cap on synth rows. Subsample synth to at most
+        # synth_max_samples, keeping all real rows intact. This gives the same
+        # regularisation effect as a very low source_loss_weight but at real-data
+        # compute cost (no wasted forward/backward on discarded synth samples).
+        elif synth_max_samples is not None and "z_expr" in d.files:
+            z = d["z_expr"].astype(np.int64)
+            real_idx = np.where(z == 1)[0]
+            synth_idx = np.where(z == 0)[0]
+            n_synth = len(synth_idx)
+            if n_synth > synth_max_samples:
+                rng = np.random.default_rng(seed)
+                synth_keep = rng.choice(synth_idx, size=synth_max_samples, replace=False)
+                synth_keep.sort()
+                keep = np.concatenate([real_idx, synth_keep])
+                keep.sort()
+                _filter_mask = np.zeros(len(z), dtype=bool)
+                _filter_mask[keep] = True
+                print(f"ODEDataset: synth_max_samples={synth_max_samples} → "
+                      f"subsampled {n_synth} → {synth_max_samples} synth rows, "
+                      f"keeping all {len(real_idx)} real rows.")
         def _maybe_filter(arr: np.ndarray) -> np.ndarray:
             return arr[_filter_mask] if _filter_mask is not None else arr
 
@@ -327,6 +348,7 @@ def loss_fn(
     time_weight: Optional[torch.Tensor] = None,
     clamp_min: float = 0.0,
     sample_weights: Optional[torch.Tensor] = None,
+    sample_channel_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """MSE loss, optionally in log1p space. use_log_loss=False when data is pre-normalised.
 
@@ -339,6 +361,10 @@ def loss_fn(
         so relative scales between species are preserved.
       * time_weight: (B, K, P) per-(sample, timestep, species) weight. When given
         it replaces the lengths-mask entirely (must already encode validity).
+      * sample_channel_mask: (B, P) float tensor — 0 suppresses a channel for a
+        specific sample. Used to zero out pm on synth no-expression samples so
+        those trajectories (pm≈0) don't bias the model toward predicting zero
+        protein on real expressing samples.
     """
     if use_log_loss:
         if clamp_min > 0.0:
@@ -368,6 +394,13 @@ def loss_fn(
         w = w.contiguous().clone()
         sw = sample_weights.view(-1, 1, 1).to(se.dtype)
         w = w * sw
+
+    # Per-sample per-channel mask: e.g. zero pm for synth no-expression samples
+    # so they don't teach the model to predict zero protein on real experiments.
+    # Shape (B, P) — broadcast over K via unsqueeze(1).
+    if sample_channel_mask is not None:
+        w = w.contiguous().clone()
+        w = w * sample_channel_mask.unsqueeze(1).to(se.dtype)
 
     if channel_weights is None:
         return (se * w).sum() / w.sum().clamp_min(1.0)
@@ -438,10 +471,13 @@ def endpoint_mse(
     channels: list[int],
     use_log_loss: bool = True,
     clamp_min: float = 0.0,
+    sample_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """MSE at the final valid timestep on selected post-slice channels.
     `channels` indexes into the sliced (B, K, P) tensors, not raw state indices.
     `clamp_min`: floor pred/y before log1p (supervisor parity; 0 disables).
+    `sample_mask`: (B,) bool — False rows are excluded from this loss term.
+                   Used to skip synth samples when endpoint channels are masked.
     """
     if use_log_loss:
         if clamp_min > 0.0:
@@ -459,6 +495,12 @@ def endpoint_mse(
     chans = torch.tensor(channels, device=pred.device, dtype=torch.long)
     p_last = pred[batch_idx[:, None], last[:, None], chans[None, :]]
     y_last = y_seq[batch_idx[:, None], last[:, None], chans[None, :]]
+    if sample_mask is not None:
+        keep = sample_mask.to(pred.device)
+        p_last = p_last[keep]
+        y_last = y_last[keep]
+    if p_last.numel() == 0:
+        return pred.new_zeros(())
     return (p_last - y_last).pow(2).mean()
 
 
@@ -1319,6 +1361,24 @@ class TrainConfig:
     # specifically want both (rare).
     balance_source_sampler: bool = False
 
+    # Hard cap on synth rows at dataset load time. Randomly subsamples synth to
+    # at most this many rows (all real rows kept). More efficient than loss
+    # downweighting — no wasted forward/backward on discarded synth samples.
+    # E.g. synth_max_samples: 150 ≈ synth_w0p05 expected gradient but ~20× faster
+    # per epoch. None = keep all synth (default). Seeded by cfg.seed for repro.
+    synth_max_samples: int | None = None
+
+    # Per-channel suppression for synth (source==2) samples.
+    # List of RAW obs-channel indices (same coordinate as obs_idx) to zero in
+    # the trajectory loss and endpoint loss for any sample with source_idx==2.
+    # Synth no-expression trajectories have pm≈0 for every timestep, which
+    # biases the model toward predicting low protein on real expressing samples.
+    # Setting synth_obs_mask_channels: [5]  (where 5 is the raw pm index) lets
+    # synth samples contribute mRNA / structural gradients while never teaching
+    # the model that "protein should be zero."
+    # None (default) = no per-channel masking, all channels supervised uniformly.
+    synth_obs_mask_channels: list | None = None
+
     # Diagnostics: if >0, plot_predictions also dumps this many extra sample
     # plots restricted to NEW-source samples (source_label=='new') from the
     # test split, with a "new_" filename prefix. Useful when training on
@@ -1553,7 +1613,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     wandb, wandb_run = init_wandb(cfg, cfg_dict, run_id=run_id, exp_dir=exp_dir)
 
-    ds = ODEDataset(cfg.dataset_path, use_synthetic_data=bool(cfg.use_synthetic_data))
+    ds = ODEDataset(cfg.dataset_path, use_synthetic_data=bool(cfg.use_synthetic_data),
+                    synth_max_samples=cfg.synth_max_samples,
+                    seed=int(cfg.seed))
 
     if cfg.dataset_species_subset is not None:
         idx = np.array(cfg.dataset_species_subset, dtype=np.int64)
@@ -2044,6 +2106,35 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                     device=device, dtype=torch.float32,
                 )
 
+            # Per-sample per-channel mask: zero specified channels for synth
+            # (source==2) samples so no-expression trajectories don't bias the
+            # model toward predicting zero protein on real expressing samples.
+            # Only built when synth_obs_mask_channels is configured AND the batch
+            # actually contains synth samples — otherwise stays None (no-op).
+            _synth_ch_mask = None
+            _synth_ep_keep = None   # (B,) bool for endpoint_mse exclusion
+            if cfg.synth_obs_mask_channels and source_idx_batch is not None:
+                is_synth = (source_idx_batch == 2)  # (B,) on CPU
+                if is_synth.any():
+                    obs_idx_list_m = (list(cfg.obs_idx) if cfg.obs_idx is not None
+                                      else (obs_idx.tolist() if torch.is_tensor(obs_idx)
+                                            else list(obs_idx)))
+                    P_m = len(obs_idx_list_m)
+                    ch_mask = torch.ones(len(source_idx_batch), P_m,
+                                         device=device, dtype=torch.float32)
+                    for raw_ch in cfg.synth_obs_mask_channels:
+                        if raw_ch in obs_idx_list_m:
+                            local_ch = obs_idx_list_m.index(raw_ch)
+                            ch_mask[is_synth.to(device), local_ch] = 0.0
+                    _synth_ch_mask = ch_mask
+                    # For endpoint_mse: exclude synth rows when the endpoint
+                    # channel is among the masked channels.
+                    if cfg.endpoint_channels and any(
+                        int(c) in cfg.synth_obs_mask_channels
+                        for c in cfg.endpoint_channels
+                    ):
+                        _synth_ep_keep = (~is_synth).to(device)
+
             model_kwargs = {
                 "teacher_forcing": teacher_forcing,
                 "tf_every": int(cfg.tf_every),
@@ -2093,13 +2184,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                                    channel_weights=chan_w,
                                    time_weight=time_w,
                                    clamp_min=float(cfg.loss_clamp_min),
-                                   sample_weights=_sample_w)
+                                   sample_weights=_sample_w,
+                                   sample_channel_mask=_synth_ch_mask)
                     if cfg.lambda_endpoint > 0.0 and cfg.endpoint_channels:
                         ep_post = [obs_idx_list.index(int(c)) for c in cfg.endpoint_channels]
                         loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
                             pred, y_seq, batch_lengths, ep_post,
                             use_log_loss=use_log_loss,
-                            clamp_min=float(cfg.loss_clamp_min))
+                            clamp_min=float(cfg.loss_clamp_min),
+                            sample_mask=_synth_ep_keep)
                     if cfg.loss_normalizer_channels:
                         loss = loss / float(cfg.loss_normalizer_channels)
 
