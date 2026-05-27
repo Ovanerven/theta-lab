@@ -1,0 +1,184 @@
+# Sparse-K full sweep — Bob's machine
+#
+# Picks up where the Mac Mini sparse_k_real_then_comb.yaml leaves off.
+# Mac Mini handles runs 1-9 from that file:
+#   ✓ M7_bg_real, M7_bg_boundary, M8_bg_real, M8_bg_boundary  (Block 0 dense)
+#   → M3_K1_real_s0, M4_K1_real_s0, M5_K1_real_s0             (K=1 real for M3/M4/M5)
+#   → M7_K1_real_s0, M8_K1_real_s0                             (K=1 real, OLD scaffold)
+#
+# Bob covers everything else:
+#   - M3/M4/M5 K=1/3/6 real_only  (Mac Mini never completed these)
+#   - M7_bg/M8_bg K=1/3/6 real_only  (bg_fixed replaces Mac Mini's old-scaffold K=1)
+#   - M9v3b K=1/3/6 real_only
+#   - M7_bg K=1/3/6 combined  (ONLY M7 on combined — it's the synth-designed scaffold)
+# DROPPED from earlier plan: all comb sparse-K for M3/M4/M5/M8_bg/M9v3b —
+# sparse-K underperforms on synth-heavy data; compute better spent on dense.
+#
+# Key change from sparse_k_real_then_comb: M7/M8 use *_bg_fixed throughout.
+# Run order: ALL real_only K runs FIRST, then ALL combined K runs.
+#
+# CANONICAL SCAFFOLDS (do not change without explicit reason):
+#   M3 → txtl_model3_two_state
+#   M4 → txtl_model4_three_state
+#   M5 → txtl_resource_and_maturation_dna
+#   M7 → txtl_model7_bg_fixed         (NOT txtl_model7_fixed / _boundary_gated)
+#   M8 → txtl_model8_bg_fixed         (NOT txtl_model8_reagent_resource / _fixed / _peaked_fixed)
+#   M9 → txtl_model9_o2b              (winner of v1 / v2 / v3a / v3b family)
+#
+# M9 NOTE: lambda_oxygen is removed (defaults to 0.0). The v3b scaffold's
+# O2 dynamics are internal and Euler-stable post-fix; the lambda_oxygen
+# auxiliary loss was designed for the original txtl_model9_oxygen_dark
+# scaffold and is NOT applicable to the heavily-edited v3a/v3b dynamics.
+# Epoch budget reduced 100 → 80: sparse-K converges by ep ~78 worst case.
+#
+# This file supersedes m7_m8_bg_sparse_k.yaml (absorbed here, do not run that file too).
+#
+# python launch_sweep.py sweep_specs/final_ladder/FINAL_sparse_k_full_bob.yaml \
+#   --local --max-parallel 2 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_sparse_k_full_bob/
+
+study: FINAL_sparse_k_full_bob
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  # Validated new-upweight intervention (B_loss_upweight5x: R²p 0.243 → 0.409).
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+_m9_real: &m9ox_real
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  n_substeps: 1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+_m9_comb: &m9ox_comb
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+  n_substeps: 1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+fixed:
+  # Sparse-K budget: 80 epochs is safe. K=1/K=3 are done by ep 50–70; K=6
+  # keeps gaining to ep ~78. Going lower (e.g. 60) clips K=6.
+  epochs: 80
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  balance_source_sampler: true
+  # Combined default: new-upweight + synth-downweight.
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+    synth: 0.05
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn_sparse_theta_v2
+  anchor_mode: uniform
+
+  # ── d-recipe loss (applied to every run) ──────────────────────────────────
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 1 — Sparse-K, real_only  (ALL models, ALL K values)
+  # Order: K=1 → K=3 → K=6.  Combined block starts only after this block finishes.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── K=1 real_only ────────────────────────────────────────────────────────
+  # NOTE: Mac Mini was supposed to do M3/M4/M5 K=1 real and M7/M8 K=1 (old
+  # scaffold) — it only completed Block 0 (the 4 bg dense runs). The old-
+  # scaffold M7/M8 K=1 runs are dropped (invalid scaffolds; bg replaces them
+  # at K=1 below). M3/M4/M5 K=1 real are added back here.
+  # - {exp_name: M3_K1_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 1, <<: *real}
+  # - {exp_name: M4_K1_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 1, <<: *real}
+  # - {exp_name: M5_K1_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 1, <<: *real}
+  # - {exp_name: M7_bg_K1_real_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, <<: *real}
+  # - exp_name: M8_bg_K1_real_s0
+  #   scaffold: txtl_model8_bg_fixed
+  #   seed: 0
+  #   n_theta_anchors: 1
+  #   n_substeps: 2
+  #   <<: *real
+  # - exp_name: M9_K1_real_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   n_theta_anchors: 1
+  #   <<: [*real, *m9ox_real]
+
+  # # ── K=3 real_only ─────────────────────────────────────────────────────────
+  # - {exp_name: M3_K3_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 3, <<: *real}
+  # - {exp_name: M4_K3_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 3, <<: *real}
+  # - {exp_name: M5_K3_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 3, <<: *real}
+  # - {exp_name: M7_bg_K3_real_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 3, n_substeps: 1, <<: *real}
+  # - exp_name: M8_bg_K3_real_s0
+  #   scaffold: txtl_model8_bg_fixed
+  #   seed: 0
+  #   n_theta_anchors: 3
+  #   n_substeps: 2
+  #   <<: *real
+  - exp_name: M9_K3_real_s0
+    scaffold: txtl_model9_o2b
+    seed: 0
+    n_theta_anchors: 3
+    <<: [*real, *m9ox_real]
+
+  # ── K=6 real_only ─────────────────────────────────────────────────────────
+  - {exp_name: M3_K6_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M4_K6_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M5_K6_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M7_bg_K6_real_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 6, n_substeps: 1, <<: *real}
+  - exp_name: M8_bg_K6_real_s0
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    n_theta_anchors: 6
+    n_substeps: 2
+    <<: *real
+  - exp_name: M9_K6_real_s0
+    scaffold: txtl_model9_o2b
+    seed: 0
+    n_theta_anchors: 6
+    <<: [*real, *m9ox_real]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 2 — Sparse-K, combined: M7_bg ONLY (the synth-designed scaffold).
+  # All other scaffolds skipped on combined — sparse-K performs poorly on
+  # synth-heavy data and the compute is better spent on dense seeds. M7's
+  # boundary loss is designed to extract signal from synth, so it's the one
+  # scaffold where comb sparse-K is informative.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # M7_bg combined K: full-weight synth (per M7's design), new-upweight retained.
+  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}

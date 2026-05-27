@@ -147,38 +147,38 @@ runs:
     n_theta_anchors: 3
     n_substeps: 2
     <<: *real
-  - exp_name: M9_K3_real_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    n_theta_anchors: 3
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9_K3_real_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   n_theta_anchors: 3
+  #   <<: [*real, *m9ox_real]
 
-  # ── K=6 real_only ─────────────────────────────────────────────────────────
-  - {exp_name: M3_K6_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6, <<: *real}
-  - {exp_name: M4_K6_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6, <<: *real}
-  - {exp_name: M5_K6_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6, <<: *real}
-  - {exp_name: M7_bg_K6_real_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 6, n_substeps: 1, <<: *real}
-  - exp_name: M8_bg_K6_real_s0
-    scaffold: txtl_model8_bg_fixed
-    seed: 0
-    n_theta_anchors: 6
-    n_substeps: 2
-    <<: *real
-  - exp_name: M9_K6_real_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    n_theta_anchors: 6
-    <<: [*real, *m9ox_real]
+  # # ── K=6 real_only ─────────────────────────────────────────────────────────
+  # - {exp_name: M3_K6_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6, <<: *real}
+  # - {exp_name: M4_K6_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6, <<: *real}
+  # - {exp_name: M5_K6_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6, <<: *real}
+  # - {exp_name: M7_bg_K6_real_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 6, n_substeps: 1, <<: *real}
+  # - exp_name: M8_bg_K6_real_s0
+  #   scaffold: txtl_model8_bg_fixed
+  #   seed: 0
+  #   n_theta_anchors: 6
+  #   n_substeps: 2
+  #   <<: *real
+  # - exp_name: M9_K6_real_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   n_theta_anchors: 6
+  #   <<: [*real, *m9ox_real]
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # BLOCK 2 — Sparse-K, combined: M7_bg ONLY (the synth-designed scaffold).
-  # All other scaffolds skipped on combined — sparse-K performs poorly on
-  # synth-heavy data and the compute is better spent on dense seeds. M7's
-  # boundary loss is designed to extract signal from synth, so it's the one
-  # scaffold where comb sparse-K is informative.
-  # ═══════════════════════════════════════════════════════════════════════════
+  # # ═══════════════════════════════════════════════════════════════════════════
+  # # BLOCK 2 — Sparse-K, combined: M7_bg ONLY (the synth-designed scaffold).
+  # # All other scaffolds skipped on combined — sparse-K performs poorly on
+  # # synth-heavy data and the compute is better spent on dense seeds. M7's
+  # # boundary loss is designed to extract signal from synth, so it's the one
+  # # scaffold where comb sparse-K is informative.
+  # # ═══════════════════════════════════════════════════════════════════════════
 
-  # M7_bg combined K: full-weight synth (per M7's design), new-upweight retained.
-  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
-  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
-  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  # # M7_bg combined K: full-weight synth (per M7's design), new-upweight retained.
+  # - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  # - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  # - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
