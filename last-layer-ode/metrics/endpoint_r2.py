@@ -124,7 +124,11 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
     # just skip the synth rows here.
     raw_ds = subset.dataset if isinstance(subset, torch.utils.data.Subset) else subset
     z_expr_arr  = getattr(raw_ds, "z_expr",  None)
-    source_arr  = getattr(raw_ds, "source",  None)  # 0=old, 1=new real data
+    # Dataset class exposes the per-sample source mapping as `source_idx`
+    # (built from `source_label` in the npz: 'old'→0, 'new'→1, 'synth'→2,
+    # unknown→-1). Older code looked for `source` — keep that as a fallback.
+    source_arr  = getattr(raw_ds, "source_idx",
+                          getattr(raw_ds, "source", None))  # 0=old, 1=new, 2=synth
     subset_indices = (list(subset.indices) if isinstance(subset, torch.utils.data.Subset)
                       else list(range(len(raw_ds))))
     # Variable-length datasets pad y_seq to K with zeros past lengths[i]. Reading
