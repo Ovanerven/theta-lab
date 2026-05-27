@@ -1,0 +1,45 @@
+\begin{tabular}{lrrrrr}
+\toprule
+Model & nrmse & Glc & Pyr & ATP & NADH \\
+\midrule
+\multicolumn{6}{l}{\textbf{$n=1000$}} \\
+Baseline & \textbf{0.077} & 0.038 & 0.104 & 0.044 & 0.122 \\
+L1 reg & 0.079 & 0.045 & 0.114 & 0.042 & 0.116 \\
+Unbounded & 0.088 & 0.048 & 0.114 & 0.040 & 0.152 \\
+Neural ODE (GRU) & 0.108 & 0.053 & 0.140 & 0.054 & 0.187 \\
+Neural ODE (MLP) & 0.146 & 0.074 & 0.187 & 0.054 & 0.267 \\
+Neural ODE (correction) & 0.137 & 0.070 & 0.173 & 0.051 & 0.254 \\
+Fixed $\theta$ & 0.284 & 0.296 & 0.312 & 0.190 & 0.338 \\
+Sampled $\theta$ & 0.294 & 0.299 & 0.338 & 0.121 & 0.418 \\
+\midrule
+\multicolumn{6}{l}{\textbf{$n=100$}} \\
+Baseline & \textbf{0.111} & 0.045 & 0.124 & 0.063 & 0.213 \\
+L1 reg & 0.140 & 0.080 & 0.160 & 0.090 & 0.231 \\
+Unbounded & 0.258 & 0.211 & 0.239 & 0.093 & 0.488 \\
+Neural ODE (GRU) & 0.145 & 0.072 & 0.155 & 0.050 & 0.303 \\
+Neural ODE (MLP) & 0.178 & 0.065 & 0.185 & 0.049 & 0.412 \\
+Neural ODE (correction) & 0.125 & 0.069 & 0.106 & 0.052 & 0.273 \\
+Fixed $\theta$ & 0.556 & 0.216 & 0.404 & 0.932 & 0.673 \\
+Sampled $\theta$ & 0.215 & 0.235 & 0.190 & 0.092 & 0.342 \\
+\midrule
+\multicolumn{6}{l}{\textbf{$n=10$}} \\
+Baseline & 0.226 & 0.056 & 0.115 & 0.077 & 0.657 \\
+L1 reg & 0.253 & 0.072 & 0.102 & 0.149 & 0.688 \\
+Unbounded & 0.545 & 0.279 & 0.472 & 0.100 & 1.327 \\
+Neural ODE (GRU) & 0.165 & 0.191 & 0.227 & 0.093 & 0.152 \\
+Neural ODE (MLP) & 0.141 & 0.125 & 0.174 & 0.065 & 0.202 \\
+Neural ODE (correction) & \textbf{0.100} & 0.088 & 0.042 & 0.068 & 0.202 \\
+Fixed $\theta$ & 0.876 & 0.327 & 0.821 & 1.255 & 1.102 \\
+Sampled $\theta$ & 0.225 & 0.139 & 0.119 & 0.073 & 0.571 \\
+\midrule
+\multicolumn{6}{l}{\textbf{$n=3$}} \\
+Baseline & \textbf{0.234} & 0.219 & 0.217 & 0.395 & 0.107 \\
+L1 reg & 0.236 & 0.202 & 0.258 & 0.398 & 0.088 \\
+Unbounded & 0.261 & 0.191 & 0.301 & 0.382 & 0.170 \\
+Neural ODE (GRU) & 0.239 & 0.105 & 0.340 & 0.341 & 0.170 \\
+Neural ODE (MLP) & 0.268 & 0.287 & 0.227 & 0.382 & 0.177 \\
+Neural ODE (correction) & 0.295 & 0.191 & 0.425 & 0.386 & 0.175 \\
+Fixed $\theta$ & 0.480 & 0.378 & 0.305 & 0.855 & 0.381 \\
+Sampled $\theta$ & 0.267 & 0.256 & 0.273 & 0.390 & 0.151 \\
+\bottomrule
+\end{tabular}

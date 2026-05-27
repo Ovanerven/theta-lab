@@ -121,10 +121,10 @@ runs:
   # ── REAL_ONLY FIRST ──────────────────────────────────────────────────────
 
   # M9v2: M5+bolus — u_open adds +1 to abstract O via u_to_y_jump, no explicit O2 state
-  - exp_name: M9v2_real_s0
-    scaffold: txtl_model9_m5_oxygen
-    seed: 0
-    <<: [*comb, *real, *m9v2_real]
+  # - exp_name: M9v2_real_s0
+  #   scaffold: txtl_model9_m5_oxygen
+  #   seed: 0
+  #   <<: [*comb, *real, *m9v2_real]
 
   # M9v3a: step-function O2 (P=8, tube_opened state); O2_eff = O2_sat*open_gate, no ODE
   - exp_name: M9v3a_real_s0
@@ -140,20 +140,20 @@ runs:
 
   # ── COMBINED SECOND ──────────────────────────────────────────────────────
 
-  - exp_name: M9v2_comb_s0
-    scaffold: txtl_model9_m5_oxygen
-    seed: 0
-    <<: [*m9v2_comb]
+  # - exp_name: M9v2_comb_s0
+  #   scaffold: txtl_model9_m5_oxygen
+  #   seed: 0
+  #   <<: [*m9v2_comb]
 
-  - exp_name: M9v3a_comb_s0
-    scaffold: txtl_model9_o2a
-    seed: 0
-    <<: [*m9v3a_comb]
+  # - exp_name: M9v3a_comb_s0
+  #   scaffold: txtl_model9_o2a
+  #   seed: 0
+  #   <<: [*m9v3a_comb]
 
-  - exp_name: M9v3b_comb_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    <<: [*m9v2_comb]
+  # - exp_name: M9v3b_comb_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   <<: [*m9v2_comb]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BLOCK 1 — COMPLETED in this v4 run (comment out, do not re-run)

@@ -14,7 +14,20 @@
 #
 # Key change from sparse_k_real_then_comb: M7/M8 use *_bg_fixed throughout.
 # Run order: ALL real_only K runs FIRST, then ALL combined K runs.
-# M9 uses txtl_model9_oxygen_dark (M9v1); M9v2/v3 sparse-K deferred until v4 winner.
+#
+# CANONICAL SCAFFOLDS (do not change without explicit reason):
+#   M3 → txtl_model3_two_state
+#   M4 → txtl_model4_three_state
+#   M5 → txtl_resource_and_maturation_dna
+#   M7 → txtl_model7_bg_fixed         (NOT txtl_model7_fixed / _boundary_gated)
+#   M8 → txtl_model8_bg_fixed         (NOT txtl_model8_reagent_resource / _fixed / _peaked_fixed)
+#   M9 → txtl_model9_o2b              (winner of v1 / v2 / v3a / v3b family)
+#
+# M9 NOTE: lambda_oxygen is removed (defaults to 0.0). The v3b scaffold's
+# O2 dynamics are internal and Euler-stable post-fix; the lambda_oxygen
+# auxiliary loss was designed for the original txtl_model9_oxygen_dark
+# scaffold and is NOT applicable to the heavily-edited v3a/v3b dynamics.
+# Epoch budget reduced 100 → 80: sparse-K converges by ep ~78 worst case.
 #
 # This file supersedes m7_m8_bg_sparse_k.yaml (absorbed here, do not run that file too).
 #
@@ -44,18 +57,20 @@ _real_only_overrides: &real
 
 _m9_real: &m9ox_real
   gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-  n_substeps: 2
+  n_substeps: 1
   oxygen_protein_channel: 5
   oxygen_u_open_name: "u_open"
 
 _m9_comb: &m9ox_comb
   gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
-  n_substeps: 2
+  n_substeps: 1
   oxygen_protein_channel: 5
   oxygen_u_open_name: "u_open"
 
 fixed:
-  epochs: 100
+  # Sparse-K budget: 80 epochs is safe. K=1/K=3 are done by ep 50–70; K=6
+  # keeps gaining to ep ~78. Going lower (e.g. 60) clips K=6.
+  epochs: 80
   endpoint_r2: true
   obs_idx: [3, 5]
   warmup_epochs: 5
@@ -90,8 +105,13 @@ runs:
   # ═══════════════════════════════════════════════════════════════════════════
 
   # ── K=1 real_only ────────────────────────────────────────────────────────
-  # M3/M4/M5 K=1 real done by Mac Mini — NOT repeated here.
-  # M7/M8 K=1 redone with bg_fixed (Mac Mini used old txtl_model7/8_fixed).
+  # NOTE: Mac Mini was supposed to do M3/M4/M5 K=1 real and M7/M8 K=1 (old
+  # scaffold) — it only completed Block 0 (the 4 bg dense runs). The old-
+  # scaffold M7/M8 K=1 runs are dropped (invalid scaffolds; bg replaces them
+  # at K=1 below). M3/M4/M5 K=1 real are added back here.
+  - {exp_name: M3_K1_real_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 1, <<: *real}
+  - {exp_name: M4_K1_real_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 1, <<: *real}
+  - {exp_name: M5_K1_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 1, <<: *real}
   - {exp_name: M7_bg_K1_real_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, <<: *real}
   - exp_name: M8_bg_K1_real_s0
     scaffold: txtl_model8_bg_fixed
@@ -100,10 +120,9 @@ runs:
     n_substeps: 2
     <<: *real
   - exp_name: M9_K1_real_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 1
-    lambda_oxygen: 0.1
     <<: [*real, *m9ox_real]
 
   # ── K=3 real_only ─────────────────────────────────────────────────────────
@@ -118,10 +137,9 @@ runs:
     n_substeps: 2
     <<: *real
   - exp_name: M9_K3_real_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 3
-    lambda_oxygen: 0.1
     <<: [*real, *m9ox_real]
 
   # ── K=6 real_only ─────────────────────────────────────────────────────────
@@ -136,10 +154,9 @@ runs:
     n_substeps: 2
     <<: *real
   - exp_name: M9_K6_real_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 6
-    lambda_oxygen: 0.1
     <<: [*real, *m9ox_real]
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -158,10 +175,9 @@ runs:
     n_theta_anchors: 1
     n_substeps: 2
   - exp_name: M9_K1_comb_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 1
-    lambda_oxygen: 0.1
     <<: *m9ox_comb
 
   # ── K=3 combined ──────────────────────────────────────────────────────────
@@ -175,10 +191,9 @@ runs:
     n_theta_anchors: 3
     n_substeps: 2
   - exp_name: M9_K3_comb_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 3
-    lambda_oxygen: 0.1
     <<: *m9ox_comb
 
   # ── K=6 combined ──────────────────────────────────────────────────────────
@@ -192,8 +207,7 @@ runs:
     n_theta_anchors: 6
     n_substeps: 2
   - exp_name: M9_K6_comb_s0
-    scaffold: txtl_model9_oxygen_dark
+    scaffold: txtl_model9_o2b
     seed: 0
     n_theta_anchors: 6
-    lambda_oxygen: 0.1
     <<: *m9ox_comb

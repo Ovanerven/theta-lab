@@ -1,0 +1,243 @@
+
+\chapter{Implementation Details}
+\label{app:implementation}
+
+This appendix describes the per-step computation graph of the encoders we
+tested, as well as the general CMVF training loop. All four encoder types -- GRU, LSTM, Transformer, and Mamba -- share the same input pipeline, the same bounded readout, and the
+same mechanistic step; only the sequence model in the middle changes. We
+therefore present the pipeline once and then list the per-encoder differences.
+
+% ---------------------------------------------------------------------
+\section{Per-step pipeline}
+\label{app:pipeline}
+
+At observation step $k$ each encoder consumes the current control vector
+$u_k \in \mathbb{R}^{U}$ and the previous (predicted or teacher-forced) state
+$\hat{y}_{k-1} \in \mathbb{R}^{P}$, and emits a positive parameter vector
+$\theta_k \in \mathbb{R}^{m}_{>0}$ that is then fed to the mechanistic step
+(Sec.~\ref{app:step}). The pipeline is
+\begin{align}
+\tilde{u}_k &= \phi_u(u_k), \qquad \tilde{y}_{k-1} = \phi_y(\hat{y}_{k-1}), \\
+\mathrm{feat}_k &= \big[\,\tilde{u}_k\,;\,\tilde{y}_{k-1}\,\big], \\
+x_k &= \mathrm{Lift}(\mathrm{feat}_k), \\
+z_k &= \mathrm{Encoder}\big(x_{1:k}\big), \\
+r_k &= \mathrm{Head}(z_k), \qquad \theta_k = \gamma(r_k).
+\end{align}
+
+where $\phi_u, \phi_y$ are scalar feature transforms; all synthetic data scenarios (glycolysis, MOF, and enzyme) have no feature transformations ($\phi_u(u_k),\phi_u(\hat{y}_{k-1} = \mathbb{I}$). For the IVTT runs we use
+$\phi_u(u) = \sqrt{u}$ and
+$\phi_y(y) = \max(\sqrt{y}, 1)$.
+
+Lift and encoder dimensions, along with the other key training hyperparameters for the synthetic scenarios are summarized in Table \ref{tab:synthetic_hparams}. 
+
+ DNA is collapsed to a single input at the first time step for all trajectories, and excluded from the encoder input. Furthermore, in this scenario, only the control amounts $u_k$ are known for the inputs in the reaction. The only $y_k$ trajectories observed are the two final  species (mature mRNA
+\texttt{mm} and mature protein \texttt{pm}) feed back into the encoder. Similarly, for the IVTT runs, training hyperparameters are found can be found in Table \ref{tab:ivtt-hparams}. 
+
+\paragraph{Gamma bounds on learned parameters.} In the pipeline, a single linear head produces a
+logit $r_k \in \mathbb{R}^{m}$. We map this into a per-parameter interval $[\theta^{\mathrm{lo}}, \theta^{\mathrm{hi}}]$ to incorporate an additional prior regarding the magnitude of the learned $\theta$ that also serves to stabilize training. This is done with a log-sigmoid bound:
+\begin{equation}
+\gamma(r) \;=\; \theta^{\mathrm{lo}} \,\exp\!\Big(\log\!\big(\theta^{\mathrm{hi}}/\theta^{\mathrm{lo}}\big)\,\sigma(r/\tau)\Big),
+\label{eq:loggamma}
+\end{equation}
+where $\sigma$ is the elementwise sigmoid and $\tau\!\geq\!1$ a temperature.
+At $r\!=\!0$ this maps to $\sqrt{\theta^{\mathrm{lo}}\theta^{\mathrm{hi}}}$,
+which is essential because per-parameter bounds span different orders of
+magnitude (e.g.\ $k_{\mathrm{nuc},A}\in[10^{-6},10^{-1}]$). A linear sigmoid would initialize at the arithmetic mean and blows up the ODE on the first
+forward pass. We use $\tau\!=\!2.3$ for all encoders.
+
+\paragraph{Teacher forcing.} During training, every \texttt{tf\_every}-th step
+the previous-state input $\hat{y}_{k-1}$ is replaced by the ground-truth
+$y_{k-1}$ on the observed channels only. Teacher forcing is disabled after
+epoch \texttt{tf\_drop\_epoch} so the final training phase is fully
+free-running.
+
+% ---------------------------------------------------------------------
+\section{Encoder variants}
+\label{app:encoders}
+
+Each encoder takes $\mathrm{feat}_k$ and returns a $d_{\mathrm{hidden}}$-d
+context $z_k$. The same four variants are used across all scenarios:
+on the synthetic benchmarks (MOF, Glycolysis, Enzyme) we sweep the four
+encoders against a clean simulation oracle, and on the real IVTT data we
+re-use the identical encoder code with only width/depth and the input
+transforms changed (cf.\ Tables~\ref{tab:synthetic_hparams}
+and~\ref{tab:ivtt-hparams}). Only the parts that differ from
+Sec.~\ref{app:pipeline} are shown below.
+
+\paragraph{GRU.} $L$ GRU layers with dropout applied to every layer's
+output (including the last) during training, and orthogonal $W_{hh}$ init, Xavier $W_{ih}$ init (zero biases). 
+\begin{equation}
+h^{(\ell)}_k = \mathrm{GRUCell}^{(\ell)}\!\big(h^{(\ell-1)}_k,\, h^{(\ell)}_{k-1}\big), \quad \ell=1,\dots,L, \qquad z_k = h^{(L)}_k.
+\end{equation}
+
+\paragraph{LSTM.}  Standard PyTorch
+\texttt{nn.LSTM} with $L$ stacked LSTM layers of width
+$d_{\mathrm{hidden}}$. We use PyTorch's default initialisation.
+
+\paragraph{Transformer.} Standard PyTorch \texttt{nn.TransformerEncoder} implementation, with a sliding window, where the transformer only attends to the last $W$ features. To account for this, we use a window-relative learned positional embedding:
+\begin{align}
+x_k &= \mathrm{Lift}(\mathrm{feat}_k) + \mathrm{PosEmbed}(k\!\!\mod\!\!W), \\
+z_k &= \mathrm{TransformerEnc}_{\mathrm{causal}}\!\big(x_{\max(1,k-W+1):k}\big)_{[-1]}.
+\end{align}
+The number of heads is $d_{\mathrm{hidden}}/32$ and the feed-forward width is
+\texttt{ff\_mult}$\,\cdot d_{\mathrm{hidden}}$. We detach features that scroll
+out of the context window so memory is bounded at
+$\mathcal{O}(K\,W)$ activations.
+
+\paragraph{Mamba.} $L$ pre-norm Mamba blocks with residual
+connections,
+\begin{equation}
+x^{(\ell)}_k = x^{(\ell-1)}_k + \mathrm{Mamba}^{(\ell)}\!\big(\mathrm{LayerNorm}(x^{(\ell-1)}_k)\big),
+\end{equation}
+and read out $z_k = x^{(L)}_k$. Because the closed-loop feedback
+$\hat{y}_{k-1}\!\to\!x_k$ rules out a parallel scan, we run Mamba in
+recurrent mode via \texttt{InferenceParams}.
+
+% ---------------------------------------------------------------------
+\subsection{Mechanistic step}
+\label{app:step}
+
+Given $\theta_k$ and the previous state $\hat{y}_{k-1}$, we advance the
+state to $\hat{y}_k$ over the irregular timestep $\Delta t_k$ using one of
+two paths, selected by the scaffold.
+
+\paragraph{Numerical integration (synthetic scenarios + TXTL maturation).}
+This is the default path used for the MOF, Glycolysis and Enzyme synthetic
+benchmarks, and re-used for the
+\texttt{txtl\_resource\_and\_maturation\_dna} scaffold. Control inputs enter
+the state at the start of each interval as an instantaneous bolus, after
+which the scaffold's right-hand side $f$ is integrated with one RK4 step:
+\begin{align}
+\hat{y}_k^{-} &= \hat{y}_{k-1} + J\,u_k, \\
+\hat{y}_k     &= \mathrm{RK4}\!\big(\hat{y}_k^{-},\; f(\,\cdot\,;\theta_k),\; \Delta t_k\big).
+\end{align}
+Here $J\!\in\!\mathbb{R}^{P\times U}$ is the fixed control-to-state jump
+matrix. State outputs are clamped at zero after each step for mass
+conservation. We never differentiate through the integrator's substep loop
+beyond the current observation interval, since teacher forcing /
+\texttt{detach\_y\_prev} resets the gradient chain at every $k$.
+
+\paragraph{Closed-form step (IVTT only).}  The IVTT scaffold
+(\texttt{IvttAnalyticScaffold}) provides a closed-form solution of the
+mature-mRNA / mature-protein ODE between observations, so we bypass the RK4
+integrator entirely. A per-batch context (cumulative DNA) is precomputed
+once and routed directly into the closed-form expression, and at every
+step the scaffold's \texttt{analytic\_step} returns $\hat{y}_k$ directly as
+a function of $(\hat{y}_{k-1}, \theta_k, \Delta t_k)$.
+
+% ---------------------------------------------------------------------
+\subsection{Loss}
+\label{app:loss}
+
+For all synthetic scenarios (MOF, Glycolysis, Enzyme) and for the TXTL
+maturation runs we use a plain mean-squared error in $\log(1+\cdot)$ space,
+averaged over the observed species $\mathcal{O}$ and over valid timesteps:
+\begin{equation}
+\mathcal{L}
+\;=\;
+\frac{1}{B\,K\,|\mathcal{O}|}
+\sum_{b,k,j\in\mathcal{O}}
+\Big(\log(1+\hat{y}^{(b)}_{k,j}) - \log(1+y^{(b)}_{k,j})\Big)^2 .
+\label{eq:loss-base}
+\end{equation}
+The $\log(1+\cdot)$ wrap is essential because state magnitudes span several
+orders of magnitude across species; a raw-scale MSE would let the largest
+species dominate the gradient.
+
+For the IVTT sweep we keep the same $\log(1+\cdot)$ space but replace the
+uniform weighting in Eq.~\ref{eq:loss-base} with a three-term weighted MSE
+that targets the two species we actually observe in the wet-lab data:
+\begin{enumerate}
+  \item a mature-mRNA term, weighted on every valid step;
+  \item a mature-protein term, with second-half steps up-weighted by a
+        factor of $N=3$;
+  \item an endpoint term on the final mature-protein value.
+\end{enumerate}
+The remaining channels (resource, immature mRNA/protein, and proxies on
+the emitted parameters) carry zero weight in the final aggregation --
+they are computed for diagnostics only.
+
+We optimise with AdamW, gradient clipping at $\|\nabla\|_2\!\leq\!1$, and
+optionally a linear-warmup schedule (Transformer / Mamba). All models are
+trained for 250 epochs on a fixed 0.125 / 0.125 test / validation split
+hard-coded in \texttt{bob\_model/3 seed splits.py} so the same held-out
+samples are scored across encoders.
+
+% ---------------------------------------------------------------------
+\subsection{Hyperparameters}
+\label{app:hparams}
+
+Tables~\ref{tab:synthetic_hparams} and~\ref{tab:ivtt-hparams} list the
+hyperparameters used for the synthetic-scenarios sweep and for the IVTT
+sweep, respectively. In both tables the settings that are identical across
+all four encoders are folded into the caption, and the body shows only
+per-encoder differences.
+
+\begin{table}[h]
+\centering
+\caption{IVTT encoder ablation hyperparameters. The GRU and LSTM are
+trained on \texttt{real\_ivtt\_exact\_full\_drop5000.npz} (a filtered
+variant), while the Transformer and Mamba are trained on
+\texttt{real\_ivtt\_exact\_full.npz}; both share the same fixed
+$0.125\,/\,0.125$ test\,/\,validation split. All runs use 250 epochs,
+optimiser AdamW with weight decay $1.8\!\times\!10^{-3}$, gradient clipping
+at $1.0$, the per-parameter $\theta$ bounds defined by
+\texttt{IvttAnalyticScaffold}, and the bounded readout in
+Eq.~\ref{eq:loggamma}. Encoder feature mask: drop DNA from $u$, keep only
+\texttt{mm} and \texttt{pm} from $y$. Loss: \texttt{loss\_fn\_ivtt\_mse}.}
+\label{tab:ivtt-hparams}
+\small
+\begin{tabular}{lcccc}
+\hline
+                        & GRU                  & LSTM                 & Transformer                                 & Mamba \\
+\hline
+$d_{\mathrm{hidden}}$   & 400                  & 400                  & 128                                         & 400 \\
+$L$ (layers)            & 2                    & 2                    & 2                                           & 2 \\
+dropout                 & 0.2                  & 0.2                  & 0.1                                         & 0.2 \\
+lift                    & none                 & $\to\!32$            & $\to\!32\!\to\!128$                         & $\to\!32\!\to\!400$ \\
+$\phi_u$                & $\sqrt{\cdot}$       & $\sqrt{\cdot}$       & $\mathrm{cumsum}\!\circ\!\sqrt{\cdot}$      & $\sqrt{\cdot}$ \\
+$\phi_y$                & $\max(\sqrt{\cdot},1)$ & $\max(\sqrt{\cdot},1)$ & $\max(\sqrt{\cdot},1)$                  & $\max(\sqrt{\cdot},1)$ \\
+$\tau$ (Eq.~\ref{eq:loggamma}) & 2.3           & 1.0                  & 1.0                                         & 1.0 \\
+batch size              & 100                  & 100                  & 32                                          & 100 \\
+learning rate           & $2\!\times\!10^{-3}$ & $2\!\times\!10^{-3}$ & $2\!\times\!10^{-3}$                        & $2\!\times\!10^{-3}$ \\
+warmup epochs           & 0                    & 0                    & 0                                           & 10 \\
+TF interval / drop      & 200 / 100            & 200 / 100            & 200 / 100                                   & 200 / 100 \\
+encoder-specific        & ---                  & ---                  & $W\!=\!180$, $\mathrm{ff}\!=\!2d$           & $d_{\mathrm{state}}\!=\!16$, exp.\ 2, $d_{\mathrm{conv}}\!=\!4$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Synthetic-scenarios encoder ablation. The same four-encoder sweep
+is run on each of the Enzyme, Glycolysis, MOF and Methane datasets. All
+runs use AdamW with weight decay $8.5\!\times\!10^{-3}$, gradient clipping
+at $1.0$, scalar $\theta$ bounds $[10^{-3}, 2]$, the bounded readout in
+Eq.~\ref{eq:loggamma} with $\tau\!=\!1$, no input transforms
+($\phi_u\!=\!\phi_y\!=\!\mathrm{id}$), 100 epochs of training with a
+fixed $800/100/100$ train / val / test split, batch size $32$,
+learning rate $1\!\times\!10^{-3}$, and $n_{\mathrm{substeps}}\!=\!1$ in the
+RK4 integrator. Per-encoder rows below list only what differs.}
+\label{tab:synthetic_hparams}
+\small
+\begin{tabular}{lcccc}
+\hline
+                     & GRU                     & LSTM                & Transformer                                & Mamba \\
+\hline
+$d_{\mathrm{hidden}}$ & 128                    & 128                 & 128                                        & 128 \\
+$L$ (layers)         & 2                       & 2                   & 2                                          & 2 \\
+dropout              & 0.1                     & 0.1                 & 0.0                                        & 0.1 \\
+lift                 & $\to\!32$               & $\to\!32$           & $\to\!32\!\to\!128$                        & $\to\!32\!\to\!128$ \\
+warmup epochs        & 0                       & 0                   & 10                                         & 0 \\
+TF interval / drop   & 50 / 500                & 50 / 500            & 50 / 500                                   & 50 / 500 \\
+encoder-specific     & ---                     & ---                 & $W\!=\!128$, $\mathrm{ff}\!=\!4d$          & $d_{\mathrm{state}}\!=\!16$, exp.\ 2, $d_{\mathrm{conv}}\!=\!4$ \\
+\hline
+\end{tabular}
+\end{table}
+
+The corresponding YAML configs are
+\texttt{configs/ivtt\_gru.yaml}, \texttt{configs/ivtt\_lstm.yaml},
+\texttt{configs/ivtt\_transformer.yaml}, and
+\texttt{configs/ivtt\_mamba\_ssm.yaml}; running
+\texttt{python last-layer-ode/train.py --config <yaml>} reproduces the
+corresponding row of Table~\ref{tab:ivtt-hparams}.

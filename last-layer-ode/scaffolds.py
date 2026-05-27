@@ -3048,20 +3048,46 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_maturation_only_dna": TXTLMaturationOnly7Scaffold(),
     # Scaffolds from new_scaffolds.tex (Models 3, 4, 7, 8, 9; Model 5 is
     # already the txtl_resource_and_maturation_dna entry above).
-    "txtl_model3_two_state":        TXTLModel3_TwoStateScaffold(),
-    "txtl_model4_three_state":      TXTLModel4_ThreeStateScaffold(),
-    "txtl_model7_boundary_gated":   TXTLModel7_BoundaryGatedScaffold(),
-    "txtl_model7_kfix":             TXTLModel7_KBoundsFixed(),       # ablation: K bounds only
-    "txtl_model7_fixed":            TXTLModel7_FullFixed(),           # all M7 fixes
-    "txtl_model7_bg_fixed":         TXTLModel7_BgFixed(),             # + per-reagent learned background
-    "txtl_model8_reagent_resource": TXTLModel8_ReagentResourceScaffold(),
-    "txtl_model8_fixed":            TXTLModel8_FullFixed(),           # all M8 fixes
-    "txtl_model8_peaked_fixed":     TXTLModel8_PeakedFixed(),         # + peaked Mg/K gates (tex §8)
-    "txtl_model8_bg_fixed":         TXTLModel8_BgFixed(),             # + per-resource learned background
-    "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),
-    "txtl_model9_m5_oxygen":        TXTLModel9_M5Oxygen(),
-    "txtl_model9_o2a":              TXTLModel9_O2SourceA(),   # source term, metabolic drain only
-    "txtl_model9_o2b":              TXTLModel9_O2SourceB(),   # source term, full stoichiometry
+    #
+    # ═══════════════════════════════════════════════════════════════════════
+    # CANONICAL CHOICES FOR THE FINAL LADDER (DO NOT CHANGE WITHOUT REASON):
+    #   M3 → txtl_model3_two_state
+    #   M4 → txtl_model4_three_state
+    #   M5 → txtl_resource_and_maturation_dna
+    #   M7 → txtl_model7_bg_fixed       [USE THIS — non-bg M7 variants are INVALID]
+    #   M8 → txtl_model8_bg_fixed       [USE THIS — non-bg M8 variants are INVALID]
+    #   M9 → txtl_model9_o2b            [USE THIS — winner of v1/v2/v3a/v3b]
+    #
+    # Why bg_fixed for M7/M8: ~16% of real samples have K-Glut=0 → g_K=0 →
+    # original M7/M8 scaffolds force mm=pm≡0 for those samples → irreducible
+    # val-loss floor at ~2.5. The bg_fixed variants add a learned per-reagent
+    # background offset to theta, breaking the zero-collapse. Verified by
+    # M7_bg_real R²(p)=0.485 (vs M7_fixed R²(p)=-0.24) and M8_bg_real R²(p)=0.31.
+    #
+    # Why o2b for M9: tied with o2a on protein R² (0.483 vs 0.489) but
+    # best mRNA R² (0.474), cleanest train trajectory, and the post-fix
+    # combined-data runs target this variant. v2 (m5_oxygen) is the fallback
+    # if v3b combined NaNs again.
+    #
+    # NOTE on lambda_oxygen: applies to any scaffold producing pred[:,:,P_fluor]
+    # given a dataset with `u_open`. Mechanically valid for o2a/o2b but
+    # empirically HURTS — the canonical winning v3a/v3b runs use lambda_oxygen=0.
+    # Leave it at 0 for o2a/o2b; only enable for the original oxygen_dark scaffold.
+    # ═══════════════════════════════════════════════════════════════════════
+    "txtl_model3_two_state":        TXTLModel3_TwoStateScaffold(),     # ← canonical M3
+    "txtl_model4_three_state":      TXTLModel4_ThreeStateScaffold(),   # ← canonical M4
+    "txtl_model7_boundary_gated":   TXTLModel7_BoundaryGatedScaffold(),# INVALID (zero-gate collapse)
+    "txtl_model7_kfix":             TXTLModel7_KBoundsFixed(),         # ablation: K bounds only
+    "txtl_model7_fixed":            TXTLModel7_FullFixed(),            # INVALID (zero-gate collapse)
+    "txtl_model7_bg_fixed":         TXTLModel7_BgFixed(),              # ← canonical M7 (+ per-reagent learned background)
+    "txtl_model8_reagent_resource": TXTLModel8_ReagentResourceScaffold(),# INVALID (zero-gate collapse)
+    "txtl_model8_fixed":            TXTLModel8_FullFixed(),            # INVALID (zero-gate collapse)
+    "txtl_model8_peaked_fixed":     TXTLModel8_PeakedFixed(),          # INVALID (zero-gate collapse) + peaked Mg/K gates (tex §8)
+    "txtl_model8_bg_fixed":         TXTLModel8_BgFixed(),              # ← canonical M8 (+ per-resource learned background)
+    "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),  # v1: lambda_oxygen-compatible; deprecated
+    "txtl_model9_m5_oxygen":        TXTLModel9_M5Oxygen(),             # v2: fallback for combined if v3b NaNs
+    "txtl_model9_o2a":              TXTLModel9_O2SourceA(),            # v3a: source term, metabolic drain only
+    "txtl_model9_o2b":              TXTLModel9_O2SourceB(),            # ← canonical M9 (v3b: source term, full stoichiometry)
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
