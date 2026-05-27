@@ -1800,77 +1800,139 @@ class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
 
 class TXTLModel9_M5Oxygen(MechanisticScaffold):
     """
-    Model 9 v2: M5 (resource + maturation) augmented with dissolved-O2 dynamics
-    and tube-opening logic.
+    M5 + tube-opening: numerically identical to M5 (TXTLResourceandMaturationDNAScaffold).
+    When the tube opens, O (abstract maturation resource) receives a +1 bolus via
+    u_to_y_jump, modelling fresh O2 enabling protein maturation.
 
-    Keeps M5's resource-pool transcription/translation (reagent effects absorbed
-    implicitly into R via the GRU encoder), but replaces M5's abstract maturation
-    resource O with actual dissolved O2 that depletes and is pinned when the tube
-    is opened.  Single-step oxidative maturation (dpm = k_ox * O2 * p) avoids the
-    dark-protein intermediate of M9v1, keeps obs_state_idx=[3,5] consistent with
-    all other scaffolds, and removes the NaN root-cause.
+    Old data (no u_open column): behaves exactly like M5. No new instability possible
+    since the ODE dynamics are unchanged — sink_mask and pinned-O2 gradient explosion
+    are eliminated by design.
 
-    States (8): [R, O2, m, mm, p, pm, DNA, tube_opened]
-    theta (9):  [lam, VTX, VTL, kdm, kmatm, k_ox, c_ox, c_met, kdegp]
+    States (7): [R, O, m, mm, p, pm, DNA]
+    theta (7):  [lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm]
     Observed indices: [3, 5]  (mm, pm)
-
-    Dynamics:
-        dR    = -lam * R
-        dO2   = -(1-tube_opened) * (c_ox * k_ox * O2 * p  +  c_met * O2)
-        dm    =  R * VTX * DNA - (kdm + kmatm) * m
-        dmm   =  kmatm * m - kdm * mm
-        dp    =  R * VTL * (m + mm) - k_ox * O2 * p - kdegp * p
-        dpm   =  k_ox * O2 * p
-        dDNA  = 0  (bolus-driven)
-        dtube = 0  (bolus-driven via u_to_y_jump)
-
-    Post-opening (tube_opened=1): O2 sinks off → O2 pinned at opening value,
-    approximating unlimited O2 influx from air.
 
     For real_only dataset:  gru_u_cols=[0,1,2,3,4,5,6,7,8,9,10,11,12]
     For combined dataset:   gru_u_cols=[0,1,3,4,5,6,7,8,9,10,11,13]
     """
     def __init__(self):
-        super().__init__(P=8, theta_dim=9)
-        self.state_names = ["R", "O2", "m", "mm", "p", "pm", "DNA", "tube_opened"]
-        self.theta_lo_vec = [
-            1e-6,           # lam
-            3e-5, 1e-5,     # VTX, VTL
-            3e-5, 1e-5,     # kdm, kmatm
-            1e-6,           # k_ox (/min/nM) — lo: slow maturation
-            1e-3, 1e-7,     # c_ox (O2 stoichiometry), c_met (metabolic consumption)
-            1e-7,           # kdegp
-        ]
-        self.theta_hi_vec = [
-            5e-4,
-            1.2e-1, 8e-2,
-            1e-2, 3.5e-3,
-            4e-4,           # k_ox hi: eigenvalue-limited (k_ox*O2*dt < 1 at n_substeps=2)
-            1e0, 1e-3,
-            1e-3,
-        ]
+        super().__init__(P=7, theta_dim=7)
+        self.state_names = ["R", "O", "m", "mm", "p", "pm", "DNA"]
+        self.theta_lo_vec = [1e-6, 1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 5e-5]
+        self.theta_hi_vec = [5e-4, 5e-4, 1.2e-1, 1e-2, 8e-2, 3.5e-4, 3.5e-3]
         self.obs_state_idx = [3, 5]
-        self.control_state_map = {"DNA c": 6, "u_open": 7}
+        self.control_state_map = {"DNA c": 6, "u_open": 1}  # u_open boosts O (state 1)
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-        R, O2, m, mm, p, pm, DNA, tube_opened = y.unbind(dim=-1)
-        lam, VTX, VTL, kdm, kmatm, k_ox, c_ox, c_met, kdegp = theta.unbind(dim=-1)
+        R, O, m, mm, p, pm, DNA = y.unbind(dim=-1)
+        lam, lam_O, VTXmax, kdm, VTLmax, kmt, kmatm = theta.unbind(dim=-1)
 
         R_p   = torch.clamp_min(R,   0.0)
-        O2_p  = torch.clamp(O2, 0.0, 500.0)   # ~2× air-saturation bound
+        O_p   = torch.clamp_min(O,   0.0)
         m_p   = torch.clamp_min(m,   0.0)
         mm_p  = torch.clamp_min(mm,  0.0)
         p_p   = torch.clamp_min(p,   0.0)
         DNA_p = torch.clamp_min(DNA, 0.0)
 
+        dR   = -lam * R_p
+        dO   = -lam_O * O_p
+        dm   = R_p * VTXmax * DNA_p - (kdm + kmatm) * m_p
+        dmm  = kmatm * m_p - kdm * mm_p
+        dp   = R_p * VTLmax * (m_p + mm_p) - kmt * p_p
+        dpm  = O_p * kmt * p_p
+        dDNA = torch.zeros_like(DNA)
+
+        return torch.stack((dR, dO, dm, dmm, dp, dpm, dDNA), dim=-1)
+
+
+class TXTLModel9_O2SourceA(MechanisticScaffold):
+    """
+    M9v3a: M5 TX/TL + explicit O2 with air-source term (simple).
+
+    Replaces sink_mask with a positive influx k_in that activates when the tube
+    opens, driving O2 toward equilibrium k_in/c_dep (air saturation).
+    O2 is NOT consumed by maturation — only by background metabolism (c_dep).
+    This decouples the O2 and pm gradient paths, preventing accumulation.
+
+    Pre-opening:  dO2 = -c_dep * O2              (pure depletion)
+    Post-opening: dO2 =  k_in - c_dep * O2       (rises to k_in/c_dep)
+
+    States (8): [R, O2, m, mm, p, pm, DNA, tube_opened]
+    theta  (8): [lam, VTX, VTL, kdm, kmatm, k_ox, k_in, c_dep]
+    Observed: [3, 5]
+    """
+    def __init__(self):
+        super().__init__(P=8, theta_dim=8)
+        self.state_names = ["R", "O2", "m", "mm", "p", "pm", "DNA", "tube_opened"]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-6, 1e-2, 1e-4]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 4e-4, 1e2, 1e0]
+        self.obs_state_idx = [3, 5]
+        self.control_state_map = {"DNA c": 6, "u_open": 7}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O2, m, mm, p, pm, DNA, tube_opened = y.unbind(dim=-1)
+        lam, VTX, VTL, kdm, kmatm, k_ox, k_in, c_dep = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O2_p  = torch.clamp_min(O2,  0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
         open_gate = torch.clamp(tube_opened, 0.0, 1.0)
-        sink_mask = 1.0 - open_gate  # O2 sinks off after tube opens
 
         dR    = -lam * R_p
-        dO2   = -sink_mask * (c_ox * k_ox * O2_p * p_p + c_met * O2_p)
+        dO2   = k_in * open_gate - c_dep * O2_p
         dm    = R_p * VTX * DNA_p - (kdm + kmatm) * m_p
         dmm   = kmatm * m_p - kdm * mm_p
-        dp    = R_p * VTL * (m_p + mm_p) - k_ox * O2_p * p_p - kdegp * p_p
+        dp    = R_p * VTL * (m_p + mm_p) - k_ox * O2_p * p_p
+        dpm   = k_ox * O2_p * p_p
+        dDNA  = torch.zeros_like(DNA)
+        dtube = torch.zeros_like(tube_opened)
+
+        return torch.stack((dR, dO2, dm, dmm, dp, dpm, dDNA, dtube), dim=-1)
+
+
+class TXTLModel9_O2SourceB(MechanisticScaffold):
+    """
+    M9v3b: M5 TX/TL + explicit O2 with air-source term (full stoichiometry).
+
+    Same as M9v3a but maturation also consumes O2 (c_ox mol O2 per mol pm produced).
+    The O2-pm feedback loop self-limits: high p → fast O2 depletion → lower maturation
+    rate → gradient accumulation is naturally bounded. More physically accurate than A.
+
+    dO2 = k_in * open_gate - c_ox * k_ox * O2 * p - c_dep * O2
+    dpm = k_ox * O2 * p
+
+    States (8): [R, O2, m, mm, p, pm, DNA, tube_opened]
+    theta  (9): [lam, VTX, VTL, kdm, kmatm, k_ox, k_in, c_ox, c_dep]
+    Observed: [3, 5]
+    """
+    def __init__(self):
+        super().__init__(P=8, theta_dim=9)
+        self.state_names = ["R", "O2", "m", "mm", "p", "pm", "DNA", "tube_opened"]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-6, 1e-2, 1e-3, 1e-4]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 4e-4, 1e2, 1e0, 1e0]
+        self.obs_state_idx = [3, 5]
+        self.control_state_map = {"DNA c": 6, "u_open": 7}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O2, m, mm, p, pm, DNA, tube_opened = y.unbind(dim=-1)
+        lam, VTX, VTL, kdm, kmatm, k_ox, k_in, c_ox, c_dep = theta.unbind(dim=-1)
+
+        R_p   = torch.clamp_min(R,   0.0)
+        O2_p  = torch.clamp_min(O2,  0.0)
+        m_p   = torch.clamp_min(m,   0.0)
+        mm_p  = torch.clamp_min(mm,  0.0)
+        p_p   = torch.clamp_min(p,   0.0)
+        DNA_p = torch.clamp_min(DNA, 0.0)
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+
+        dR    = -lam * R_p
+        dO2   = k_in * open_gate - c_ox * k_ox * O2_p * p_p - c_dep * O2_p
+        dm    = R_p * VTX * DNA_p - (kdm + kmatm) * m_p
+        dmm   = kmatm * m_p - kdm * mm_p
+        dp    = R_p * VTL * (m_p + mm_p) - k_ox * O2_p * p_p
         dpm   = k_ox * O2_p * p_p
         dDNA  = torch.zeros_like(DNA)
         dtube = torch.zeros_like(tube_opened)
@@ -2990,6 +3052,8 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model8_bg_fixed":         TXTLModel8_BgFixed(),             # + per-resource learned background
     "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),
     "txtl_model9_m5_oxygen":        TXTLModel9_M5Oxygen(),
+    "txtl_model9_o2a":              TXTLModel9_O2SourceA(),   # source term, metabolic drain only
+    "txtl_model9_o2b":              TXTLModel9_O2SourceB(),   # source term, full stoichiometry
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
