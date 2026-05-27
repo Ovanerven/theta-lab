@@ -35,15 +35,6 @@ partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
-_drecipe_loss: &drecipe
-  use_ivtt_mse_loss: false
-  species_weights: {3: 1.25, 5: 1.0}
-  time_upweight: {5: [0.5, 3.0]}
-  lambda_endpoint: 0.1
-  endpoint_channels: [5]
-  loss_normalizer_channels: 3
-  loss_clamp_min: 1.0
-
 _m9_old: &m9ox_old
   # Old npz has U=13; cols 0..12 are valid. u_open will be empty/zero on OLD,
   # so M9's oxygen dynamics are effectively inactive — that's the point.
@@ -78,7 +69,15 @@ fixed:
   y0_theta_init: false
   model_class: ode_rnn
   ckpt_every: 0
-  <<: *drecipe
+
+  # ── d-recipe loss (applied to every run) ──────────────────────────────────
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
 
 runs:
   # ── M7_bg old ──────────────────────────────────────────────────────────

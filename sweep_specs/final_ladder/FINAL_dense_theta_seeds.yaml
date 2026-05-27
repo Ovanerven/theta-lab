@@ -1,40 +1,28 @@
-# Dense-theta seeds 1 & 2 — error bars for the thesis ladder figure.
+# Dense-theta SEED 0 REDO — Block 1 only.
 #
-# Block 0 (s0) is already covered:
-#   M3/M4/M5 real_only s0  → txtl_ladder_native_combined/*_real_s0
-#   M3/M4/M5 comb     s0  → txtl_ladder_native_combined_v3/*_comb_s0
-#   M7_bg    real     s0  → sparse_k_real_then_comb/20260527_004322_M7_bg_real        (R²p 0.485)
-#   M7_bg    comb     s0  → sparse_k_real_then_comb/20260527_020625_M7_bg_boundary    (R²p 0.480, synth_w=1.0)
-#   M8_bg    real     s0  → sparse_k_real_then_comb/20260527_074311_M8_bg_real        (R²p 0.308)
-#   M8_bg    comb     s0  → sparse_k_real_then_comb/20260527_102630_M8_bg_boundary    (in progress, synth_w=null)
-#   M9v3b    real     s0  → good_m9_runs/20260527_174811_M9v3b_real_s0                (R²p 0.483)
-#   M9v3b    comb     s0  → NOT YET RUN — needs Block 0 smoke gate before this sweep
+# Applies the validated {new: 5.0, old: 1.0} source-loss upweight (from
+# experiments/gru_intervention_test/B_loss_upweight5x: R²p 0.243 → 0.409 on M5
+# real-only) and the full d-recipe loss to every run.
 #
-# RUN ORDER (this file):
-#   BLOCK A — Real-only seeds 1, 2 for every scaffold (highest priority).
-#             M7_bg combined inserted right after M7_bg real, since M7's
-#             defining test is the synth-data case.
-#   BLOCK B — Combined seeds 1, 2 for the rest of the scaffolds.
-#             Run M9v3b comb ONLY after the s0 smoke confirms no NaN.
+# RUN ORDER (top → bottom = launch priority):
+#   1. M3 real
+#   2. M4 real
+#   3. M5 real
+#   4. M7_bg combined  (synth=1.0, no downweight — M7's design)
+#   5. M7_bg combined  (synth=0.05, downweight — A/B comparison)
+#   6. M8_bg combined  (synth=1.0, with lambda_zero_traj=0.005)
+#   7. M8_bg combined  (synth=0.05, with lambda_zero_traj=0.005)
+#   8. M9v3b real
 #
-# CANONICAL SCAFFOLDS (must match sparse_k_full_bob.yaml):
-#   M3 → txtl_model3_two_state
-#   M4 → txtl_model4_three_state
-#   M5 → txtl_resource_and_maturation_dna
-#   M7 → txtl_model7_bg_fixed
-#   M8 → txtl_model8_bg_fixed
-#   M9 → txtl_model9_o2b
+# Combined for M3/M4/M5/M9v3b is a SEPARATE followup file:
+#   FINAL_dense_combined_followup.yaml  (launch only after Block 1 lands)
 #
-# Synth weighting (combined regime):
-#   M3/M4/M5/M9 → source_loss_weights: {synth: 0.05}   (downweight, v3-validated)
-#   M7_bg       → source_loss_weights: null            (no-downweight, validated by M7_bg_boundary s0)
-#   M8_bg       → source_loss_weights: null            (matches in-progress M8_bg_boundary s0 — flip to {synth:0.05}
-#                                                       if that s0 result shows synth dominance)
+# Seeds 1, 2 are NOT in this file — rerun rows manually with `seed: 1` etc.
 #
 # Launch:
 #   python launch_sweep.py sweep_specs/final_ladder/FINAL_dense_theta_seeds.yaml \
 #     --local --max-parallel 1 --out-root experiments_final/experiments
-# Outputs land in: experiments_final/experiments/FINAL_dense_theta_seeds/
+# Outputs: experiments_final/experiments/FINAL_dense_theta_seeds/
 
 study: FINAL_dense_theta_seeds
 runs_per_job: 1
@@ -43,21 +31,17 @@ partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
-_comb_loss: &comb
-  use_ivtt_mse_loss: false
-  species_weights: {3: 1.25, 5: 1.0}
-  time_upweight: {5: [0.5, 3.0]}
-  lambda_endpoint: 0.1
-  endpoint_channels: [5]
-  loss_normalizer_channels: 3
-  loss_clamp_min: 1.0
-
+# Real-only regime override (per-run via `<<: *real`).
 _real_only_overrides: &real
   dataset_path: datasets/cell-free/txtl_native_real_only.npz
   use_synthetic_data: false
   balance_source_sampler: false
   test_real_only: false
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
 
+# M9-specific dataset/control overrides (per-run via `<<: *m9ox_real` or `*m9ox_comb`).
 _m9_real: &m9ox_real
   gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   n_substeps: 1
@@ -70,123 +54,100 @@ _m9_comb: &m9ox_comb
   oxygen_protein_channel: 5
   oxygen_u_open_name: "u_open"
 
+# `fixed:` applies to every run. Contains the d-recipe loss block inline (no
+# alias — these fields are global, no need to point at them indirectly).
 fixed:
+  # ── training setup ────────────────────────────────────────────────────────
   epochs: 100
-  endpoint_r2: true
-  obs_idx: [3, 5]
   warmup_epochs: 5
   hidden: 600
-  dataset_path: datasets/cell-free/txtl_native_combined.npz
-  use_synthetic_data: true
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
   val_n: 125
   test_n: 125
-  stratify_z_expr: false
+  model_class: ode_rnn
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+
+  # ── default dataset = combined (real_only runs override via *real) ────────
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
   test_real_only: true
+  balance_source_sampler: true
   stratified_split: true
   stratify_targets: [3, 5]
   stratify_bins: 5
   stratify_by_source: true
-  balance_source_sampler: true
-  source_loss_weights: {synth: 0.05}
+  stratify_z_expr: false
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
-  encoder_use_log_dt: true
-  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-  plot_extra_new_samples: 5
-  ckpt_every: 0
-  y0_theta_init: false
-  model_class: ode_rnn
-  <<: *comb
+
+  # ── d-recipe loss (applied to every run) ──────────────────────────────────
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+  # ── combined default source weights (real_only overrides this) ────────────
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+    synth: 0.05
 
 runs:
-  # ═══════════════════════════════════════════════════════════════════════════
-  # BLOCK A — REAL-ONLY seeds 1 & 2 (+ M7_bg combined as showcase)
-  # Real first because real-only is the headline ladder figure.
-  # ═══════════════════════════════════════════════════════════════════════════
+  - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1, <<: *real}
+  - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1, <<: *real}
+  - {exp_name: M5_real_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1, <<: *real}
 
-  # ── M3 real ──────────────────────────────────────────────────────────────
-  - {exp_name: M3_real_s1, scaffold: txtl_model3_two_state, seed: 1, n_substeps: 1, <<: *real}
-  - {exp_name: M3_real_s2, scaffold: txtl_model3_two_state, seed: 2, n_substeps: 1, <<: *real}
-
-  # ── M4 real ──────────────────────────────────────────────────────────────
-  - {exp_name: M4_real_s1, scaffold: txtl_model4_three_state, seed: 1, n_substeps: 1, <<: *real}
-  - {exp_name: M4_real_s2, scaffold: txtl_model4_three_state, seed: 2, n_substeps: 1, <<: *real}
-
-  # ── M5 real ──────────────────────────────────────────────────────────────
-  - {exp_name: M5_real_s1, scaffold: txtl_resource_and_maturation_dna, seed: 1, n_substeps: 1, <<: *real}
-  - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1, <<: *real}
-
-  # ── M7_bg real ───────────────────────────────────────────────────────────
-  - {exp_name: M7_bg_real_s1, scaffold: txtl_model7_bg_fixed, seed: 1, n_substeps: 1, <<: *real}
-  - {exp_name: M7_bg_real_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1, <<: *real}
-
-  # ── M7_bg combined (no-downweight — M7's defining test) ─────────────────
-  # Mirrors canonical M7_bg_boundary s0: synth weight = 1.0 (source_loss_weights: null).
-  - exp_name: M7_bg_boundary_s1
+  # ── M7_bg combined A/B: synth=1.0 (no downweight) vs synth=0.05 ──────────
+  - exp_name: M7_bg_comb_synth1_s0
     scaffold: txtl_model7_bg_fixed
-    seed: 1
+    seed: 0
     n_substeps: 1
-    source_loss_weights: null
     lambda_zero_traj: 0.005
-  - exp_name: M7_bg_boundary_s2
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 1.0          # full-weight synth (M7 was designed for synth data)
+
+  - exp_name: M7_bg_comb_synth005_s0
     scaffold: txtl_model7_bg_fixed
-    seed: 2
+    seed: 0
     n_substeps: 1
-    source_loss_weights: null
     lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 0.05         # heavy downweight (matches M3/M4/M5/M9 recipe)
 
-  # ── M8_bg real ───────────────────────────────────────────────────────────
-  - {exp_name: M8_bg_real_s1, scaffold: txtl_model8_bg_fixed, seed: 1, n_substeps: 2, <<: *real}
-  - {exp_name: M8_bg_real_s2, scaffold: txtl_model8_bg_fixed, seed: 2, n_substeps: 2, <<: *real}
-
-  # ── M9v3b real ───────────────────────────────────────────────────────────
-  - exp_name: M9v3b_real_s1
-    scaffold: txtl_model9_o2b
-    seed: 1
-    <<: [*real, *m9ox_real]
-  - exp_name: M9v3b_real_s2
-    scaffold: txtl_model9_o2b
-    seed: 2
-    <<: [*real, *m9ox_real]
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # BLOCK B — COMBINED seeds 1 & 2 (real + synth, downweighted except M7)
-  # M7_bg combined is already in Block A above.
-  # M9v3b comb requires s0 smoke (post-NaN-fix) to pass first.
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  # ── M3 comb ──────────────────────────────────────────────────────────────
-  - {exp_name: M3_comb_s1, scaffold: txtl_model3_two_state, seed: 1, n_substeps: 1}
-  - {exp_name: M3_comb_s2, scaffold: txtl_model3_two_state, seed: 2, n_substeps: 1}
-
-  # ── M4 comb ──────────────────────────────────────────────────────────────
-  - {exp_name: M4_comb_s1, scaffold: txtl_model4_three_state, seed: 1, n_substeps: 1}
-  - {exp_name: M4_comb_s2, scaffold: txtl_model4_three_state, seed: 2, n_substeps: 1}
-
-  # ── M5 comb ──────────────────────────────────────────────────────────────
-  - {exp_name: M5_comb_s1, scaffold: txtl_resource_and_maturation_dna, seed: 1, n_substeps: 1}
-  - {exp_name: M5_comb_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1}
-
-  # ── M8_bg comb (synth_w=null to mirror s0; flip to 0.05 if s0 underperforms) ─
-  - exp_name: M8_bg_boundary_s1
+  # ── M8_bg combined A/B: synth=1.0 vs synth=0.05, both with L_zero ────────
+  - exp_name: M8_bg_comb_synth1_s0
     scaffold: txtl_model8_bg_fixed
-    seed: 1
+    seed: 0
     n_substeps: 2
-    source_loss_weights: null
     lambda_zero_traj: 0.005
-  - exp_name: M8_bg_boundary_s2
-    scaffold: txtl_model8_bg_fixed
-    seed: 2
-    n_substeps: 2
-    source_loss_weights: null
-    lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 1.0
 
-  # ── M9v3b comb — GATED on s0 smoke completing without NaN ───────────────
-  - exp_name: M9v3b_comb_s1
+  - exp_name: M8_bg_comb_synth005_s0
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    n_substeps: 2
+    lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 0.05
+
+  - exp_name: M9v3b_real_s0
     scaffold: txtl_model9_o2b
-    seed: 1
-    <<: *m9ox_comb
-  - exp_name: M9v3b_comb_s2
-    scaffold: txtl_model9_o2b
-    seed: 2
-    <<: *m9ox_comb
+    seed: 0
+    <<: [*real, *m9ox_real]

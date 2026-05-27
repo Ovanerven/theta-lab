@@ -44,20 +44,15 @@ partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
-_comb_loss: &comb
-  use_ivtt_mse_loss: false
-  species_weights: {3: 1.25, 5: 1.0}
-  time_upweight: {5: [0.5, 3.0]}
-  lambda_endpoint: 0.1
-  endpoint_channels: [5]
-  loss_normalizer_channels: 3
-  loss_clamp_min: 1.0
-
 _real_only_overrides: &real
   dataset_path: datasets/cell-free/txtl_native_real_only.npz
   use_synthetic_data: false
   balance_source_sampler: false
   test_real_only: false
+  # Validated new-upweight intervention (B_loss_upweight5x: R²p 0.243 → 0.409).
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
 
 _m9_real: &m9ox_real
   gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
@@ -90,7 +85,11 @@ fixed:
   stratify_bins: 5
   stratify_by_source: true
   balance_source_sampler: true
-  source_loss_weights: {synth: 0.05}
+  # Combined default: new-upweight + synth-downweight.
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+    synth: 0.05
   subtract_channel_min: true
   subtract_channel_min_cols: [3, 5]
   encoder_use_log_dt: true
@@ -100,7 +99,15 @@ fixed:
   y0_theta_init: false
   model_class: ode_rnn_sparse_theta_v2
   anchor_mode: uniform
-  <<: *comb
+
+  # ── d-recipe loss (applied to every run) ──────────────────────────────────
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
 
 runs:
   # ═══════════════════════════════════════════════════════════════════════════
@@ -171,6 +178,7 @@ runs:
   # scaffold where comb sparse-K is informative.
   # ═══════════════════════════════════════════════════════════════════════════
 
-  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}
-  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}
-  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}
+  # M7_bg combined K: full-weight synth (per M7's design), new-upweight retained.
+  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
