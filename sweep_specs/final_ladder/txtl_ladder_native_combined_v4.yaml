@@ -118,17 +118,30 @@ runs:
 
   # ── REAL_ONLY FIRST ──────────────────────────────────────────────────────
 
+  # M9v2: M5+bolus — u_open adds +1 to abstract O via u_to_y_jump, no explicit O2 state
+  - exp_name: M9v2_real_s0
+    scaffold: txtl_model9_m5_oxygen
+    seed: 0
+    <<: [*comb, *real, *m9v2_real]
+
+  # M9v3a: explicit O2 + source term, metabolic drain only
   - exp_name: M9v3a_real_s0
     scaffold: txtl_model9_o2a
     seed: 0
     <<: [*comb, *real, *m9v3_real]
 
+  # M9v3b: explicit O2 + source term, maturation also consumes O2
   - exp_name: M9v3b_real_s0
     scaffold: txtl_model9_o2b
     seed: 0
     <<: [*comb, *real, *m9v3_real]
 
   # ── COMBINED SECOND ──────────────────────────────────────────────────────
+
+  - exp_name: M9v2_comb_s0
+    scaffold: txtl_model9_m5_oxygen
+    seed: 0
+    <<: [*m9v2_comb]
 
   - exp_name: M9v3a_comb_s0
     scaffold: txtl_model9_o2a
