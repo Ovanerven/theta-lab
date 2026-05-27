@@ -1,39 +1,31 @@
-# M7 / M8 tex-faithful sweep — 4 runs × 20 epochs.
+# M7 / M8 background-fix sweep — 4 runs × 100 epochs.
 #
-# Purpose: test the two fixes identified from new_scaffolds.tex that were
-# MISSING from the first fix-comparison sweep:
+# Root cause of M7/M8 underfitting (train loss ~2.5 vs M5's 0.28):
+#   ~16% real samples have K-Glut=0 bolus but still express (background K from
+#   lysate). Gate g_K = K_p/(K_K + K_p) → 0 when K_p=0 regardless of K_K.
+#   Model predicts mm=pm=0 for those samples → structural loss floor.
 #
-#   Fix A (M7) — lambda_zero_traj=0.005
-#     The tex (§7, lines 585–610) says M7's core mechanism is a boundary
-#     classification loss L_zero that penalises predicted mm/pm on synthetic
-#     kill samples (z_expr=0). Without it M7 is just M5 with Michaelis gates.
-#     Requires the COMBINED dataset (real_only has zero z_expr=0 samples).
-#     The old major-model sweep used lambda_zero_traj=0.005 for M7.
+# Fix: M7_bg_fixed / M8_bg_fixed add learned per-reagent background offsets
+#   to theta so gates use (bolus + bg) instead of raw bolus. The GRU encoder
+#   learns sample-specific backgrounds. DNA-absent synth kills still work
+#   via the DNA_p=0 term in dm/dp, independent of g_expr.
 #
-#   Fix B (M8) — peaked Mg/K inhibitory gates
-#     The tex (§8, lines 723–729) specifies a bell-shaped f_Mg / f_K:
-#       f_Mg = (Mg/(K_Mg+Mg)) × (K_iMg²/(K_iMg²+Mg²))
-#     Current M8 only uses plain saturation → cannot distinguish
-#     "saturated-good" from "inhibitory-overdose" (soft_high_Mg/K conditions).
-#     Scaffold: txtl_model8_peaked_fixed  (theta_dim 16→18; new K_iMg, K_iK).
+# 4 runs:
+#   M7_bg_real      — background fix, real_only         (does bg alone fix M7?)
+#   M7_bg_boundary  — background fix, combined+L_zero   (full M7 fix; also running locally)
+#   M8_bg_real      — same background fix for M8        (same root cause)
+#   [M8_bg_boundary deferred — n_substeps=2 slow; test real_only first]
 #
-# Runs (4 total):
-#   M7_fixed_real      — M7_fixed, real_only, no zero_traj  (reference: what
-#                        we already tested; included here for same-run context)
-#   M7_fixed_boundary  — M7_fixed, combined,  lambda_zero_traj=0.005
-#   M8_fixed_real      — M8_fixed (plain gates), real_only   (prior reference)
-#   M8_peaked_real     — M8_peaked_fixed, real_only           (NEW peaked gates)
-#
-# NOTE: M7_fixed_boundary uses the combined dataset specifically to activate
-# the boundary loss — synth samples provide the z_expr=0 kill labels.
-# balance_source_sampler=true upweights real samples to counteract synth bulk.
+# Compare against v3 baselines:
+#   M7_fixed_real  R²_pm=-0.24  (no bg fix, real_only)
+#   M8_fixed_real  best_val=2.69 (no bg fix, real_only)
 #
 # Run on cluster:
 #   python launch_sweep.py sweep_specs/m7_m8_tex_faithful.yaml
 
 study: m7_m8_tex_faithful
 runs_per_job: 1
-time: "01:00:00"
+time: "02:00:00"
 partition: gpu_a100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
@@ -47,8 +39,21 @@ _drecipe: &drecipe
   loss_normalizer_channels: 3
   loss_clamp_min: 1.0
 
+_real_only: &real_only
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+
+_combined_boundary: &combined_boundary
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  balance_source_sampler: true
+  lambda_zero_traj: 0.005
+  test_real_only: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
 fixed:
-  epochs: 20
+  epochs: 100
   warmup_epochs: 3
   batch_size: 100
   lr: 0.002
@@ -80,44 +85,30 @@ fixed:
   <<: *drecipe
 
 runs:
-  # ── M7: reference (real_only, no boundary loss) ───────────────────────────
-  # Repeats the M7_fixed result from the first sweep in this sweep's context.
-  - exp_name: M7_fixed_real
-    scaffold: txtl_model7_fixed
+  # ── M7: background fix, real_only ─────────────────────────────────────────
+  # Key question: does the background fix alone get M7 training loss unstuck?
+  - exp_name: M7_bg_real
+    scaffold: txtl_model7_bg_fixed
     n_substeps: 1
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    use_synthetic_data: false
-    balance_source_sampler: false
+    <<: *real_only
 
-  # ── M7: tex-faithful (combined dataset + kill-boundary loss) ─────────────
-  # lambda_zero_traj activates L_zero on z_expr=0 (synth kill) samples.
-  # balance_source_sampler upweights real samples vs synth bulk.
-  # Combined dataset has 14 control cols (adds is_new@12, u_open@13);
-  # gru_u_cols override keeps the same 11 reagent inputs, skips is_new/u_open.
-  - exp_name: M7_fixed_boundary
-    scaffold: txtl_model7_fixed
+  # ── M7: background fix + combined + L_zero (full fix) ─────────────────────
+  # Also running locally for early signal; this queues the cluster version.
+  - exp_name: M7_bg_boundary
+    scaffold: txtl_model7_bg_fixed
     n_substeps: 1
-    dataset_path: datasets/cell-free/txtl_native_combined.npz
-    use_synthetic_data: true
-    balance_source_sampler: true
-    lambda_zero_traj: 0.005
-    test_real_only: true
-    gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    <<: *combined_boundary
 
-  # ── M8: reference (real_only, plain saturation gates) ────────────────────
-  - exp_name: M8_fixed_real
-    scaffold: txtl_model8_fixed
+  # ── M8: background fix, real_only ─────────────────────────────────────────
+  # Same root cause as M7 (K-Glut=0 → f_K=0 → v_TX=v_TL=0).
+  # M8_bg_fixed adds E_bg, A_bg, Mg_bg, K_bg, C_bg to theta (theta_dim 16→21).
+  - exp_name: M8_bg_real
+    scaffold: txtl_model8_bg_fixed
     n_substeps: 2
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    use_synthetic_data: false
-    balance_source_sampler: false
+    <<: *real_only
 
-  # ── M8: tex-faithful (peaked Mg/K inhibitory gates) ──────────────────────
-  # txtl_model8_peaked_fixed adds K_iMg and K_iK (theta_dim 16→18).
-  # Real_only first — if peaked gates help here, also run on combined.
-  - exp_name: M8_peaked_real
-    scaffold: txtl_model8_peaked_fixed
+  # ── M8: background fix + combined ─────────────────────────────────────────
+  - exp_name: M8_bg_boundary
+    scaffold: txtl_model8_bg_fixed
     n_substeps: 2
-    dataset_path: datasets/cell-free/txtl_native_real_only.npz
-    use_synthetic_data: false
-    balance_source_sampler: false
+    <<: *combined_boundary

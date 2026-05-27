@@ -1,0 +1,237 @@
+# Combined OLD+NEW+SYNTH ladder — v4
+#
+# Picks up where v3 left off. v3 was cancelled mid-run partway through Block 2
+# (M8_fixed_comb had just started; M7_fixed_boundary probably completed).
+#
+# WHAT CHANGED vs v3:
+#   - M9 scaffold NaN fix: P_dark and O2 upper bounds added (scaffolds.py)
+#     Root cause: post-opening P_dark* = k_fold*p/k_deg_dark could reach ~35000×p
+#     → P_fluor overflows → NaN. Clamp P_dark≤1e4 prevents this.
+#   - M9_comb_s0 moved to Block 1 (FIRST) — priority per user request
+#   - M9_O0.1_s0 re-run after the NaN fix
+#   - Removed all sparse-K runs (covered by separate sweeps):
+#       sparse_k_real_then_comb (Mac Mini): M3/M4/M5/M7_fixed/M8_fixed/M9 sparse-K
+#       m7_m8_bg_sparse_k (Bob):           M7_bg/M8_bg sparse-K
+#
+# WHAT ALREADY RAN IN v3 (commented out, do not re-run unless noted):
+#   Block 1 real_only: M7_fixed_real, M8_fixed_real, M8_peaked_real,
+#                      M9_B_s0, M9_O0.1_s0 (NaN at ep72 — re-run below with fix)
+#   Block 2 combined:  M3_comb_s0, M4_comb_s0, M5_comb_s0,
+#                      M7_comb_s0 (broken scaffold but ran for comparison),
+#                      M7_fixed_comb_w1, M7_fixed_boundary (probably completed)
+#
+# MISSING FROM v3 (active runs here):
+#   M9_comb_s0    — M9 dense combined (never ran)
+#   M8_fixed_comb — M8 fixed dense combined (cancelled mid-run)
+#   M8_peaked_comb — M8 peaked dense combined (never ran)
+#   M9_O0.1_s0   — re-run with NaN fix (original had R²(pm)=0.12, NaN at ep72)
+#
+# Run on Bob's machine:
+#   python launch_sweep.py sweep_specs/final_ladder/txtl_ladder_native_combined_v4.yaml --local --max-parallel 2
+
+study: txtl_ladder_native_combined_v4
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_comb_loss: &comb
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  balance_source_sampler: false
+  test_real_only: false
+
+_m9_oxygen_realonly: &m9ox_real
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  n_substeps: 2
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+_m9_oxygen_comb: &m9ox_comb
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+  n_substeps: 2
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  balance_source_sampler: true
+  source_loss_weights: {synth: 0.05}
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn
+  <<: *comb
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 1 — Missing runs (HIGHEST PRIORITY)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── REAL_ONLY FIRST ──────────────────────────────────────────────────────
+
+  # M9 v2 (M5+oxygen) — real_only  [FIRST PRIORITY]
+  # New scaffold: M5 resource-pool TX/TL + dissolved-O2 maturation + tube-open.
+  # obs_state_idx=[3,5] — consistent with all other models.
+  - exp_name: M9v2_real_s0
+    scaffold: txtl_model9_m5_oxygen
+    seed: 0
+    n_substeps: 2
+    lambda_oxygen: 0.1
+    <<: [*comb, *real, *m9ox_real]
+
+  # M9 v1 real_only re-run with NaN fix
+  # Original M9_O0.1_s0 (v3) stopped at ep72 with NaN; R²(pm)=0.12.
+  # Root cause fixed: P_dark upper bound clamp added to scaffolds.py.
+  - exp_name: M9_O0.1_real_v4
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    lambda_oxygen: 0.1
+    <<: [*comb, *real, *m9ox_real]
+
+  # ── COMBINED SECOND ──────────────────────────────────────────────────────
+
+  # M9 v2 (M5+oxygen) — combined
+  - exp_name: M9v2_comb_s0
+    scaffold: txtl_model9_m5_oxygen
+    seed: 0
+    n_substeps: 2
+    lambda_oxygen: 0.1
+    <<: [*m9ox_comb]
+
+  # M9 v1 combined (never ran in v3)
+  - exp_name: M9_comb_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    lambda_oxygen: 0.1
+    <<: [*m9ox_comb]
+
+  # M8_fixed_comb: removed — superseded by M8_bg_boundary in sparse_k_real_then_comb.
+  # M8_peaked_comb: removed — M8_peaked_real stopped at ep20 (NaN), best val=2.885,
+  #                 pm~6-7 throughout. Bell-shaped gates made M8 worse, not better.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SPARSE-K FOLLOW-UP — uncomment the winner after dense runs above finish
+  #
+  # M9v1 (oxygen_dark) sparse-K is already covered by sparse_k_real_then_comb
+  # (Mac Mini) — do NOT add it here again.
+  #
+  # Uncomment whichever scaffold performed best in the dense runs above:
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── [OPTION A] M9v2 (m5_oxygen) sparse-K — uncomment if M9v2 wins ────────
+  # real_only first, combined second (same priority order as the dense block).
+
+  # - {exp_name: M9v2_K1_real_s0, scaffold: txtl_model9_m5_oxygen, seed: 0, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 1, n_substeps: 2, lambda_oxygen: 0.1, <<: [*comb, *real, *m9ox_real]}
+  # - {exp_name: M9v2_K3_real_s0, scaffold: txtl_model9_m5_oxygen, seed: 0, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 3, n_substeps: 2, lambda_oxygen: 0.1, <<: [*comb, *real, *m9ox_real]}
+  # - {exp_name: M9v2_K6_real_s0, scaffold: txtl_model9_m5_oxygen, seed: 0, model_class: ode_rnn_sparse_theta_v2, anchor_mode: uniform, n_theta_anchors: 6, n_substeps: 2, lambda_oxygen: 0.1, <<: [*comb, *real, *m9ox_real]}
+  # - exp_name: M9v2_K1_comb_s0
+  #   scaffold: txtl_model9_m5_oxygen
+  #   seed: 0
+  #   model_class: ode_rnn_sparse_theta_v2
+  #   anchor_mode: uniform
+  #   n_theta_anchors: 1
+  #   n_substeps: 2
+  #   lambda_oxygen: 0.1
+  #   <<: [*m9ox_comb]
+  # - exp_name: M9v2_K3_comb_s0
+  #   scaffold: txtl_model9_m5_oxygen
+  #   seed: 0
+  #   model_class: ode_rnn_sparse_theta_v2
+  #   anchor_mode: uniform
+  #   n_theta_anchors: 3
+  #   n_substeps: 2
+  #   lambda_oxygen: 0.1
+  #   <<: [*m9ox_comb]
+  # - exp_name: M9v2_K6_comb_s0
+  #   scaffold: txtl_model9_m5_oxygen
+  #   seed: 0
+  #   model_class: ode_rnn_sparse_theta_v2
+  #   anchor_mode: uniform
+  #   n_theta_anchors: 6
+  #   n_substeps: 2
+  #   lambda_oxygen: 0.1
+  #   <<: [*m9ox_comb]
+
+  # ── [OPTION B] M9v1 (oxygen_dark) sparse-K — already in sparse_k_real_then_comb ──
+  # Do NOT add here — would duplicate Mac Mini runs. Check those results instead.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ALREADY RAN IN v3 — do not re-run
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── Block 1 real_only (all completed in v3) ───────────────────────────────
+  # - exp_name: M7_fixed_real        # R² see v3 results
+  #   scaffold: txtl_model7_fixed
+  #   seed: 0
+  #   n_substeps: 1
+  #   <<: [*comb, *real]
+  # - exp_name: M8_fixed_real
+  #   scaffold: txtl_model8_fixed
+  #   seed: 0
+  #   n_substeps: 2
+  #   <<: [*comb, *real]
+  # - exp_name: M8_peaked_real
+  #   scaffold: txtl_model8_peaked_fixed
+  #   seed: 0
+  #   n_substeps: 2
+  #   <<: [*comb, *real]
+  # - exp_name: M9_B_s0              # lambda_oxygen=0 baseline
+  #   scaffold: txtl_model9_oxygen_dark
+  #   seed: 0
+  #   <<: [*comb, *real, *m9ox_real]
+  # - exp_name: M9_O0.1_s0           # NaN at ep72; re-run above as M9_O0.1_real_v4
+  #   scaffold: txtl_model9_oxygen_dark
+  #   seed: 0
+  #   lambda_oxygen: 0.1
+  #   <<: [*comb, *real, *m9ox_real]
+
+  # ── Block 2 combined (all completed in v3 except M8_fixed_comb) ──────────
+  # - {exp_name: M3_comb_s0, scaffold: txtl_model3_two_state,            seed: 0, <<: *comb}
+  # - {exp_name: M4_comb_s0, scaffold: txtl_model4_three_state,          seed: 0, <<: *comb}
+  # - {exp_name: M5_comb_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, <<: *comb}
+  # - {exp_name: M7_comb_s0, scaffold: txtl_model7_boundary_gated,       seed: 0, <<: *comb}  # broken but ran
+  # - exp_name: M7_fixed_comb_w1     # synth w=1.0 ablation
+  #   scaffold: txtl_model7_fixed
+  #   seed: 0
+  #   n_substeps: 1
+  #   use_synthetic_data: true
+  #   source_loss_weights: {synth: 1.0}
+  #   <<: *comb
+  # - exp_name: M7_fixed_boundary    # probably completed in v3 — verify log before re-running
+  #   scaffold: txtl_model7_fixed
+  #   seed: 0
+  #   n_substeps: 1
+  #   use_synthetic_data: true
+  #   lambda_zero_traj: 0.005
+  #   <<: *comb
+
+  # ── Sparse-K — NOT HERE (covered by separate sweeps) ─────────────────────
+  # sparse_k_real_then_comb (Mac Mini): M3/M4/M5/M7_fixed/M8_fixed/M9 × K=1,3,6
+  # m7_m8_bg_sparse_k (Bob, after this): M7_bg/M8_bg × K=1,3,6

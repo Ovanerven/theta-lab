@@ -113,6 +113,7 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
 
     true_final, pred_final = [], []
     true_max,   pred_max   = [], []
+    sources = []
     n_skipped_synth = 0
 
     # When the dataset carries a z_expr label (combined real + synthetic no-go
@@ -122,7 +123,8 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
     # real-data fit quality. The subset itself still iterates everything; we
     # just skip the synth rows here.
     raw_ds = subset.dataset if isinstance(subset, torch.utils.data.Subset) else subset
-    z_expr_arr = getattr(raw_ds, "z_expr", None)
+    z_expr_arr  = getattr(raw_ds, "z_expr",  None)
+    source_arr  = getattr(raw_ds, "source",  None)  # 0=old, 1=new real data
     subset_indices = (list(subset.indices) if isinstance(subset, torch.utils.data.Subset)
                       else list(range(len(raw_ds))))
     # Variable-length datasets pad y_seq to K with zeros past lengths[i]. Reading
@@ -166,6 +168,8 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
             pred_final.append(p_np[L_i - 1, p_idx])
             true_max.append(y_np[:L_i, m_idx_data].max())
             pred_max.append(p_np[:L_i, m_idx].max())
+            src = int(source_arr[global_i]) if source_arr is not None else -1
+            sources.append(src)
 
     if n_skipped_synth:
         print(f"  endpoint_r2: skipped {n_skipped_synth} synthetic no-go samples; "
@@ -178,6 +182,7 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
         "pred_protein_final": np.array(pred_final),
         "true_mrna_max":      np.array(true_max),
         "pred_mrna_max":      np.array(pred_max),
+        "sources":            np.array(sources, dtype=np.int32),
     }
 
 
@@ -229,18 +234,112 @@ def plot_endpoints(results: list[dict], protein_sp: str, mrna_sp: str,
     print(f"Saved plot -> {out_path}")
 
 
+def plot_endpoints_by_source(result: dict, protein_sp: str, mrna_sp: str,
+                             split: str, out_path: Path) -> None:
+    """Scatter plot coloured by data source (old=blue, new=orange)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sources = result.get("sources")
+    if sources is None or not np.any(sources >= 0):
+        return  # no source info available
+
+    src_styles = {0: ("old", "#1f77b4"), 1: ("new", "#ff7f0e")}
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
+
+    panels = [
+        (axes[0], "true_protein_final", "pred_protein_final",
+         f"Protein final yield ({protein_sp})"),
+        (axes[1], "true_mrna_max", "pred_mrna_max",
+         f"mRNA max ({mrna_sp})"),
+    ]
+
+    for ax, tkey, pkey, title in panels:
+        all_vals = []
+        for src_id, (src_name, color) in src_styles.items():
+            mask = sources == src_id
+            if mask.sum() < 2:
+                continue
+            t, p = result[tkey][mask], result[pkey][mask]
+            r2_val = r2(t, p)
+            ax.scatter(t, p, s=30, alpha=0.8, color=color,
+                       edgecolors="white", linewidths=0.4,
+                       label=f"{src_name}  R²={r2_val:.3f}  (n={mask.sum()})")
+            all_vals.extend(t); all_vals.extend(p)
+
+        # overall R² line
+        t_all = result[tkey][sources >= 0]
+        p_all = result[pkey][sources >= 0]
+        if len(t_all) >= 2:
+            r2_all = r2(t_all, p_all)
+            ax.set_title(f"{title}\noverall R²={r2_all:.3f}")
+
+        if all_vals:
+            lo, hi = float(min(all_vals)), float(max(all_vals))
+            pad = 0.05 * (hi - lo if hi > lo else max(abs(hi), 1.0))
+            lo, hi = lo - pad, hi + pad
+            ax.plot([lo, hi], [lo, hi], "k--", lw=1, alpha=0.5)
+            ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
+
+        ax.set_xlabel("true"); ax.set_ylabel("predicted")
+        ax.grid(True, alpha=0.25)
+        ax.set_aspect("equal", adjustable="box")
+        ax.legend(fontsize=9, loc="best")
+
+    fig.suptitle(f"Endpoint predictions by source  ({split} split)", fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved plot -> {out_path}")
+
+
+def r2_by_source(result: dict) -> dict[int, dict[str, float]]:
+    """Return {src_id: {r2_protein, r2_mrna, n}} for each source present."""
+    sources = result.get("sources")
+    if sources is None:
+        return {}
+    out = {}
+    for src_id in np.unique(sources[sources >= 0]):
+        mask = sources == src_id
+        if mask.sum() < 2:
+            continue
+        out[int(src_id)] = {
+            "r2_protein": float(r2(result["true_protein_final"][mask],
+                                   result["pred_protein_final"][mask])),
+            "r2_mrna":    float(r2(result["true_mrna_max"][mask],
+                                   result["pred_mrna_max"][mask])),
+            "n":          int(mask.sum()),
+        }
+    return out
+
+
 def save_r2_cache(exp_dir: Path, result: dict, r2_protein: float, r2_mrna: float) -> None:
     import csv
+    by_src = r2_by_source(result)
+    src_names = {0: "old", 1: "new"}
+    fieldnames = ["run", "n", "r2_protein_final", "r2_mrna_max"]
+    for src_id, src_name in src_names.items():
+        if src_id in by_src:
+            fieldnames += [f"r2_protein_{src_name}", f"r2_mrna_{src_name}", f"n_{src_name}"]
     cache = exp_dir / "r2_cache.csv"
     with open(cache, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["run", "n", "r2_protein_final", "r2_mrna_max"])
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerow({
+        row = {
             "run": exp_dir.name,
             "n": result["n"],
             "r2_protein_final": f"{r2_protein:.8f}",
             "r2_mrna_max": f"{r2_mrna:.8f}",
-        })
+        }
+        for src_id, src_name in src_names.items():
+            if src_id in by_src:
+                s = by_src[src_id]
+                row[f"r2_protein_{src_name}"] = f"{s['r2_protein']:.8f}"
+                row[f"r2_mrna_{src_name}"]    = f"{s['r2_mrna']:.8f}"
+                row[f"n_{src_name}"]           = s["n"]
+        writer.writerow(row)
 
 
 def print_table(results: list[dict], protein_sp: str, mrna_sp: str) -> None:

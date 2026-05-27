@@ -2568,15 +2568,34 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             print(f"  R²(protein final) = {r2_protein:.4f}")
             print(f"  R²(mRNA max)      = {r2_mrna:.4f}")
 
+            # Stratified R² by data source (old=0, new=1) — analysis only,
+            # does not affect training or model selection.
+            src_names = {0: "old", 1: "new"}
+            by_src = endpoint_r2.r2_by_source(result)
+            for src_id, src_name in src_names.items():
+                if src_id in by_src:
+                    s = by_src[src_id]
+                    print(f"  R²(protein final) [{src_name:3s}] = {s['r2_protein']:.4f}  (n={s['n']})")
+                    print(f"  R²(mRNA max)      [{src_name:3s}] = {s['r2_mrna']:.4f}")
+
             out_path = exp_dir / "endpoint_r2.png"
             endpoint_r2.plot_endpoints(
                 [result], protein_sp="pm", mrna_sp="mm", split="test", out_path=out_path
+            )
+            endpoint_r2.plot_endpoints_by_source(
+                result, protein_sp="pm", mrna_sp="mm", split="test",
+                out_path=exp_dir / "endpoint_r2_by_source.png",
             )
             endpoint_r2.save_r2_cache(exp_dir, result, r2_protein, r2_mrna)
 
             if wandb_run is not None:
                 wandb_run.summary["endpoint_r2/protein_final"] = float(r2_protein)
                 wandb_run.summary["endpoint_r2/mrna_max"]      = float(r2_mrna)
+                for src_id, src_name in src_names.items():
+                    if src_id in by_src:
+                        s = by_src[src_id]
+                        wandb_run.summary[f"endpoint_r2/protein_{src_name}"] = s["r2_protein"]
+                        wandb_run.summary[f"endpoint_r2/mrna_{src_name}"]    = s["r2_mrna"]
         except Exception as e:
             print(f"[endpoint_r2] failed: {e}")
 

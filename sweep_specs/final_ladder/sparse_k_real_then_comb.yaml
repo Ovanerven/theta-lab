@@ -1,0 +1,229 @@
+# Overnight sweep: M7/M8 background-fix dense runs FIRST, then sparse-K ladder.
+#
+# BLOCK 0 — M7/M8 background fix (4 dense runs, highest priority)
+#   Root cause of M7/M8 underfitting: ~16% real samples K-Glut=0 → g_K=0 →
+#   model predicts mm=pm=0 for those samples (loss floor at ~2.5 vs M5 0.28).
+#   Fix: _bg_fixed scaffolds add learned per-reagent background offsets to theta.
+#     M7_bg_real      — M7 bg fix, real_only
+#     M7_bg_boundary  — M7 bg fix + combined + L_zero (lambda_zero_traj=0.005)
+#     M8_bg_real      — M8 bg fix, real_only (same root cause)
+#     M8_bg_boundary  — M8 bg fix + combined + L_zero
+#
+# BLOCK 1 — Sparse-K, real_only, s0 (M3/M4/M5/M7_fixed/M8_fixed/M9 × K=1,3,6)
+# BLOCK 2 — Sparse-K, combined,  s0 (same scaffolds × K=1,3,6)
+#
+# Run on cluster:
+#   python launch_sweep.py sweep_specs/final_ladder/sparse_k_real_then_comb.yaml
+
+study: sparse_k_real_then_comb
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_comb_loss: &comb
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+
+_m9_real: &m9ox_real
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  n_substeps: 2
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+_m9_comb: &m9ox_comb
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+  n_substeps: 2
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  balance_source_sampler: true
+  source_loss_weights: {synth: 0.05}
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn_sparse_theta_v2
+  anchor_mode: uniform
+  <<: *comb
+
+runs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 0 — M7/M8 background-fix dense runs  [HIGHEST PRIORITY]
+  # model_class: ode_rnn overrides the sparse-theta-v2 default in fixed block.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - exp_name: M7_bg_real
+    scaffold: txtl_model7_bg_fixed
+    seed: 0
+    model_class: ode_rnn
+    n_substeps: 1
+    <<: *real
+
+  - exp_name: M7_bg_boundary
+    scaffold: txtl_model7_bg_fixed
+    seed: 0
+    model_class: ode_rnn
+    n_substeps: 1
+    lambda_zero_traj: 0.005
+
+  - exp_name: M8_bg_real
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    model_class: ode_rnn
+    n_substeps: 2
+    <<: *real
+
+  - exp_name: M8_bg_boundary
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    model_class: ode_rnn
+    n_substeps: 2
+    lambda_zero_traj: 0.005
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 1 — Sparse-K, real_only, s0  [run after Block 0]
+  # val/test both from real data; no synth in training.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── K=1 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K1_real_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 1, <<: *real}
+  - {exp_name: M4_K1_real_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 1, <<: *real}
+  - {exp_name: M5_K1_real_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 1, <<: *real}
+  - {exp_name: M7_K1_real_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 1, n_substeps: 1, <<: *real}
+  - exp_name: M8_K1_real_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 1
+    n_substeps: 2
+    <<: *real
+  - exp_name: M9_K1_real_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 1
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]
+
+  # ── K=3 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K3_real_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 3, <<: *real}
+  - {exp_name: M4_K3_real_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 3, <<: *real}
+  - {exp_name: M5_K3_real_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 3, <<: *real}
+  - {exp_name: M7_K3_real_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 3, n_substeps: 1, <<: *real}
+  - exp_name: M8_K3_real_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 3
+    n_substeps: 2
+    <<: *real
+  - exp_name: M9_K3_real_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 3
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]
+
+  # ── K=6 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K6_real_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M4_K6_real_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M5_K6_real_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6, <<: *real}
+  - {exp_name: M7_K6_real_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 6, n_substeps: 1, <<: *real}
+  - exp_name: M8_K6_real_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 6
+    n_substeps: 2
+    <<: *real
+  - exp_name: M9_K6_real_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 6
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK 2 — Sparse-K, combined (OLD+NEW+SYNTH), s0
+  # source_loss_weights: {synth: 0.05} and balance_source_sampler from fixed.
+  # val/test restricted to real samples (test_real_only=true from fixed).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── K=1 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K1_comb_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 1}
+  - {exp_name: M4_K1_comb_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 1}
+  - {exp_name: M5_K1_comb_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 1}
+  - {exp_name: M7_K1_comb_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 1, n_substeps: 1}
+  - exp_name: M8_K1_comb_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 1
+    n_substeps: 2
+  - exp_name: M9_K1_comb_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 1
+    lambda_oxygen: 0.1
+    <<: *m9ox_comb
+
+  # ── K=3 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K3_comb_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 3}
+  - {exp_name: M4_K3_comb_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 3}
+  - {exp_name: M5_K3_comb_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 3}
+  - {exp_name: M7_K3_comb_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 3, n_substeps: 1}
+  - exp_name: M8_K3_comb_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 3
+    n_substeps: 2
+  - exp_name: M9_K3_comb_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 3
+    lambda_oxygen: 0.1
+    <<: *m9ox_comb
+
+  # ── K=6 ──────────────────────────────────────────────────────────────────
+  - {exp_name: M3_K6_comb_s0,  scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6}
+  - {exp_name: M4_K6_comb_s0,  scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6}
+  - {exp_name: M5_K6_comb_s0,  scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6}
+  - {exp_name: M7_K6_comb_s0,  scaffold: txtl_model7_fixed,                seed: 0, n_theta_anchors: 6, n_substeps: 1}
+  - exp_name: M8_K6_comb_s0
+    scaffold: txtl_model8_fixed
+    seed: 0
+    n_theta_anchors: 6
+    n_substeps: 2
+  - exp_name: M9_K6_comb_s0
+    scaffold: txtl_model9_oxygen_dark
+    seed: 0
+    n_theta_anchors: 6
+    lambda_oxygen: 0.1
+    <<: *m9ox_comb
