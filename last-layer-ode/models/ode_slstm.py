@@ -153,6 +153,8 @@ class OdesLSTM(nn.Module):
         theta_head_transform: str = "log_gamma",
         theta_head_tau: float = 1.0,
         y0_theta_init: bool = False,    # MLP(y0) → per-sample bias on theta-head logits (mirrors ode_rnn.py)
+        encoder_use_time: bool = False,    # concat τ_k = k/(K-1) ∈ [0,1] to the encoder feature (mirrors ode_rnn.py)
+        encoder_use_log_dt: bool = False,  # concat log(dt_k) to the encoder feature (dt-awareness for variable grids)
         **kwargs,
     ):
         super().__init__()
@@ -187,8 +189,14 @@ class OdesLSTM(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
+        self.encoder_use_time = bool(encoder_use_time)
+        self.encoder_use_log_dt = bool(encoder_use_log_dt)
         self.lift_skip = bool(lift_skip)
         feat_in = u_cols_dim + y_cols_dim
+        if self.encoder_use_time:
+            feat_in += 1
+        if self.encoder_use_log_dt:
+            feat_in += 1
         if self.lift_skip:
             self.lift = nn.Identity()
             enc_in = feat_in
@@ -271,7 +279,7 @@ class OdesLSTM(nn.Module):
         else:
             u_enc = u_seq
         if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(0.0).sqrt()
+            u_enc = u_enc.clamp_min(1e-6).sqrt()
 
         # Per-sample head bias from y0 MLP — computed once before the K-loop
         # since y0 is the same at every step. None when y0_theta_init=False.
@@ -304,13 +312,27 @@ class OdesLSTM(nn.Module):
             u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
-                y_feat = y_feat.clamp_min(0.0).sqrt()
+                y_feat = y_feat.clamp_min(1e-6).sqrt()
             elif y_transform == "sqrt_clamp1":
-                y_feat = y_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
+                # Clamp to 1.0 BEFORE sqrt so gradient = 1/(2*sqrt(x)) stays finite.
+                # sqrt(0) has gradient 1/(2*0)=inf which NaN-s the backward pass.
+                y_feat = y_feat.clamp_min(1.0).sqrt()
             elif y_transform == "log1p":
                 y_feat = torch.log1p(y_feat.clamp_min(0.0))
 
-            x = self.lift(torch.cat([u_feat, y_feat], dim=-1))
+            feat_parts = [u_feat, y_feat]
+            if self.encoder_use_time:
+                tau_k = torch.full(
+                    (u_feat.shape[0], 1),
+                    float(k) / float(max(K - 1, 1)),
+                    device=u_feat.device,
+                    dtype=u_feat.dtype,
+                )
+                feat_parts.append(tau_k)
+            if self.encoder_use_log_dt:
+                log_dt_k = torch.log(dt_k.clamp_min(1e-6)).to(dtype=u_feat.dtype).unsqueeze(-1)
+                feat_parts.append(log_dt_k)
+            x = self.lift(torch.cat(feat_parts, dim=-1))
             z, states = self.slstm(x, states)
             raw = self.head(z)
             if raw_y0_bias is not None:
@@ -360,7 +382,8 @@ class OdesLSTM(nn.Module):
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y + hdt * k3, theta)
             y = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            y = y.clamp(0.0, 1e5)
+        return y
 
     def _rk4_substeps_basal(self, y, dt, theta, beta):
         rhs = self.rhs

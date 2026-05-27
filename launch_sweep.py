@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import os
+import shlex
 import subprocess
 import time
 from collections import defaultdict
@@ -84,7 +85,7 @@ SACCT_CMD = "sacct -j $SLURM_JOB_ID --format=JobID,Elapsed,MaxRSS,State -n"
 # ── spec loading ──────────────────────────────────────────────────────────────
 
 def load_spec(path: str | Path) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -337,9 +338,11 @@ def run_local(
                 break  # wait for more RAM before starting another
             cmd, label = queue.pop(0)
             log_path = log_dir / f"local_{label}.log"
-            log = open(log_path, "w")
+            log = open(log_path, "w", encoding="utf-8")
             log.write(f"$ {cmd}\n\n"); log.flush()
-            p = subprocess.Popen(cmd, shell=True, stdout=log, stderr=subprocess.STDOUT)
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            p = subprocess.Popen(shlex.split(cmd, posix=True), stdout=log, stderr=subprocess.STDOUT, env=env)
             running.append((p, label, log))
             print(f"  →  started {label}  (pid {p.pid})  log: {log_path}")
 
