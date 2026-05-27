@@ -17,9 +17,11 @@
 #   both help               → keep L_zero on both (tex-extension to M8)
 #
 # Launch:
-#   python launch_sweep.py sweep_specs/final_ladder/m7_m8_lzero_ablation.yaml --local --max-parallel 1
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m7_m8_lzero_ablation.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_m7_m8_lzero_ablation/
 
-study: m7_m8_lzero_ablation
+study: FINAL_m7_m8_lzero_ablation
 runs_per_job: 1
 time: "02:00:00"
 partition: gpu_a100

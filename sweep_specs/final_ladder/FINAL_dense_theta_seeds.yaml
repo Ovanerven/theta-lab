@@ -32,9 +32,11 @@
 #                                                       if that s0 result shows synth dominance)
 #
 # Launch:
-#   python launch_sweep.py sweep_specs/final_ladder/dense_theta_seeds.yaml --local --max-parallel 1
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_dense_theta_seeds.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_dense_theta_seeds/
 
-study: dense_theta_seeds
+study: FINAL_dense_theta_seeds
 runs_per_job: 1
 time: "02:00:00"
 partition: gpu_a100

@@ -7,10 +7,12 @@
 #   → M7_K1_real_s0, M8_K1_real_s0                             (K=1 real, OLD scaffold)
 #
 # Bob covers everything else:
-#   - M9 K=1/3/6 real_only  (Mac Mini stopped before these)
+#   - M3/M4/M5 K=1/3/6 real_only  (Mac Mini never completed these)
 #   - M7_bg/M8_bg K=1/3/6 real_only  (bg_fixed replaces Mac Mini's old-scaffold K=1)
-#   - M3/M4/M5 K=3/K=6 real_only
-#   - All combined runs (M3/M4/M5/M7_bg/M8_bg/M9 × K=1/3/6)
+#   - M9v3b K=1/3/6 real_only
+#   - M7_bg K=1/3/6 combined  (ONLY M7 on combined — it's the synth-designed scaffold)
+# DROPPED from earlier plan: all comb sparse-K for M3/M4/M5/M8_bg/M9v3b —
+# sparse-K underperforms on synth-heavy data; compute better spent on dense.
 #
 # Key change from sparse_k_real_then_comb: M7/M8 use *_bg_fixed throughout.
 # Run order: ALL real_only K runs FIRST, then ALL combined K runs.
@@ -31,9 +33,11 @@
 #
 # This file supersedes m7_m8_bg_sparse_k.yaml (absorbed here, do not run that file too).
 #
-# python launch_sweep.py sweep_specs/final_ladder/sparse_k_full_bob.yaml --local --max-parallel 2
+# python launch_sweep.py sweep_specs/final_ladder/FINAL_sparse_k_full_bob.yaml \
+#   --local --max-parallel 2 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_sparse_k_full_bob/
 
-study: sparse_k_full_bob
+study: FINAL_sparse_k_full_bob
 runs_per_job: 1
 time: "02:00:00"
 partition: gpu_a100
@@ -160,54 +164,13 @@ runs:
     <<: [*real, *m9ox_real]
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # BLOCK 2 — Sparse-K, combined (OLD+NEW+SYNTH), ALL models, ALL K values
-  # Starts only after Block 1 (real_only) is complete.
+  # BLOCK 2 — Sparse-K, combined: M7_bg ONLY (the synth-designed scaffold).
+  # All other scaffolds skipped on combined — sparse-K performs poorly on
+  # synth-heavy data and the compute is better spent on dense seeds. M7's
+  # boundary loss is designed to extract signal from synth, so it's the one
+  # scaffold where comb sparse-K is informative.
   # ═══════════════════════════════════════════════════════════════════════════
 
-  # ── K=1 combined ──────────────────────────────────────────────────────────
-  - {exp_name: M3_K1_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 1}
-  - {exp_name: M4_K1_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 1}
-  - {exp_name: M5_K1_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 1}
-  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 1, n_substeps: 1}
-  - exp_name: M8_bg_K1_comb_s0
-    scaffold: txtl_model8_bg_fixed
-    seed: 0
-    n_theta_anchors: 1
-    n_substeps: 2
-  - exp_name: M9_K1_comb_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    n_theta_anchors: 1
-    <<: *m9ox_comb
-
-  # ── K=3 combined ──────────────────────────────────────────────────────────
-  - {exp_name: M3_K3_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 3}
-  - {exp_name: M4_K3_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 3}
-  - {exp_name: M5_K3_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 3}
-  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 3, n_substeps: 1}
-  - exp_name: M8_bg_K3_comb_s0
-    scaffold: txtl_model8_bg_fixed
-    seed: 0
-    n_theta_anchors: 3
-    n_substeps: 2
-  - exp_name: M9_K3_comb_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    n_theta_anchors: 3
-    <<: *m9ox_comb
-
-  # ── K=6 combined ──────────────────────────────────────────────────────────
-  - {exp_name: M3_K6_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_theta_anchors: 6}
-  - {exp_name: M4_K6_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_theta_anchors: 6}
-  - {exp_name: M5_K6_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 6}
-  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 6, n_substeps: 1}
-  - exp_name: M8_bg_K6_comb_s0
-    scaffold: txtl_model8_bg_fixed
-    seed: 0
-    n_theta_anchors: 6
-    n_substeps: 2
-  - exp_name: M9_K6_comb_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    n_theta_anchors: 6
-    <<: *m9ox_comb
+  - {exp_name: M7_bg_K1_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 1, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}
+  - {exp_name: M7_bg_K3_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 3, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}
+  - {exp_name: M7_bg_K6_comb_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_theta_anchors: 6, n_substeps: 1, source_loss_weights: null, lambda_zero_traj: 0.005}

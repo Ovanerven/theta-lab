@@ -1,0 +1,97 @@
+# Old-only baselines for the canonical M7_bg / M8_bg / M9v3b scaffolds.
+#
+# Fills the gap in the goal matrix: every other scaffold (M3/M4/M5) has
+# old-only s0/s1/s2 in experiments_final/experiments/txtl_ladder_old_combined,
+# but M7/M8/M9 were never run on old-only because:
+#   - M7 was designed for synth no-go data (not in OLD).
+#   - M9 was designed for tube-opening events (not in OLD).
+#   - The earlier M7/M8 scaffolds were broken (zero-collapse) anyway.
+#
+# Why run them now: the bg_fixed (M7/M8) and o2b (M9) scaffolds work on real;
+# we need their OLD baseline for a complete ladder figure across all 3
+# data regimes (old / real / comb).
+#
+# Mirrors txtl_ladder_old_combined conventions exactly:
+#   - dataset_path: txtl_native_old_only.npz
+#   - val_n=87, test_n=87
+#   - test_real_only: false (OLD has no synth)
+#   - balance_source_sampler: false (one source only)
+#   - drecipe loss block on every run
+#   - epochs=100, hidden=600
+#
+# Expected behavior: M9v3b old will likely underperform vs M9v3b real because
+# OLD has no tube-opening events → M9's oxygen dynamics are inactive. That's
+# the point — the baseline shows what M9 can do without its intended input.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m7_m8_m9_old_only.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_m7_m8_m9_old_only/
+
+study: FINAL_m7_m8_m9_old_only
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_drecipe_loss: &drecipe
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+_m9_old: &m9ox_old
+  # Old npz has U=13; cols 0..12 are valid. u_open will be empty/zero on OLD,
+  # so M9's oxygen dynamics are effectively inactive — that's the point.
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  n_substeps: 1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_old_only.npz
+  use_synthetic_data: true       # no-op (OLD has no synth)
+  val_n: 87
+  test_n: 87
+  stratify_z_expr: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true       # no-op on OLD (one source) — kept for consistency
+  balance_source_sampler: false
+  source_loss_weights: null
+  lambda_zero_traj: 0.0          # no-op on OLD (no z_expr=0 samples)
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true       # constant dt on OLD → no-op
+  plot_extra_new_samples: 0
+  y0_theta_init: false
+  model_class: ode_rnn
+  ckpt_every: 0
+  <<: *drecipe
+
+runs:
+  # ── M7_bg old ──────────────────────────────────────────────────────────
+  - {exp_name: M7_bg_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1}
+  - {exp_name: M7_bg_old_s1, scaffold: txtl_model7_bg_fixed, seed: 1, n_substeps: 1}
+  - {exp_name: M7_bg_old_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1}
+
+  # ── M8_bg old ──────────────────────────────────────────────────────────
+  - {exp_name: M8_bg_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 2}
+  - {exp_name: M8_bg_old_s1, scaffold: txtl_model8_bg_fixed, seed: 1, n_substeps: 2}
+  - {exp_name: M8_bg_old_s2, scaffold: txtl_model8_bg_fixed, seed: 2, n_substeps: 2}
+
+  # ── M9v3b old ──────────────────────────────────────────────────────────
+  - {exp_name: M9v3b_old_s0, scaffold: txtl_model9_o2b, seed: 0, <<: *m9ox_old}
+  - {exp_name: M9v3b_old_s1, scaffold: txtl_model9_o2b, seed: 1, <<: *m9ox_old}
+  - {exp_name: M9v3b_old_s2, scaffold: txtl_model9_o2b, seed: 2, <<: *m9ox_old}
