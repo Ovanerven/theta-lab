@@ -70,15 +70,17 @@ _m9v2_realonly: &m9v2_real
 _m9v2_comb: &m9v2_comb
   gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
 
-# M9v3 (o2a/o2b) anchors — P=8 with tube_opened state, n_substeps=2 for stability
-# No lambda_oxygen (O2 handled internally via source term)
-_m9v3_realonly: &m9v3_real
+# M9v3a anchor — P=8 with tube_opened state, step-function O2 (no ODE, no k_eq)
+_m9v3a_realonly: &m9v3a_real
   gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   n_substeps: 2
 
-_m9v3_comb: &m9v3_comb
+_m9v3a_comb: &m9v3a_comb
   gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
   n_substeps: 2
+
+# M9v3b anchor — P=7 (same layout as M9v2), additive bolus-then-decay O2
+# u_open bolus goes to O2@1; gru_u_cols identical to M9v2
 
 fixed:
   epochs: 100
@@ -124,17 +126,17 @@ runs:
     seed: 0
     <<: [*comb, *real, *m9v2_real]
 
-  # M9v3a: explicit O2 + source term, metabolic drain only
+  # M9v3a: step-function O2 (P=8, tube_opened state); O2_eff = O2_sat*open_gate, no ODE
   - exp_name: M9v3a_real_s0
     scaffold: txtl_model9_o2a
     seed: 0
-    <<: [*comb, *real, *m9v3_real]
+    <<: [*comb, *real, *m9v3a_real]
 
-  # M9v3b: explicit O2 + source term, maturation also consumes O2
+  # M9v3b: additive bolus-then-decay (P=7, same layout as M9v2); dO2 = -k_depl*O2
   - exp_name: M9v3b_real_s0
     scaffold: txtl_model9_o2b
     seed: 0
-    <<: [*comb, *real, *m9v3_real]
+    <<: [*comb, *real, *m9v2_real]
 
   # ── COMBINED SECOND ──────────────────────────────────────────────────────
 
@@ -146,12 +148,12 @@ runs:
   - exp_name: M9v3a_comb_s0
     scaffold: txtl_model9_o2a
     seed: 0
-    <<: [*m9v3_comb]
+    <<: [*m9v3a_comb]
 
   - exp_name: M9v3b_comb_s0
     scaffold: txtl_model9_o2b
     seed: 0
-    <<: [*m9v3_comb]
+    <<: [*m9v2_comb]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BLOCK 1 — COMPLETED in this v4 run (comment out, do not re-run)
