@@ -1847,35 +1847,35 @@ class TXTLModel9_M5Oxygen(MechanisticScaffold):
 
 class TXTLModel9_O2SourceA(MechanisticScaffold):
     """
-    M9v3a: M5 TX/TL + explicit O2 with bounded-equilibrium parameterisation.
+    M9v3a: M5 superset — base kmt maturation always active, O2 adds extra.
 
-    Root cause of NaN in the k_in/c_dep version: random init gives k_in/c_dep ≈ 100,
-    driving O2 to 100 nM → dpm = k_ox * 100 * p → pm loss=21 from epoch 1 → NaN.
+    Root cause of earlier NaN: old samples have no tube opening → O2→0 → p grows
+    without bound (no degradation term) → ∂pm/∂k_ox blows up over 1416 steps →
+    GRU BPTT amplifies to overflow.
 
-    Fix: reparameterise as O2_sat (bounded equilibrium) and k_eq (equilibration rate).
-        dO2 = k_eq * (O2_sat * open_gate - O2)
-    No learned parameter in a denominator → no 1/tau² term in the gradient.
-    O2 is guaranteed to stay in [0, O2_sat] at all times.
-    With O2_sat ∈ [0.1, 10], k_ox * O2 is in the same range as M5's kmt * O → stable.
+    Fix: add base kmt (M5-style) so p is always degraded regardless of O2.
+      dp  = R*VTX*DNA - (kmt + k_ox*O2)*p     ← kmt provides floor degradation
+      dpm = (kmt + k_ox*O2)*p                  ← old samples behave like M5
+    Old samples (O2→0): dpm = kmt*p  (identical to M5).
+    New samples post-opening: dpm = (kmt + k_ox*O2_sat)*p (enhanced by O2).
 
-    Pre-opening (open_gate=0): dO2 = -k_eq * O2           (decays to 0)
-    Post-opening (open_gate=1): dO2 =  k_eq * (O2_sat-O2) (approaches O2_sat)
+    O2 dynamics: dO2 = k_eq*(O2_sat*open_gate - O2)  (bounded-equilibrium, no 1/tau²).
 
     States (8): [R, O2, m, mm, p, pm, DNA, tube_opened]
-    theta  (8): [lam, VTX, VTL, kdm, kmatm, k_ox, O2_sat, k_eq]
+    theta  (9): [lam, VTX, VTL, kdm, kmatm, kmt, k_ox, O2_sat, k_eq]
     Observed: [3, 5]
     """
     def __init__(self):
-        super().__init__(P=8, theta_dim=8)
+        super().__init__(P=8, theta_dim=9)
         self.state_names = ["R", "O2", "m", "mm", "p", "pm", "DNA", "tube_opened"]
-        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-6, 1e-1, 1e-3]
-        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 4e-4, 1e1, 1e0]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-5, 1e-6, 1e-1, 1e-3]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 3.5e-4, 4e-4, 1e1, 1e0]
         self.obs_state_idx = [3, 5]
         self.control_state_map = {"DNA c": 6, "u_open": 7}
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         R, O2, m, mm, p, pm, DNA, tube_opened = y.unbind(dim=-1)
-        lam, VTX, VTL, kdm, kmatm, k_ox, O2_sat, k_eq = theta.unbind(dim=-1)
+        lam, VTX, VTL, kdm, kmatm, kmt, k_ox, O2_sat, k_eq = theta.unbind(dim=-1)
 
         R_p   = torch.clamp_min(R,   0.0)
         O2_p  = torch.clamp_min(O2,  0.0)
@@ -1885,12 +1885,13 @@ class TXTLModel9_O2SourceA(MechanisticScaffold):
         DNA_p = torch.clamp_min(DNA, 0.0)
         open_gate = torch.clamp(tube_opened, 0.0, 1.0)
 
+        eff_kmat = kmt + k_ox * O2_p          # base maturation + O2 boost
         dR    = -lam * R_p
         dO2   = k_eq * (O2_sat * open_gate - O2_p)
         dm    = R_p * VTX * DNA_p - (kdm + kmatm) * m_p
         dmm   = kmatm * m_p - kdm * mm_p
-        dp    = R_p * VTL * (m_p + mm_p) - k_ox * O2_p * p_p
-        dpm   = k_ox * O2_p * p_p
+        dp    = R_p * VTL * (m_p + mm_p) - eff_kmat * p_p
+        dpm   = eff_kmat * p_p
         dDNA  = torch.zeros_like(DNA)
         dtube = torch.zeros_like(tube_opened)
 
@@ -1899,30 +1900,32 @@ class TXTLModel9_O2SourceA(MechanisticScaffold):
 
 class TXTLModel9_O2SourceB(MechanisticScaffold):
     """
-    M9v3b: same as M9v3a but maturation also consumes O2.
+    M9v3b: M9v3a + O2 consumed by maturation reaction.
 
-    Same bounded-equilibrium parameterisation as M9v3a (k_eq rate, no denominator).
-    Additionally, O2 is depleted by the maturation reaction (c_ox mol O2 per mol pm),
-    creating self-limiting feedback: high p → fast O2 depletion → slower maturation.
+    Same base-kmt fix as M9v3a (p always degraded, old samples behave like M5).
+    Additionally, O2 is depleted by the maturation reaction, creating self-limiting
+    feedback: high p → fast O2 depletion → slower O2-dependent maturation.
 
-    dO2 = k_eq * (O2_sat * open_gate - O2) - c_ox * k_ox * O2 * p
-    dpm = k_ox * O2 * p
+    eff_kmat = kmt + k_ox * O2
+    dp   = R*VTL*(m+mm) - eff_kmat*p
+    dpm  = eff_kmat*p
+    dO2  = k_eq*(O2_sat*open_gate - O2) - c_ox*k_ox*O2*p   (stoichiometric O2 drain)
 
     States (8): [R, O2, m, mm, p, pm, DNA, tube_opened]
-    theta  (9): [lam, VTX, VTL, kdm, kmatm, k_ox, O2_sat, k_eq, c_ox]
+    theta (10): [lam, VTX, VTL, kdm, kmatm, kmt, k_ox, O2_sat, k_eq, c_ox]
     Observed: [3, 5]
     """
     def __init__(self):
-        super().__init__(P=8, theta_dim=9)
+        super().__init__(P=8, theta_dim=10)
         self.state_names = ["R", "O2", "m", "mm", "p", "pm", "DNA", "tube_opened"]
-        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-6, 1e-1, 1e-3, 1e-3]
-        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 4e-4, 1e1, 1e0, 1e0]
+        self.theta_lo_vec = [1e-6, 3e-5, 1e-5, 3e-5, 1e-5, 1e-5, 1e-6, 1e-1, 1e-3, 1e-3]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 3.5e-4, 4e-4, 1e1, 1e0, 1e0]
         self.obs_state_idx = [3, 5]
         self.control_state_map = {"DNA c": 6, "u_open": 7}
 
     def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         R, O2, m, mm, p, pm, DNA, tube_opened = y.unbind(dim=-1)
-        lam, VTX, VTL, kdm, kmatm, k_ox, O2_sat, k_eq, c_ox = theta.unbind(dim=-1)
+        lam, VTX, VTL, kdm, kmatm, kmt, k_ox, O2_sat, k_eq, c_ox = theta.unbind(dim=-1)
 
         R_p   = torch.clamp_min(R,   0.0)
         O2_p  = torch.clamp_min(O2,  0.0)
@@ -1932,12 +1935,13 @@ class TXTLModel9_O2SourceB(MechanisticScaffold):
         DNA_p = torch.clamp_min(DNA, 0.0)
         open_gate = torch.clamp(tube_opened, 0.0, 1.0)
 
+        eff_kmat = kmt + k_ox * O2_p          # base maturation + O2 boost
         dR    = -lam * R_p
         dO2   = k_eq * (O2_sat * open_gate - O2_p) - c_ox * k_ox * O2_p * p_p
         dm    = R_p * VTX * DNA_p - (kdm + kmatm) * m_p
         dmm   = kmatm * m_p - kdm * mm_p
-        dp    = R_p * VTL * (m_p + mm_p) - k_ox * O2_p * p_p
-        dpm   = k_ox * O2_p * p_p
+        dp    = R_p * VTL * (m_p + mm_p) - eff_kmat * p_p
+        dpm   = eff_kmat * p_p
         dDNA  = torch.zeros_like(DNA)
         dtube = torch.zeros_like(tube_opened)
 
