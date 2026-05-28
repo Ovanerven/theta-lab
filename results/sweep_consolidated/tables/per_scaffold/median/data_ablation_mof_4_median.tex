@@ -1,0 +1,27 @@
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n{=}3$ & $n{=}10$ & $n{=}100$ & $n{=}1000$ \\
+\midrule
+\multicolumn{5}{l}{\emph{Full observation}} \\
+CMVF & 0.181 & 0.155 & \textbf{0.107} & \textbf{0.035} \\
+CMVF-L1 & 0.210 & 0.147 & 0.113 & 0.045 \\
+CMVF-L2 & -- & -- & -- & 0.038 \\
+CMVF-unbounded & 0.534 & 0.133 & 0.135 & 0.043 \\
+NODE-GRU & 0.407 & 0.159 & 0.120 & 0.051 \\
+NODE-MLP & 1.045 & 0.132 & 0.204 & 0.196 \\
+NODE-correction & 0.401 & \textbf{0.131} & 0.151 & -- \\
+Global ($\theta$) & 0.593 & 0.501 & 0.313 & 0.145 \\
+Initial-condition ($\theta$) & \textbf{0.178} & 0.159 & 0.115 & 0.149 \\
+\midrule
+\multicolumn{5}{l}{\emph{First--last observation}} \\
+CMVF & 1.050 & 0.540 & \textbf{0.443} & 0.424 \\
+CMVF-L1 & 1.043 & 0.602 & 0.491 & 0.461 \\
+CMVF-L2 & -- & -- & -- & -- \\
+CMVF-unbounded & \textbf{0.735} & \textbf{0.424} & 0.605 & \textbf{0.115} \\
+NODE-GRU & 1.989 & 3.658 & 9.673 & 3.283 \\
+NODE-MLP & 0.871 & 3.890 & 3.127 & 1.753 \\
+NODE-correction & 0.979 & 0.865 & 0.487 & 0.631 \\
+Global ($\theta$) & 0.948 & 0.668 & 0.743 & 0.887 \\
+Initial-condition ($\theta$) & 0.743 & 0.571 & 0.703 & 0.840 \\
+\bottomrule
+\end{tabular}

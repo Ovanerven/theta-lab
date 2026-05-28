@@ -1,0 +1,34 @@
+% Architecture sweep — glycolysis — NRMSE (mean).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/8 — full obs}} \\
+GRU & 0.146 & 0.112 & 0.129 & \textbf{0.113} \\
+LSTM & 0.269 & 0.132 & \textbf{0.122} & $8.0\!\times\!10^{6}$ \\
+sLSTM & 0.184 & 0.111 & -- & -- \\
+Transformer & \textbf{0.117} & 0.114 & 0.129 & 0.123 \\
+Mamba & 0.200 & \textbf{0.108} & 0.130 & 0.168 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/8 — first--last}} \\
+GRU & 0.250 & 0.485 & 0.742 & 0.887 \\
+LSTM & 0.206 & \textbf{0.300} & 0.736 & 0.939 \\
+sLSTM & 0.154 & 0.704 & -- & -- \\
+Transformer & 0.201 & 0.537 & 0.631 & \textbf{0.821} \\
+Mamba & \textbf{0.131} & 0.387 & \textbf{0.564} & 0.880 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/12 — full obs}} \\
+GRU & 0.610 & 0.266 & 0.148 & \textbf{0.072} \\
+LSTM & 0.371 & \textbf{0.191} & 0.395 & 0.083 \\
+sLSTM & 0.338 & 0.312 & 0.143 & 0.077 \\
+Transformer & \textbf{0.222} & 0.221 & \textbf{0.119} & 0.073 \\
+Mamba & 0.249 & 0.257 & 0.162 & 0.125 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/12 — first--last}} \\
+GRU & \textbf{0.309} & 0.376 & 0.508 & 0.478 \\
+LSTM & 0.384 & \textbf{0.319} & 0.508 & \textbf{0.393} \\
+sLSTM & 0.347 & 0.793 & 0.551 & 0.465 \\
+Transformer & 0.396 & 0.359 & 0.416 & 0.449 \\
+Mamba & 0.333 & 0.455 & \textbf{0.341} & 0.772 \\
+\bottomrule
+\end{tabular}

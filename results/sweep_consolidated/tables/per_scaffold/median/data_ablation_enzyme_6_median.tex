@@ -1,0 +1,25 @@
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n{=}3$ & $n{=}10$ & $n{=}100$ & $n{=}1000$ \\
+\midrule
+\multicolumn{5}{l}{\emph{Full observation}} \\
+CMVF & 0.013 & 0.007 & \textbf{0.002} & \textbf{0.002} \\
+CMVF-L1 & \textbf{0.007} & 0.010 & 0.008 & 0.004 \\
+CMVF-unbounded & 0.011 & 0.005 & 0.004 & 0.002 \\
+NODE-GRU & $4.3\!\times\!10^{6}$ & $1.9\!\times\!10^{6}$ & $7.0\!\times\!10^{5}$ & $1.4\!\times\!10^{5}$ \\
+NODE-MLP & $7.2\!\times\!10^{6}$ & $1.0\!\times\!10^{6}$ & $4.0\!\times\!10^{5}$ & $5.8\!\times\!10^{4}$ \\
+NODE-correction & $3.0\!\times\!10^{6}$ & $2.4\!\times\!10^{5}$ & $8.7\!\times\!10^{4}$ & $1.2\!\times\!10^{4}$ \\
+Global ($\theta$) & 0.019 & 0.014 & 0.013 & 0.007 \\
+Initial-condition ($\theta$) & 0.009 & \textbf{0.002} & 0.003 & 0.003 \\
+\midrule
+\multicolumn{5}{l}{\emph{First--last observation}} \\
+CMVF & 0.012 & 0.009 & \textbf{0.002} & \textbf{0.002} \\
+CMVF-L1 & 0.010 & 0.010 & 0.004 & 0.005 \\
+CMVF-unbounded & 0.012 & 0.005 & 0.004 & 0.002 \\
+NODE-GRU & $5.4\!\times\!10^{7}$ & $6.6\!\times\!10^{7}$ & $1.6\!\times\!10^{7}$ & $1.6\!\times\!10^{7}$ \\
+NODE-MLP & $1.4\!\times\!10^{7}$ & $5.0\!\times\!10^{7}$ & $1.5\!\times\!10^{7}$ & $1.6\!\times\!10^{7}$ \\
+NODE-correction & $7.7\!\times\!10^{6}$ & $2.4\!\times\!10^{7}$ & $1.9\!\times\!10^{7}$ & $1.4\!\times\!10^{7}$ \\
+Global ($\theta$) & 0.020 & 0.021 & 0.014 & 0.007 \\
+Initial-condition ($\theta$) & \textbf{0.009} & \textbf{0.002} & 0.003 & 0.003 \\
+\bottomrule
+\end{tabular}

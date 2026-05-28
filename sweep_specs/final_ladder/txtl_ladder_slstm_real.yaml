@@ -71,8 +71,8 @@ fixed:
 
 runs:
   # ── REAL_ONLY (new + old real, no synth) ──────────────────────────────────
-  - {exp_name: M3_real_slstm,   scaffold: txtl_model3_two_state,            n_substeps: 1, <<: *real}
-  - {exp_name: M4_real_slstm,   scaffold: txtl_model4_three_state,          n_substeps: 1, <<: *real}
+  # - {exp_name: M3_real_slstm,   scaffold: txtl_model3_two_state,            n_substeps: 1, <<: *real}
+  # - {exp_name: M4_real_slstm,   scaffold: txtl_model4_three_state,          n_substeps: 1, <<: *real}
   - {exp_name: M5_real_slstm,   scaffold: txtl_resource_and_maturation_dna, n_substeps: 1, <<: *real}
   # - {exp_name: M7_real_slstm,   scaffold: txtl_model7_bg_fixed,             n_substeps: 1, <<: *real}
   # - {exp_name: M8_real_slstm,   scaffold: txtl_model8_bg_fixed,             n_substeps: 2, <<: *real}

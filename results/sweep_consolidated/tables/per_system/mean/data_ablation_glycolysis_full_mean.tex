@@ -1,0 +1,46 @@
+% Glycolysis — NRMSE (mean, full obs).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/4}} \\
+CMVF & \textbf{0.234} & 0.226 & \textbf{0.111} & \textbf{0.077} \\
+CMVF-L1 & 0.236 & 0.253 & 0.140 & 0.079 \\
+CMVF-unbounded & 0.261 & 0.545 & 0.258 & 0.088 \\
+NODE-GRU & 0.239 & 0.165 & 0.145 & 0.108 \\
+NODE-MLP & 0.268 & 0.141 & 0.178 & 0.146 \\
+NODE-correction & 0.295 & \textbf{0.100} & 0.125 & 0.137 \\
+Global ($\theta$) & 0.480 & 0.876 & 0.556 & 0.284 \\
+Initial-condition ($\theta$) & 0.267 & 0.225 & 0.215 & 0.294 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/8}} \\
+CMVF & \textbf{0.146} & 0.112 & 0.129 & 0.113 \\
+CMVF-L1 & 0.181 & 0.146 & 0.149 & 0.101 \\
+CMVF-unbounded & 0.192 & \textbf{0.078} & \textbf{0.119} & \textbf{0.082} \\
+NODE-GRU & 0.169 & 0.135 & 0.135 & 0.141 \\
+NODE-MLP & 0.271 & 0.112 & 0.122 & 0.133 \\
+NODE-correction & 0.247 & 0.169 & 0.136 & 0.140 \\
+Global ($\theta$) & 0.569 & 1.015 & 0.960 & 0.339 \\
+Initial-condition ($\theta$) & 0.182 & 0.442 & 0.254 & 0.273 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/12}} \\
+CMVF & 0.610 & 0.266 & \textbf{0.148} & \textbf{0.072} \\
+CMVF-L1 & 0.259 & 0.308 & 0.161 & 0.077 \\
+CMVF-unbounded & \textbf{0.215} & 0.266 & 0.172 & 0.088 \\
+NODE-GRU & 0.282 & 0.314 & 0.196 & 0.178 \\
+NODE-MLP & 0.252 & 0.312 & 0.221 & 0.143 \\
+NODE-correction & 0.266 & 0.266 & 0.166 & 0.174 \\
+Global ($\theta$) & 0.334 & 0.609 & 0.413 & 0.184 \\
+Initial-condition ($\theta$) & 0.253 & \textbf{0.211} & 0.175 & 0.182 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Glyc/22}} \\
+CMVF & 0.375 & 0.069 & 0.021 & $1.2\!\times\!10^{13}$ \\
+CMVF-L1 & 0.812 & 0.069 & 0.027 & 0.006 \\
+CMVF-unbounded & \textbf{0.095} & \textbf{0.041} & \textbf{0.016} & \textbf{0.004} \\
+NODE-GRU & 562.012 & 663.087 & $1.7\!\times\!10^{4}$ & $8.0\!\times\!10^{3}$ \\
+NODE-MLP & 2.337 & $3.1\!\times\!10^{5}$ & $1.2\!\times\!10^{4}$ & $7.1\!\times\!10^{3}$ \\
+NODE-correction & 0.285 & 0.231 & $5.1\!\times\!10^{3}$ & -- \\
+Global ($\theta$) & 0.397 & 0.343 & 0.299 & 0.042 \\
+Initial-condition ($\theta$) & 0.310 & 0.112 & 0.030 & 0.015 \\
+\bottomrule
+\end{tabular}
