@@ -116,15 +116,10 @@ runs:
       old: 1.0
       synth: 1.0          # full-weight synth (M7 was designed for synth data)
 
-  - exp_name: M7_bg_comb_synth005_s0
-    scaffold: txtl_model7_bg_fixed
-    seed: 0
-    n_substeps: 1
-    lambda_zero_traj: 0.005
-    source_loss_weights:
-      new: 5.0
-      old: 1.0
-      synth: 0.05         # heavy downweight (matches M3/M4/M5/M9 recipe)
+  # M7_bg comb synth=0.05 — DROPPED. A/B settled by FINAL seed-0 run:
+  #   M7_bg synth=1.0 → R²(p)=0.505 (old=0.703)
+  #   M7_bg synth=0.05 → R²(p)=0.325 (old=0.465)   ← synth-downweight HURTS M7
+  # Keep synth=1.0 as the canonical M7_bg combined recipe going forward.
 
   # ── M8_bg combined A/B: synth=1.0 vs synth=0.05, both with L_zero ────────
   - exp_name: M8_bg_comb_synth1_s0

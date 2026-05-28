@@ -584,6 +584,18 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
     dt_seq = dt_seq.to(device)
     if batch_lengths is not None:
         batch_lengths = batch_lengths.to(device)
+    # Match training-space: if the run set subtract_channel_min, apply the
+    # same per-sample channel-min gate BEFORE the lift, so y0/y_seq enter the
+    # model in the distribution it was trained on. Otherwise plots show raw
+    # truth while pred is in subtracted space → fake-looking trajectories,
+    # especially on NEW-data samples with nonzero baseline.
+    _cfg_for_gate = load_yaml(exp_dir / "config.yaml") if exp_dir else {}
+    if bool(_cfg_for_gate.get("subtract_channel_min", False)):
+        _cols = _cfg_for_gate.get("subtract_channel_min_cols", None)
+        if _cols is not None:
+            _cols = [int(c) for c in _cols]
+        from metrics.endpoint_r2 import _apply_channel_min_gate as _gate
+        y0, y_seq = _gate(y0, y_seq, _cols, batch_lengths)
     # Lift dataset y0/y_seq into scaffold-state space when partial-obs.
     y0, y_seq = _maybe_lift(y0, y_seq, lift_info or {})
 
@@ -715,6 +727,13 @@ def plot_predictions(model, ds: ODEDataset, state_names: list[str], out_dir: Pat
                 y0x, u_seqx, y_seqx, dt_seqx = y0x.to(device), u_seqx.to(device), y_seqx.to(device), dt_seqx.to(device)
                 if blx is not None:
                     blx = blx.to(device)
+                # Same channel-min gate as the main plot block.
+                if bool(_cfg_for_gate.get("subtract_channel_min", False)):
+                    _cols_x = _cfg_for_gate.get("subtract_channel_min_cols", None)
+                    if _cols_x is not None:
+                        _cols_x = [int(c) for c in _cols_x]
+                    from metrics.endpoint_r2 import _apply_channel_min_gate as _gate
+                    y0x, y_seqx = _gate(y0x, y_seqx, _cols_x, blx)
                 y0x, y_seqx = _maybe_lift(y0x, y_seqx, lift_info or {})
                 with torch.no_grad():
                     obs_idx_x = (torch.tensor(lift_info["scaffold_obs_idx"], device=y0x.device, dtype=torch.long)

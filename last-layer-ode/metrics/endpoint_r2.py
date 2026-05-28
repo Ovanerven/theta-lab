@@ -29,6 +29,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plot_diagnostics import rebuild_model_from_experiment, device_auto, load_yaml, _filter_model_kwargs
 
 
+def _apply_channel_min_gate(
+    y0: torch.Tensor,
+    y_seq: torch.Tensor,
+    cols: list[int] | None,
+    lengths: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-sample, per-channel min-subtraction, mirroring train.py's gate.
+
+    Duplicated here (rather than imported) to avoid pulling in train.py's
+    heavy import chain. Training applies this before the forward pass; for
+    R²/plotting to match the trained distribution we must apply it here too.
+    """
+    B, K, P = y_seq.shape
+    if lengths is not None:
+        ar = torch.arange(K, device=y_seq.device).unsqueeze(0)
+        valid = ar < lengths.to(y_seq.device).unsqueeze(1)
+        mask = valid.unsqueeze(-1)
+        masked_y = torch.where(mask, y_seq, torch.full_like(y_seq, float("inf")))
+    else:
+        masked_y = y_seq
+    if cols is None:
+        ch_min = masked_y.amin(dim=1, keepdim=True)
+        return y0 - ch_min[:, 0, :], y_seq - ch_min
+    idx = torch.as_tensor(cols, device=y_seq.device, dtype=torch.long)
+    ch_min = masked_y.index_select(dim=2, index=idx).amin(dim=1, keepdim=True)
+    y0_out = y0.clone()
+    y_seq_out = y_seq.clone()
+    y0_out[:, idx] = y0[:, idx] - ch_min[:, 0, :]
+    y_seq_out[:, :, idx] = y_seq[:, :, idx] - ch_min
+    return y0_out, y_seq_out
+
+
 def r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
@@ -92,6 +124,17 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
         "y_transform": str(cfg_local.get("y_transform", "none")),
     }
 
+    # Channel-min gate: training applies _apply_channel_min_gate per-sample
+    # before the forward pass. Without re-applying here, y0/y_seq are in raw
+    # space but the model was trained on subtracted space → distribution
+    # mismatch on samples with nonzero baseline (e.g. NEW-data mRNA/protein).
+    apply_gate = bool(cfg_local.get("subtract_channel_min", False))
+    gate_cols = cfg_local.get("subtract_channel_min_cols", None)
+    if gate_cols is not None:
+        gate_cols = [int(c) for c in gate_cols]
+    if apply_gate:
+        print(f"  [endpoint_r2] applying channel-min gate (cols={gate_cols}) to match training space.")
+
     if lift_info:
         # Partial-obs scaffold: pred is in scaffold layout. By convention
         # cfg.obs_idx = [mm_idx, pm_idx], so position 0 = mRNA, position 1 = protein
@@ -150,6 +193,12 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
             u_b = u_seq.unsqueeze(0).to(device)
             y_seq_b = y_seq.unsqueeze(0).to(device)
             dt_b = dt_i.unsqueeze(0).to(device)
+            # Match training: subtract per-sample channel min on (y0, y_seq)
+            # BEFORE the lift, since gate_cols index into dataset channels.
+            if apply_gate:
+                L_i_raw = int(lengths_arr[global_i]) if lengths_arr is not None else y_seq_b.shape[1]
+                lengths_b = torch.tensor([L_i_raw], device=device, dtype=torch.long)
+                y0_b, y_seq_b = _apply_channel_min_gate(y0_b, y_seq_b, gate_cols, lengths_b)
             # Lift into scaffold layout if needed.
             if lift_info:
                 from plot_diagnostics import _maybe_lift
@@ -161,8 +210,10 @@ def collect_endpoints(exp_dir: Path, device: torch.device, split: str,
                 obs_idx,
                 **_filter_model_kwargs(model, base_kwargs),
             )
-            # Ground truth comes from the dataset (always); pred is in scaffold layout.
-            y_np = y_seq.cpu().numpy()
+            # Ground truth: use the (possibly gated) y_seq_b so true and pred are
+            # in the same space. pred is in scaffold layout; y_np stays in dataset
+            # layout and is indexed by p_idx_data / m_idx_data below.
+            y_np = y_seq_b[0].cpu().numpy()
             p_np = pred[0].cpu().numpy()
 
             K_full = y_np.shape[0]
