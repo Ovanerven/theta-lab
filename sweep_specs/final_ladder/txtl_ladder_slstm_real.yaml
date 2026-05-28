@@ -1,0 +1,96 @@
+# sLSTM scaffold ladder on REAL (new+old) data — head-to-head vs GRU baseline.
+#
+# Hypothesis: sLSTM may outperform GRU on the real_only regime where the GRU
+# baseline has already been characterised. Same canonical configs as the dense
+# ladder; only model_class changes (ode_rnn → ode_slstm).
+#
+# Coverage:
+#   M3/M4/M5/M8/M9 → real_only only (txtl_native_real_only.npz)
+#   M7 (only)      → real_only AND combined with NO synth downweight
+#                    (M7_bg is designed to absorb synth at full weight)
+#
+# Run on Bob's machine:
+#   python launch_sweep.py sweep_specs/final_ladder/txtl_ladder_slstm_real.yaml --local --max-parallel 2
+
+study: txtl_ladder_slstm_real
+runs_per_job: 1
+time: "02:30:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_loss: &loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+_real: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {old: 1.0, new: 5.0}
+
+_m9_real: &m9_real
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+  lambda_oxygen: 0.0
+
+_m9_comb: &m9_comb
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+  lambda_oxygen: 0.0
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  seed: 0
+  val_n: 125
+  test_n: 125
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_slstm
+  <<: *loss
+
+runs:
+  # ── REAL_ONLY (new + old real, no synth) ──────────────────────────────────
+  - {exp_name: M3_real_slstm,   scaffold: txtl_model3_two_state,            n_substeps: 1, <<: *real}
+  - {exp_name: M4_real_slstm,   scaffold: txtl_model4_three_state,          n_substeps: 1, <<: *real}
+  - {exp_name: M5_real_slstm,   scaffold: txtl_resource_and_maturation_dna, n_substeps: 1, <<: *real}
+  # - {exp_name: M7_real_slstm,   scaffold: txtl_model7_bg_fixed,             n_substeps: 1, <<: *real}
+  # - {exp_name: M8_real_slstm,   scaffold: txtl_model8_bg_fixed,             n_substeps: 2, <<: *real}
+  # - exp_name: M9_real_slstm
+  #   scaffold: txtl_model9_o2b
+  #   n_substeps: 1
+  #   <<: [*real, *m9_real]
+
+  # ── M7 ONLY — combined regime with NO synth downweight ────────────────────
+  # M7_bg validated at full synth weight (R²p=0.485 vs boundary=0.480).
+  # Uses native_combined dataset; lambda_zero_traj=0.005 pushes synth no-go→0.
+  # - exp_name: M7_comb_slstm
+  #   scaffold: txtl_model7_bg_fixed
+  #   n_substeps: 1
+  #   dataset_path: datasets/cell-free/txtl_native_combined.npz
+  #   use_synthetic_data: true
+  #   balance_source_sampler: true
+  #   test_real_only: true
+  #   stratify_by_source: true
+  #   source_loss_weights: null
+  #   lambda_zero_traj: 0.005
