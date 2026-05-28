@@ -189,7 +189,15 @@ runs:
   # Note: M9_dark uses obs_state_idx=[3, 6] (mm at scaffold idx 3, P_fluor at
   # idx 6); the dataset obs_idx=[3, 5] (mm, pm) is lifted into this layout.
   # gru_u_cols and oxygen control wiring come from *m9ox_real (no change needed).
-  - exp_name: M9_dark_real_full_s0
+
+  - exp_name: M9_dark_real_full_s0_lr0015
+    scaffold: txtl_model9_dark_stable
+    seed: 0
+    lr: 0.0015
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]
+
+  - exp_name: M9_dark_real_full_s0_lr002
     scaffold: txtl_model9_dark_stable
     seed: 0
     lambda_oxygen: 0.1

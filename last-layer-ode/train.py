@@ -2079,6 +2079,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         model.train()
         tr_total = 0.0
         tr_batches = 0
+        tr_skipped_nonfinite = 0
 
         for y0, u_seq, y_seq, batch_lengths, z_expr_batch, dt_seq, source_idx_batch in train_loader:
             y0 = y0.to(device)
@@ -2269,8 +2270,20 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
             loss.backward()
 
-            if cfg.grad_clip and float(cfg.grad_clip) > 0:
-                nn.utils.clip_grad_norm_(model.parameters(), float(cfg.grad_clip))
+            # Always compute the global grad norm so the step can be gated on its
+            # finiteness. max_norm=inf is a no-op clip (it still returns the norm),
+            # so the configured clipping behaviour is preserved when grad_clip is set.
+            _max_norm = float(cfg.grad_clip) if (cfg.grad_clip and float(cfg.grad_clip) > 0) else float("inf")
+            total_norm = nn.utils.clip_grad_norm_(model.parameters(), _max_norm)
+
+            # A single batch can produce non-finite grads (fp32 overflow in the long
+            # BPTT rollout, or 0*inf in a scaffold). clip_grad_norm_ PROPAGATES NaN/Inf
+            # rather than removing it, so stepping here would poison every weight with
+            # NaN and kill the whole run. Skip the update for this batch instead.
+            if not torch.isfinite(total_norm):
+                opt.zero_grad(set_to_none=True)
+                tr_skipped_nonfinite += 1
+                continue
 
             opt.step()
 
@@ -2279,6 +2292,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
         tr_loss = tr_total / max(1, tr_batches)
         train_losses.append(tr_loss)
+        if tr_skipped_nonfinite > 0:
+            print(f"  [grad guard] skipped {tr_skipped_nonfinite} batch(es) with non-finite "
+                  f"gradients ({tr_batches} applied)")
 
         if scheduler is not None:
             scheduler.step()
@@ -2538,13 +2554,17 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             plot_experiment(exp_dir, n_samples=int(plot_samples), sample_idx=int(plot_sample_idx),
                             extra_new_samples=int(getattr(cfg, "plot_extra_new_samples", 0)))
 
-            # epochs=None => automatically uses available checkpoints and picks up to max_overlays evenly spaced
-            plot_epoch_prediction_overlays(
-                exp_dir,
-                sample_idx=int(plot_sample_idx),
-                epochs=None,
-                max_overlays=8,
-            )
+            # epochs=None => automatically uses available checkpoints and picks up to max_overlays evenly spaced.
+            # Needs per-epoch ckpt_ep*.pt files; when ckpt_every=0 none exist, so skip cleanly.
+            if int(getattr(cfg, "ckpt_every", 0)) > 0:
+                plot_epoch_prediction_overlays(
+                    exp_dir,
+                    sample_idx=int(plot_sample_idx),
+                    epochs=None,
+                    max_overlays=8,
+                )
+            else:
+                print("[plot] ckpt_every=0 → no per-epoch checkpoints; skipping epoch-overlay plots.")
         except ImportError as e:
             import sys
             print(f"[plot] plot_diagnostics.py import failed: {e}; sys.path={sys.path}; skipping plots.")
