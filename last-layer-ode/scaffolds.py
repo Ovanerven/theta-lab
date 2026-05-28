@@ -1798,6 +1798,119 @@ class TXTLModel9_OxygenDarkProteinScaffold(MechanisticScaffold):
         )
 
 
+class TXTLModel9_DarkStable(MechanisticScaffold):
+    """
+    Tex-faithful M9 (8-state dark/fluorescent split) stabilized for RK4 via
+    soft-saturation of the stiff k_ox·O2·P_dark conversion rate.
+
+    Same states/dynamics as TXTLModel9_OxygenDarkProteinScaffold (new_scaffolds.tex
+    §M9 step 1–5):  R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened
+
+    Stability fix: the bare conversion rate r = k_ox·O2·P_dark causes RK4 to
+    NaN when the eigenvalue r/P_dark = k_ox·O2 exceeds ~0.1/min (with hdt up
+    to 25 min, |λ·hdt| > 2.78 → instability). Previous attempts (v3a/v3b)
+    fixed this by dropping the dark-pool state entirely, which removed the
+    "savings account" mechanism that makes M9 capture the post-opening jump.
+
+    Here we keep the dark pool and bound the conversion eigenvalue by replacing
+    r with `r_safe = (P_dark/τ_stable) · tanh(r / (P_dark/τ_stable))`. For slow
+    rates this is exactly r (linear regime); for fast rates it saturates at
+    P_dark/τ_stable (first-order decay with eigenvalue 1/τ_stable). With
+    τ_stable = 10 min, |λ·hdt| ≤ 25/10 = 2.5 < 2.78 → RK4 stable.
+
+    Physical impact: max instantaneous conversion is capped at 10%/min of the
+    dark pool. Over a typical 50–100 min post-opening window the model can
+    still convert 1-exp(-5..10) ≈ 99–100% of P_dark to P_fluor, so the cap
+    does NOT prevent the model from producing the post-opening jump.
+
+    States (9):  [R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened]
+    theta (11):  [lam, V_TX, V_TL, k_dm, k_matm,
+                   k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met]
+    Observed:    [3, 6]   (mm, P_fluor)
+    """
+
+    # Stability constant: minimum time-scale (in seconds, matching dt units) for
+    # the dark→fluor conversion eigenvalue. 10 min = 600 s.
+    TAU_STABLE_SEC: float = 600.0
+
+    def __init__(self):
+        super().__init__(P=9, theta_dim=11)
+        self.state_names = [
+            "R", "O2", "m", "mm", "p", "P_dark", "P_fluor",
+            "DNA", "tube_opened",
+        ]
+        # Bounds identical to oxygen_dark for the slow biology. k_ox upper
+        # bound is RAISED relative to the v3a/v3b workaround (4e-4) because
+        # the soft-saturation removes the stability constraint that motivated
+        # that cap. Higher k_ox lets the encoder produce stronger post-opening
+        # conversion when warranted by the data.
+        self.theta_lo_vec = [
+            1e-6,                   # lam
+            3e-5, 3e-5,             # V_TX, V_TL
+            1e-5, 5e-5,             # k_dm, k_matm
+            1e-5, 1e-7, 1e-7,       # k_fold, k_degp, k_deg_dark
+            1e-6,                   # k_ox
+            1e-3, 1e-7,             # c_ox, c_met
+        ]
+        self.theta_hi_vec = [
+            5e-4,
+            1.2e-1, 8e-2,
+            1e-2, 3.5e-3,
+            3.5e-3, 1e-3, 1e-3,
+            5e-3,                   # k_ox (was 4e-4 — stability now from soft-sat)
+            1e0, 1e-3,
+        ]
+        self.obs_state_idx = [3, 6]   # mm @ idx 3, P_fluor @ idx 6
+        self.control_state_map = {"DNA c": 7, "u_open": 8}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)
+        (lam, V_TX, V_TL, kdm, kmatm,
+         k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met) = theta.unbind(dim=-1)
+
+        R_p     = torch.clamp_min(R,      0.0)
+        O2_p    = torch.clamp(O2,     0.0, 500.0)
+        m_p     = torch.clamp_min(m,      0.0)
+        mm_p    = torch.clamp_min(mm,     0.0)
+        p_p     = torch.clamp_min(p,      0.0)
+        Pdark_p = torch.clamp(P_dark, 0.0, 1e4)
+        DNA_p   = torch.clamp_min(DNA,    0.0)
+
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+        sink_mask = 1.0 - open_gate
+
+        # ── stiff-rate soft-saturation ────────────────────────────────────
+        # Bare reaction rate (per minute, given units used in trained bounds).
+        # k_ox is in /min/nM, O2 in nM, Pdark in nM → r in nM/min.
+        r_bare = k_ox * O2_p * Pdark_p
+        # Max safe rate s.t. eigenvalue r_safe/Pdark ≤ 1/τ_stable.
+        # τ_stable is in seconds; convert to minutes for the rate units used
+        # in theta bounds. 600 s = 10 min. So max_eig = 1/10 per min.
+        # max_rate = Pdark · max_eig = Pdark / 10.
+        # (Using τ in min directly: max_rate = Pdark / 10.)
+        TAU_MIN = self.TAU_STABLE_SEC / 60.0
+        max_rate = Pdark_p / TAU_MIN
+        # tanh-saturate: r_safe ≤ max_rate, linear when r_bare ≪ max_rate.
+        r_safe = max_rate * torch.tanh(r_bare / (max_rate + 1e-12))
+        # ──────────────────────────────────────────────────────────────────
+
+        dR        = -lam * R_p
+        dm        = R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm       = kmatm * m_p - kdm * mm_p
+        dp        = R_p * V_TL * (m_p + mm_p) - k_fold * p_p - k_degp * p_p
+        dPdark    = k_fold * p_p - r_safe - k_deg_dark * Pdark_p
+        dPfluor   = r_safe
+        # Use the same saturated rate in the O2 sink for energy/mass consistency.
+        dO2       = -sink_mask * (c_ox * r_safe + c_met * O2_p)
+        dDNA      = torch.zeros_like(DNA)
+        dtube     = torch.zeros_like(tube_opened)
+
+        return torch.stack(
+            (dR, dO2, dm, dmm, dp, dPdark, dPfluor, dDNA, dtube),
+            dim=-1,
+        )
+
+
 class TXTLModel9_M5Oxygen(MechanisticScaffold):
     """
     M5 + tube-opening: numerically identical to M5 (TXTLResourceandMaturationDNAScaffold).
@@ -3084,10 +3197,11 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model8_fixed":            TXTLModel8_FullFixed(),            # INVALID (zero-gate collapse)
     "txtl_model8_peaked_fixed":     TXTLModel8_PeakedFixed(),          # INVALID (zero-gate collapse) + peaked Mg/K gates (tex §8)
     "txtl_model8_bg_fixed":         TXTLModel8_BgFixed(),              # ← canonical M8 (+ per-resource learned background)
-    "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),  # v1: lambda_oxygen-compatible; deprecated
+    "txtl_model9_oxygen_dark":      TXTLModel9_OxygenDarkProteinScaffold(),  # v1: tex-faithful 9-state; NaN-prone with RK4
     "txtl_model9_m5_oxygen":        TXTLModel9_M5Oxygen(),             # v2: fallback for combined if v3b NaNs
     "txtl_model9_o2a":              TXTLModel9_O2SourceA(),            # v3a: source term, metabolic drain only
-    "txtl_model9_o2b":              TXTLModel9_O2SourceB(),            # ← canonical M9 (v3b: source term, full stoichiometry)
+    "txtl_model9_o2b":              TXTLModel9_O2SourceB(),            # v3b: simplified 7-state (no dark pool); previous canonical
+    "txtl_model9_dark_stable":      TXTLModel9_DarkStable(),           # ← NEW canonical candidate: tex-faithful 9-state + soft-saturated stiff rate (RK4 stable)
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),

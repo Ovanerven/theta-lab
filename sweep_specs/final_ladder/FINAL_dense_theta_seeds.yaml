@@ -101,20 +101,20 @@ fixed:
     synth: 0.05
 
 runs:
-  - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1, <<: *real}
-  - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1, <<: *real}
-  - {exp_name: M5_real_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1, <<: *real}
+  # - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1, <<: *real}
+  # - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1, <<: *real}
+  # - {exp_name: M5_real_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1, <<: *real}
 
-  # ── M7_bg combined A/B: synth=1.0 (no downweight) vs synth=0.05 ──────────
-  - exp_name: M7_bg_comb_synth1_s0
-    scaffold: txtl_model7_bg_fixed
-    seed: 0
-    n_substeps: 1
-    lambda_zero_traj: 0.005
-    source_loss_weights:
-      new: 5.0
-      old: 1.0
-      synth: 1.0          # full-weight synth (M7 was designed for synth data)
+  # # ── M7_bg combined A/B: synth=1.0 (no downweight) vs synth=0.05 ──────────
+  # - exp_name: M7_bg_comb_synth1_s0
+  #   scaffold: txtl_model7_bg_fixed
+  #   seed: 0
+  #   n_substeps: 1
+  #   lambda_zero_traj: 0.005
+  #   source_loss_weights:
+  #     new: 5.0
+  #     old: 1.0
+  #     synth: 1.0          # full-weight synth (M7 was designed for synth data)
 
   # M7_bg comb synth=0.05 — DROPPED. A/B settled by FINAL seed-0 run:
   #   M7_bg synth=1.0 → R²(p)=0.505 (old=0.703)
@@ -122,29 +122,86 @@ runs:
   # Keep synth=1.0 as the canonical M7_bg combined recipe going forward.
 
   # ── M8_bg combined A/B: synth=1.0 vs synth=0.05, both with L_zero ────────
-  - exp_name: M8_bg_comb_synth1_s0
-    scaffold: txtl_model8_bg_fixed
-    seed: 0
-    n_substeps: 2
-    lambda_zero_traj: 0.005
-    source_loss_weights:
-      new: 5.0
-      old: 1.0
-      synth: 1.0
+  # - exp_name: M8_bg_comb_synth1_s0
+  #   scaffold: txtl_model8_bg_fixed
+  #   seed: 0
+  #   n_substeps: 2
+  #   lambda_zero_traj: 0.005
+  #   source_loss_weights:
+  #     new: 5.0
+  #     old: 1.0
+  #     synth: 1.0
 
-  - exp_name: M8_bg_comb_synth005_s0
-    scaffold: txtl_model8_bg_fixed
+  # - exp_name: M8_bg_comb_synth005_s0
+  #   scaffold: txtl_model8_bg_fixed
+  #   seed: 0
+  #   n_substeps: 2
+  #   lambda_zero_traj: 0.005
+  #   source_loss_weights:
+  #     new: 5.0
+  #     old: 1.0
+  #     synth: 0.05
+
+  # ── D-recipe ablation rows (test whether time_upweight/species_weights hurt) ──
+  # Both run with MINIMAL loss recipe: lambda_endpoint + loss_normalizer ONLY.
+  # Override the fixed: block's species_weights/time_upweight/endpoint_channels
+  # by setting them to null/empty at the run level.
+  #
+  # M5 minimal: tests whether full d-recipe caused M5's regression (canonical
+  # M5 was R²p=0.500; FINAL M5 with full d-recipe dropped to 0.266).
+  # M9v3b minimal: tests whether the small oxygen jump is loss-shape-driven —
+  # if magnitude improves vs M9v3b_real_s0 (full d-recipe), strip d-recipe
+  # from M9 going forward.
+  - exp_name: M5_real_minrecipe_s0
+    scaffold: txtl_resource_and_maturation_dna
     seed: 0
-    n_substeps: 2
-    lambda_zero_traj: 0.005
-    source_loss_weights:
-      new: 5.0
-      old: 1.0
-      synth: 0.05
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  - exp_name: M9v3b_real_minrecipe_s0
+    scaffold: txtl_model9_o2b
+    seed: 0
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: [*real, *m9ox_real]
 
   - exp_name: M9v3b_real_s0
     scaffold: txtl_model9_o2b
     seed: 0
+    <<: [*real, *m9ox_real]
+
+  # ── M9_dark_stable variants — tex-faithful 9-state with P_dark pool ──────
+  # Uses TXTLModel9_DarkStable: same equations as oxygen_dark but with soft-
+  # saturated k_ox·O2·Pdark rate so RK4 stays stable. Predicts on P_fluor (the
+  # cashed-out fluorescent state), not raw pm — the dataset's pm should match
+  # P_fluor after the dark pool is converted by oxygen.
+  #
+  # Two variants:
+  #   - full d-recipe + lambda_oxygen=0.1 (tex's L_oxygen post-opening loss)
+  #   - minimal recipe + lambda_oxygen=0.1
+  # The lambda_oxygen loss explicitly penalizes failure to match the post-
+  # opening fluorescence jump (new_scaffolds.tex eq for L_oxygen).
+  #
+  # Note: M9_dark uses obs_state_idx=[3, 6] (mm at scaffold idx 3, P_fluor at
+  # idx 6); the dataset obs_idx=[3, 5] (mm, pm) is lifted into this layout.
+  # gru_u_cols and oxygen control wiring come from *m9ox_real (no change needed).
+  - exp_name: M9_dark_real_full_s0
+    scaffold: txtl_model9_dark_stable
+    seed: 0
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]
+
+  - exp_name: M9_dark_real_min_s0
+    scaffold: txtl_model9_dark_stable
+    seed: 0
+    lambda_oxygen: 0.1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
     <<: [*real, *m9ox_real]
 
   # ── M3/M4/M5/M9v3b combined — runs right after the real-only block. ──────
