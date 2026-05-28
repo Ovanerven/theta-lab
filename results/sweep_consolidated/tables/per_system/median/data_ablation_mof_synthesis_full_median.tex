@@ -1,0 +1,47 @@
+% MOF synthesis — NRMSE (median, full obs).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/4}} \\
+CMVF & 0.181 & 0.155 & \textbf{0.107} & \textbf{0.035} \\
+CMVF-L1 & 0.210 & 0.147 & 0.113 & 0.045 \\
+CMVF-L2 & -- & -- & -- & 0.038 \\
+CMVF-unbounded & 0.534 & 0.133 & 0.135 & 0.043 \\
+NODE-GRU & 0.407 & 0.159 & 0.120 & 0.051 \\
+NODE-MLP & 1.045 & 0.132 & 0.204 & 0.196 \\
+NODE-correction & 0.401 & \textbf{0.131} & 0.151 & -- \\
+Global ($\theta$) & 0.593 & 0.501 & 0.313 & 0.145 \\
+Initial-condition ($\theta$) & \textbf{0.178} & 0.159 & 0.115 & 0.149 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/6}} \\
+CMVF & 0.156 & \textbf{0.067} & \textbf{0.054} & \textbf{0.030} \\
+CMVF-L1 & 0.250 & 0.075 & 0.057 & 0.045 \\
+CMVF-unbounded & 0.196 & 0.079 & 0.064 & 0.034 \\
+NODE-GRU & 0.393 & 0.181 & 0.159 & 0.053 \\
+NODE-MLP & 0.408 & 0.182 & 0.135 & 0.084 \\
+NODE-correction & 0.317 & 0.140 & 0.069 & 0.060 \\
+Global ($\theta$) & 0.240 & 0.255 & 0.096 & 0.095 \\
+Initial-condition ($\theta$) & \textbf{0.111} & 0.154 & 0.076 & 0.094 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/8}} \\
+CMVF & 0.215 & \textbf{0.052} & \textbf{0.019} & \textbf{0.011} \\
+CMVF-L1 & 0.303 & 0.114 & 0.026 & 0.018 \\
+CMVF-unbounded & \textbf{0.200} & 0.118 & 0.026 & 0.015 \\
+NODE-GRU & 0.370 & 0.246 & 0.117 & 0.054 \\
+NODE-MLP & 0.388 & 0.216 & 0.188 & 0.067 \\
+NODE-correction & 0.346 & 0.173 & 0.078 & 0.045 \\
+Global ($\theta$) & 0.300 & 0.265 & 0.164 & 0.084 \\
+Initial-condition ($\theta$) & 0.249 & 0.130 & 0.072 & 0.082 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/12}} \\
+CMVF & \textbf{0.086} & \textbf{0.014} & \textbf{0.008} & 0.007 \\
+CMVF-L1 & 0.167 & 0.027 & 0.020 & 0.009 \\
+CMVF-unbounded & 0.122 & 0.021 & 0.017 & \textbf{0.007} \\
+NODE-GRU & 0.450 & 0.339 & 0.133 & 0.047 \\
+NODE-MLP & 0.543 & 0.272 & 0.130 & 0.040 \\
+NODE-correction & 0.200 & 0.111 & 0.055 & 0.015 \\
+Global ($\theta$) & 0.193 & 0.160 & 0.080 & 0.016 \\
+Initial-condition ($\theta$) & 0.094 & 0.025 & 0.010 & 0.009 \\
+\bottomrule
+\end{tabular}

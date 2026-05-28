@@ -1,0 +1,36 @@
+% Single enzyme — NRMSE (mean, first--last).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Enzyme/2}} \\
+CMVF & 0.526 & 0.148 & 0.046 & -- \\
+CMVF-L1 & 0.526 & 0.148 & \textbf{0.044} & -- \\
+CMVF-unbounded & 0.606 & \textbf{0.080} & 0.055 & -- \\
+NODE-GRU & 0.776 & 0.103 & 0.083 & -- \\
+NODE-MLP & 0.729 & 0.116 & 0.181 & -- \\
+NODE-correction & \textbf{0.424} & 0.083 & 0.177 & -- \\
+Global ($\theta$) & 0.466 & 0.348 & 0.241 & \textbf{0.413} \\
+Initial-condition ($\theta$) & 0.500 & 0.180 & 0.266 & 0.422 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Enzyme/4}} \\
+CMVF & \textbf{0.030} & 0.060 & \textbf{0.005} & \textbf{0.004} \\
+CMVF-L1 & 0.038 & 0.060 & 0.009 & 0.007 \\
+CMVF-unbounded & 0.037 & \textbf{0.024} & 0.006 & $1.1\!\times\!10^{6}$ \\
+NODE-GRU & 0.520 & 0.478 & 0.305 & 0.257 \\
+NODE-MLP & 0.279 & 0.193 & 0.265 & 0.291 \\
+NODE-correction & 0.067 & 0.050 & 0.103 & 0.086 \\
+Global ($\theta$) & 0.031 & 0.031 & 0.037 & 0.042 \\
+Initial-condition ($\theta$) & 0.031 & 0.028 & 0.036 & $1.1\!\times\!10^{6}$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Enzyme/6}} \\
+CMVF & 0.012 & 0.009 & \textbf{0.003} & \textbf{0.003} \\
+CMVF-L1 & 0.010 & 0.010 & 0.004 & 0.005 \\
+CMVF-unbounded & 0.012 & 0.005 & 0.005 & 0.003 \\
+NODE-GRU & $5.4\!\times\!10^{7}$ & $6.6\!\times\!10^{7}$ & $1.6\!\times\!10^{7}$ & $2.2\!\times\!10^{7}$ \\
+NODE-MLP & $1.4\!\times\!10^{7}$ & $5.0\!\times\!10^{7}$ & $1.9\!\times\!10^{7}$ & $2.7\!\times\!10^{7}$ \\
+NODE-correction & $7.7\!\times\!10^{6}$ & $2.4\!\times\!10^{7}$ & $2.1\!\times\!10^{7}$ & $1.5\!\times\!10^{7}$ \\
+Global ($\theta$) & 0.020 & 0.021 & 0.014 & 0.008 \\
+Initial-condition ($\theta$) & \textbf{0.009} & \textbf{0.002} & 0.003 & 0.004 \\
+\bottomrule
+\end{tabular}

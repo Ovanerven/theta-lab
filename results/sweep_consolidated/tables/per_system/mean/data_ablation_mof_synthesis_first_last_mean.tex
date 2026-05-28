@@ -1,0 +1,46 @@
+% MOF synthesis — NRMSE (mean, first--last).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/4}} \\
+CMVF & 1.050 & 0.540 & \textbf{0.766} & 12.024 \\
+CMVF-L1 & 1.043 & 0.602 & 11.351 & 9.588 \\
+CMVF-unbounded & \textbf{0.735} & \textbf{0.424} & 23.357 & \textbf{3.835} \\
+NODE-GRU & 1.989 & 3.658 & $8.8\!\times\!10^{5}$ & $1.6\!\times\!10^{7}$ \\
+NODE-MLP & 0.871 & 3.890 & $2.9\!\times\!10^{7}$ & $1.2\!\times\!10^{7}$ \\
+NODE-correction & 0.979 & 0.865 & $2.9\!\times\!10^{5}$ & $1.2\!\times\!10^{5}$ \\
+Global ($\theta$) & 0.948 & 0.668 & 0.859 & 16.990 \\
+Initial-condition ($\theta$) & 0.743 & 0.571 & 0.833 & 15.714 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/6}} \\
+CMVF & 0.338 & \textbf{0.130} & \textbf{0.121} & \textbf{0.154} \\
+CMVF-L1 & 0.273 & 0.144 & 0.130 & 0.459 \\
+CMVF-unbounded & 0.264 & 0.132 & 8.915 & 0.223 \\
+NODE-GRU & 1.540 & 1.173 & $1.6\!\times\!10^{7}$ & $7.4\!\times\!10^{6}$ \\
+NODE-MLP & 5.559 & 16.193 & $3.5\!\times\!10^{7}$ & $5.6\!\times\!10^{6}$ \\
+NODE-correction & 0.328 & 0.309 & $1.1\!\times\!10^{4}$ & $4.7\!\times\!10^{5}$ \\
+Global ($\theta$) & \textbf{0.229} & 0.240 & 0.133 & 0.353 \\
+Initial-condition ($\theta$) & 0.265 & 0.172 & 0.191 & 0.213 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/8}} \\
+CMVF & 0.265 & \textbf{0.151} & \textbf{0.070} & \textbf{0.042} \\
+CMVF-L1 & 0.289 & 0.156 & 0.170 & 0.250 \\
+CMVF-unbounded & 0.268 & 0.152 & 1.496 & 0.093 \\
+NODE-GRU & 3.369 & 3.087 & $1.2\!\times\!10^{8}$ & $2.6\!\times\!10^{7}$ \\
+NODE-MLP & 3.183 & 10.429 & $4.3\!\times\!10^{7}$ & $1.9\!\times\!10^{7}$ \\
+NODE-correction & 0.409 & 0.332 & $1.7\!\times\!10^{5}$ & $1.1\!\times\!10^{6}$ \\
+Global ($\theta$) & 0.272 & 0.259 & 0.168 & 0.150 \\
+Initial-condition ($\theta$) & \textbf{0.240} & 0.160 & 0.216 & 0.202 \\
+\midrule
+\multicolumn{5}{l}{\textbf{MOF/12}} \\
+CMVF & \textbf{0.119} & 0.112 & 5.486 & 3.049 \\
+CMVF-L1 & 0.119 & 0.113 & 23.798 & 1.174 \\
+CMVF-unbounded & 0.173 & \textbf{0.080} & 21.744 & 8.517 \\
+NODE-GRU & 3.777 & 3.715 & $1.6\!\times\!10^{7}$ & $7.8\!\times\!10^{6}$ \\
+NODE-MLP & 1.358 & 2.121 & $1.9\!\times\!10^{7}$ & $4.3\!\times\!10^{6}$ \\
+NODE-correction & 0.185 & 0.314 & $2.6\!\times\!10^{5}$ & $7.7\!\times\!10^{4}$ \\
+Global ($\theta$) & 0.169 & 0.167 & 930.252 & 83.288 \\
+Initial-condition ($\theta$) & 0.142 & 0.141 & \textbf{2.412} & \textbf{1.043} \\
+\bottomrule
+\end{tabular}

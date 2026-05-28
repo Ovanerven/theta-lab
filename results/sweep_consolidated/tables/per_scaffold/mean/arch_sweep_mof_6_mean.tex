@@ -1,0 +1,19 @@
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n{=}3$ & $n{=}10$ & $n{=}100$ & $n{=}1000$ \\
+\midrule
+\multicolumn{5}{l}{\emph{Full observation}} \\
+GRU & -- & \textbf{0.067} & 0.057 & \textbf{0.039} \\
+LSTM & -- & 0.080 & 0.058 & 0.044 \\
+sLSTM & \textbf{0.122} & 0.085 & \textbf{0.056} & 0.067 \\
+Transformer & -- & -- & 0.060 & 0.049 \\
+Mamba & -- & -- & 0.065 & 0.163 \\
+\midrule
+\multicolumn{5}{l}{\emph{First--last observation}} \\
+GRU & -- & 0.130 & 0.121 & \textbf{0.154} \\
+LSTM & -- & -- & \textbf{0.116} & 0.162 \\
+sLSTM & \textbf{0.351} & \textbf{0.130} & 0.176 & 0.173 \\
+Transformer & -- & -- & 0.129 & 0.199 \\
+Mamba & -- & -- & 0.178 & 0.339 \\
+\bottomrule
+\end{tabular}

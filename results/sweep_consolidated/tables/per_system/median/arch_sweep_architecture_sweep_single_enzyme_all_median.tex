@@ -1,0 +1,16 @@
+% Architecture sweep — single enzyme — NRMSE (median).
+\begin{tabular}{lrrrr}
+\toprule
+Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Enzyme/2 — full obs}} \\
+GRU & -- & -- & 0.044 & -- \\
+LSTM & -- & -- & 0.065 & -- \\
+sLSTM & \textbf{0.533} & \textbf{0.114} & 0.055 & \textbf{0.009} \\
+Transformer & -- & -- & \textbf{0.033} & -- \\
+Mamba & -- & -- & 0.120 & -- \\
+\midrule
+\multicolumn{5}{l}{\textbf{Enzyme/2 — first--last}} \\
+GRU & -- & -- & \textbf{0.044} & -- \\
+\bottomrule
+\end{tabular}
