@@ -80,17 +80,17 @@ fixed:
   loss_clamp_min: 1.0
 
 runs:
+  # ── M8_bg old ──────────────────────────────────────────────────────────
+  - {exp_name: M8_bg_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1}
+  # - {exp_name: M8_bg_old_s1, scaffold: txtl_model8_bg_fixed, seed: 1, n_substeps: 1}
+  # - {exp_name: M8_bg_old_s2, scaffold: txtl_model8_bg_fixed, seed: 2, n_substeps: 1}
+
   # ── M7_bg old ──────────────────────────────────────────────────────────
   - {exp_name: M7_bg_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1}
-  - {exp_name: M7_bg_old_s1, scaffold: txtl_model7_bg_fixed, seed: 1, n_substeps: 1}
-  - {exp_name: M7_bg_old_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1}
-
-  # ── M8_bg old ──────────────────────────────────────────────────────────
-  - {exp_name: M8_bg_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 2}
-  - {exp_name: M8_bg_old_s1, scaffold: txtl_model8_bg_fixed, seed: 1, n_substeps: 2}
-  - {exp_name: M8_bg_old_s2, scaffold: txtl_model8_bg_fixed, seed: 2, n_substeps: 2}
+  # - {exp_name: M7_bg_old_s1, scaffold: txtl_model7_bg_fixed, seed: 1, n_substeps: 1}
+  # - {exp_name: M7_bg_old_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1}
 
   # ── M9v3b old ──────────────────────────────────────────────────────────
   - {exp_name: M9v3b_old_s0, scaffold: txtl_model9_o2b, seed: 0, <<: *m9ox_old}
-  - {exp_name: M9v3b_old_s1, scaffold: txtl_model9_o2b, seed: 1, <<: *m9ox_old}
-  - {exp_name: M9v3b_old_s2, scaffold: txtl_model9_o2b, seed: 2, <<: *m9ox_old}
+  # - {exp_name: M9v3b_old_s1, scaffold: txtl_model9_o2b, seed: 1, <<: *m9ox_old}
+  # - {exp_name: M9v3b_old_s2, scaffold: txtl_model9_o2b, seed: 2, <<: *m9ox_old}

@@ -152,27 +152,27 @@ runs:
   # M9v3b minimal: tests whether the small oxygen jump is loss-shape-driven —
   # if magnitude improves vs M9v3b_real_s0 (full d-recipe), strip d-recipe
   # from M9 going forward.
-  - exp_name: M5_real_minrecipe_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
+  # - exp_name: M5_real_minrecipe_s0
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 0
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
 
-  - exp_name: M9v3b_real_minrecipe_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9v3b_real_minrecipe_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: [*real, *m9ox_real]
 
-  - exp_name: M9v3b_real_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9v3b_real_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   <<: [*real, *m9ox_real]
 
   # ── M9_dark_stable variants — tex-faithful 9-state with P_dark pool ──────
   # Uses TXTLModel9_DarkStable: same equations as oxygen_dark but with soft-
@@ -206,10 +206,10 @@ runs:
 
   # ── M3/M4/M5/M9v3b combined — runs right after the real-only block. ──────
   # Inherits combined-default source_loss_weights = {new:5, old:1, synth:0.05}.
-  - {exp_name: M3_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1}
-  - {exp_name: M4_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1}
-  - {exp_name: M5_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1}
-  - exp_name: M9v3b_comb_s0
-    scaffold: txtl_model9_o2b
-    seed: 0
-    <<: *m9ox_comb
+  # - {exp_name: M3_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1}
+  # - {exp_name: M4_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1}
+  # - {exp_name: M5_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1}
+  # - exp_name: M9v3b_comb_s0
+  #   scaffold: txtl_model9_o2b
+  #   seed: 0
+  #   <<: *m9ox_comb

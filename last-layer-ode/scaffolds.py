@@ -1829,12 +1829,13 @@ class TXTLModel9_DarkStable(MechanisticScaffold):
     Observed:    [3, 6]   (mm, P_fluor)
     """
 
-    # Stability constant: minimum time-scale (in seconds, matching dt units) for
-    # the dark→fluor conversion eigenvalue. 10 min = 600 s.
-    TAU_STABLE_SEC: float = 600.0
-
     def __init__(self):
         super().__init__(P=9, theta_dim=11)
+        # Stability constant: minimum time-scale (in seconds, matching dt units) for
+        # the dark→fluor conversion eigenvalue. 10 min = 600 s. Set as an instance
+        # attribute (not a bare class attr) so TorchScript can resolve self.TAU_STABLE_SEC
+        # in forward() — class-level attributes are invisible to the scripter.
+        self.TAU_STABLE_SEC: float = 600.0
         self.state_names = [
             "R", "O2", "m", "mm", "p", "P_dark", "P_fluor",
             "DNA", "tube_opened",
