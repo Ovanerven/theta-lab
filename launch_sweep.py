@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""
+Generic SLURM sweep launcher for theta-lab training runs.
+
+Supports two sweep modes, both via the same YAML spec:
+
+  grid mode  — cartesian product of param lists (hyperparameter search)
+  runs mode  — explicit list of run dicts (architecture comparison)
+
+Runs are batched into SLURM jobs. Runs with different conda environments
+(e.g. mamba_env vs thesis_env) are automatically split into separate jobs.
+
+Usage:
+    python launch_sweep.py sweep_specs/lstm_mof6.yaml
+    python launch_sweep.py sweep_specs/arch_comparison_mof6.yaml --dry-run
+    python launch_sweep.py sweep_specs/lstm_mof6.yaml --out-root experiments/test
+    python launch_sweep.py sweep_specs/lstm_mof6.yaml --no-compare
+
+────────────────────────────────────────────────────────────
+SPEC KEYS (all optional unless marked required)
+────────────────────────────────────────────────────────────
+study         [required] folder/study name
+base_config   base YAML config path; can be overridden per-run
+dataset_path  passed as --set (can be overridden per-run)
+scaffold      passed as --set (can be overridden per-run)
+model_class   passed as --set (can be overridden per-run)
+exp_name      Python f-string template for the run name, e.g.
+              "lstm_h{hidden}_l{num_layers}"  (grid mode)
+              or set per-run in runs mode
+
+fixed         dict of param->value added to every run via --set
+no_plot       if true, passes --no-plot to train.py (default: true)
+
+# Grid mode (cartesian product):
+grid          dict of param -> list of values
+derived       dict of param -> Python expression evaluated with
+              grid param values in scope, e.g.
+                dropout: "0.0 if num_layers == 1 else 0.1"
+
+# Runs mode (explicit list):
+runs          list of dicts; each dict is one run.
+              Per-run keys:
+                base_config  overrides top-level base_config
+                env          conda env (default: thesis_env)
+                exp_name     overrides top-level exp_name template
+                time         per-run SLURM time override
+                <anything>   passed as --set <key>=<val>
+
+# Batching / SLURM:
+runs_per_job  max runs to stack per SLURM job (default: 3)
+              runs with different envs are never mixed in one job
+time          wall-clock limit per batch job (default: "01:30:00")
+compare_time  wall-clock limit for the compare job (default: "01:00:00")
+partition     SLURM partition (default: "gpu_a100")
+gpus          GPUs per job (default: 1)
+ntasks        (default: 1)
+cpus_per_task (default: 9)
+"""
+from __future__ import annotations
+
+import argparse
+import itertools
+import os
+import shlex
+import subprocess
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import yaml
+
+try:
+    import psutil  # type: ignore
+    _has_psutil = True
+except ImportError:
+    _has_psutil = False
+
+
+RESERVED_RUN_KEYS = {"base_config", "env", "exp_name", "time", "train_script"}
+DEFAULT_ENV = "thesis_env"
+TRAIN_CMD = "python -u last-layer-ode/train.py"
+SACCT_CMD = "sacct -j $SLURM_JOB_ID --format=JobID,Elapsed,MaxRSS,State -n"
+
+
+# ── spec loading ──────────────────────────────────────────────────────────────
+
+def load_spec(path: str | Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# ── run generation ────────────────────────────────────────────────────────────
+
+def expand_grid(spec: dict) -> list[dict]:
+    """Cartesian product of spec['grid'], with derived params applied."""
+    grid = spec.get("grid", {})
+    if not grid:
+        return [{}]
+    keys = list(grid.keys())
+    combos = [dict(zip(keys, vals)) for vals in itertools.product(*[grid[k] for k in keys])]
+    derived = spec.get("derived", {})
+    result = []
+    for combo in combos:
+        for key, expr in derived.items():
+            combo[key] = eval(expr, {}, dict(combo))  # noqa: S307 — local tool
+        result.append(combo)
+    return result
+
+
+def get_runs(spec: dict) -> list[dict]:
+    """Return a flat list of run dicts regardless of grid vs runs mode."""
+    if "runs" in spec:
+        return list(spec["runs"])
+    runs = expand_grid(spec)
+    if "env" in spec:
+        for run in runs:
+            run.setdefault("env", spec["env"])
+    return runs
+
+
+# ── command building ──────────────────────────────────────────────────────────
+
+def resolve_exp_name(spec: dict, run: dict) -> str:
+    template = run.get("exp_name") or spec.get("exp_name", "run")
+    ctx = {**spec, **run}
+    try:
+        return template.format(**{k: v for k, v in ctx.items() if isinstance(v, (str, int, float, bool))})
+    except KeyError:
+        return template
+
+
+def build_train_cmd(spec: dict, run: dict, out_root: str) -> str:
+    # base_config may be set per-run, at spec top level, or — for historical
+    # reasons — under `fixed:`. Accept all three (per-run > top-level > fixed).
+    fixed_base = (spec.get("fixed") or {}).get("base_config")
+    base_config = (
+        run.get("base_config")
+        or spec.get("base_config")
+        or fixed_base
+        or "configs/archs/gru.yaml"
+    )
+    exp_name = resolve_exp_name(spec, run)
+    no_plot = spec.get("no_plot", False)
+    train_script = run.get("train_script") or spec.get("train_script") or TRAIN_CMD.split()[-1]
+    cmd = f"python -u {train_script}"
+
+    parts = [cmd]
+    if no_plot:
+        parts.append("--no-plot")
+    parts += [
+        f"--config {base_config}",
+        f"--set study={spec['study']}",
+        f"--set out_root={out_root}",
+        f"--set exp_name={exp_name}",
+    ]
+
+    # Top-level spec defaults (dataset_path, scaffold, model_class)
+    for key in ("dataset_path", "scaffold", "model_class"):
+        if key in spec and key not in run:
+            parts.append(f"--set {key}={spec[key]}")
+
+    def _fmt(val):
+        # Lists: render via yaml flow style (so floats keep "1.0e-08" form
+        # which YAML parses as float, unlike JSON's "1e-08" which YAML reads as
+        # string), strip internal whitespace, and single-quote so the shell
+        # passes them through as one --set arg.
+        if isinstance(val, (list, tuple, dict)):
+            # Single-quote the whole flow-style YAML so the shell passes it as one
+            # arg. Don't strip internal spaces — YAML needs "key: value" with a
+            # space after the colon to parse dicts correctly.
+            payload = list(val) if isinstance(val, tuple) else val
+            s = yaml.safe_dump(payload, default_flow_style=True).strip()
+            return "'" + s + "'"
+        return str(val)
+
+    # Fixed params from spec (not already in run)
+    for key, val in spec.get("fixed", {}).items():
+        if key in RESERVED_RUN_KEYS:
+            continue
+        if key not in run:
+            parts.append(f"--set {key}={_fmt(val)}")
+
+    # Run-specific params
+    for key, val in run.items():
+        if key not in RESERVED_RUN_KEYS:
+            parts.append(f"--set {key}={_fmt(val)}")
+
+    return " ".join(parts)
+
+
+def exp_label(cmd: str) -> str:
+    for token in cmd.split():
+        if token.startswith("exp_name="):
+            return token.split("=", 1)[1]
+    return "?"
+
+
+# ── batching ──────────────────────────────────────────────────────────────────
+
+def make_batches(runs: list[dict], runs_per_job: int) -> list[list[dict]]:
+    """Group runs by env, then chunk each group into batches of runs_per_job."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for run in runs:
+        groups[run.get("env", DEFAULT_ENV)].append(run)
+
+    batches = []
+    for group in groups.values():
+        for i in range(0, len(group), runs_per_job):
+            batches.append(group[i : i + runs_per_job])
+    return batches
+
+
+# ── SLURM submission ──────────────────────────────────────────────────────────
+
+def make_preamble(env: str) -> str:
+    return (
+        "module purge && "
+        "module load 2025 && "
+        "module load Anaconda3/2025.06-1 && "
+        "source $(conda info --base)/etc/profile.d/conda.sh && "
+        f"conda activate {env}"
+    )
+
+
+def submit_batch(
+    cmds: list[str],
+    env: str,
+    spec: dict,
+    batch_num: int,
+    study: str,
+    dry_run: bool,
+) -> str:
+    wrap = " && ".join([make_preamble(env), *cmds, SACCT_CMD])
+    time = spec.get("time", "01:30:00")
+
+    sbatch_args = [
+        "sbatch",
+        f"--job-name={study}_b{batch_num}",
+        f"--time={time}",
+        f"--partition={spec.get('partition', 'gpu_a100')}",
+        f"--gpus={spec.get('gpus', 1)}",
+        f"--ntasks={spec.get('ntasks', 1)}",
+        f"--cpus-per-task={spec.get('cpus_per_task', 9)}",
+        f"--output=slurm_outputs/{study}/%A_%x.out",
+        f"--wrap={wrap}",
+    ]
+
+    if dry_run:
+        print(f"  [dry-run] batch {batch_num}  env={env}  time={time}")
+        for cmd in cmds:
+            print(f"    {cmd}")
+        return f"DRY{batch_num}"
+
+    result = subprocess.run(sbatch_args, capture_output=True, text=True, check=True)
+    return result.stdout.strip().split()[-1]
+
+
+def submit_compare(job_ids: list[str], study: str, time: str, dry_run: bool, env: str = DEFAULT_ENV, endpoint_r2: bool = False) -> str:
+    dep = ":".join(job_ids)
+    # Always send compare to thesis_env — compare/metric scripts live in the
+    # thesis_env install (matplotlib, numpy, etc.); mamba_env is training-only.
+    export = f"ALL,STUDY={study},ENV=thesis_env"
+    if endpoint_r2:
+        export += ",ENDPOINT_R2=1"
+    args = [
+        "sbatch",
+        f"--job-name={study}_compare",
+        f"--dependency=afterany:{dep}",
+        f"--time={time}",
+        f"--output=slurm_outputs/{study}/%A_%x.out",
+        f"--export={export}",
+        "slurm_jobs/compare.job",
+    ]
+
+    if dry_run:
+        print(f"  [dry-run] compare job  dep=afterany:{dep}")
+        return "DRY_CMP"
+
+    result = subprocess.run(args, capture_output=True, text=True, check=True)
+    return result.stdout.strip().split()[-1]
+
+
+# ── local runner ──────────────────────────────────────────────────────────────
+
+def _free_gb() -> float:
+    if not _has_psutil:
+        return float("inf")
+    return psutil.virtual_memory().available / (1024 ** 3)
+
+
+def run_local(
+    runs: list[dict],
+    spec: dict,
+    out_root: str,
+    study: str,
+    max_parallel: int,
+    min_free_gb: float,
+    poll_seconds: float = 2.0,
+) -> int:
+    """Run training commands on this machine, keeping <=max_parallel concurrent.
+
+    If psutil is installed and min_free_gb > 0, also blocks new launches until
+    available RAM exceeds min_free_gb. The conda env must already be active in
+    the parent shell (we just `os.execvp`-style invoke `python ...`).
+    """
+    log_dir = Path(f"slurm_outputs/{study}")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    queue = [(build_train_cmd(spec, run, out_root), exp_label(build_train_cmd(spec, run, out_root))) for run in runs]
+    running: list[tuple[subprocess.Popen, str, "object"]] = []
+    failures = 0
+    done = 0
+    total = len(queue)
+
+    print(f"Local mode: {total} run(s), max_parallel={max_parallel}, "
+          f"min_free_gb={min_free_gb} (psutil={'yes' if _has_psutil else 'no'})")
+    print()
+
+    while queue or running:
+        # Reap finished.
+        still = []
+        for p, label, log in running:
+            rc = p.poll()
+            if rc is None:
+                still.append((p, label, log))
+                continue
+            log.close()
+            done += 1
+            mark = "✓" if rc == 0 else "✗"
+            if rc != 0:
+                failures += 1
+            print(f"  {mark}  {label}  rc={rc}  ({done}/{total} done, {failures} failed)")
+        running = still
+
+        # Start as many as the slots/RAM allow.
+        while queue and len(running) < max_parallel:
+            if min_free_gb > 0 and _free_gb() < min_free_gb:
+                break  # wait for more RAM before starting another
+            cmd, label = queue.pop(0)
+            log_path = log_dir / f"local_{label}.log"
+            log = open(log_path, "w", encoding="utf-8")
+            log.write(f"$ {cmd}\n\n"); log.flush()
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            p = subprocess.Popen(shlex.split(cmd, posix=True), stdout=log, stderr=subprocess.STDOUT, env=env)
+            running.append((p, label, log))
+            print(f"  →  started {label}  (pid {p.pid})  log: {log_path}")
+
+        if running:
+            time.sleep(poll_seconds)
+
+    print()
+    print(f"Done. {done - failures}/{total} succeeded, {failures} failed. Logs in {log_dir}/")
+    return failures
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Submit a batched SLURM hyperparameter/architecture sweep.")
+    parser.add_argument("spec", help="Path to sweep spec YAML")
+    parser.add_argument("--out-root", default="experiments")
+    parser.add_argument("--dry-run", action="store_true", help="Print without submitting")
+    parser.add_argument("--no-compare", action="store_true", help="Skip the NRMSE compare job")
+    parser.add_argument(
+        "--local", action="store_true",
+        help="Run on this machine (no SLURM). Useful for Mac/MPS. "
+             "Activate your conda env first; this just spawns `python ...`."
+    )
+    parser.add_argument(
+        "--max-parallel", type=int, default=2,
+        help="Local mode: how many runs to keep going at once (default: 2)."
+    )
+    parser.add_argument(
+        "--min-free-gb", type=float, default=0.0,
+        help="Local mode: wait to start a new run until available RAM "
+             "exceeds this (GB). 0 disables. Needs `pip install psutil`."
+    )
+    args = parser.parse_args()
+
+    spec = load_spec(args.spec)
+    study = spec["study"]
+    runs_per_job = int(spec.get("runs_per_job", 3))
+
+    runs = get_runs(spec)
+
+    if args.local:
+        if args.dry_run:
+            print(f"Study      : {study}")
+            print(f"Spec       : {args.spec}  (local mode, dry run)")
+            print(f"Runs       : {len(runs)}  max_parallel={args.max_parallel}  min_free_gb={args.min_free_gb}")
+            print()
+            for run in runs:
+                cmd = build_train_cmd(spec, run, args.out_root)
+                print(f"  {exp_label(cmd)}: {cmd}")
+            return
+        rc = run_local(
+            runs, spec, args.out_root, study,
+            max_parallel=int(args.max_parallel),
+            min_free_gb=float(args.min_free_gb),
+        )
+        raise SystemExit(0 if rc == 0 else 1)
+
+    batches = make_batches(runs, runs_per_job)
+
+    n_runs = sum(len(b) for b in batches)
+    print(f"Study      : {study}")
+    print(f"Spec       : {args.spec}")
+    print(f"Total runs : {n_runs}  →  {len(batches)} job(s)  ({runs_per_job} per job max)")
+    print()
+
+    Path(f"slurm_outputs/{study}").mkdir(parents=True, exist_ok=True)
+
+    job_ids: list[str] = []
+    sweep_env = DEFAULT_ENV
+    for batch_num, batch in enumerate(batches):
+        env = batch[0].get("env", DEFAULT_ENV)
+        sweep_env = env
+        cmds = [build_train_cmd(spec, run, args.out_root) for run in batch]
+        labels = [exp_label(c) for c in cmds]
+        jid = submit_batch(cmds, env, spec, batch_num, study, args.dry_run)
+        job_ids.append(jid)
+        print(f"Batch {batch_num}  env={env}  [{', '.join(labels)}]  → job {jid}")
+
+    if not args.no_compare:
+        print()
+        # endpoint_r2 may live at top level or under fixed:
+        has_endpoint_r2 = bool(
+            spec.get("endpoint_r2") or spec.get("fixed", {}).get("endpoint_r2")
+        )
+        cjid = submit_compare(job_ids, study, spec.get("compare_time", "01:00:00"), args.dry_run, env=sweep_env, endpoint_r2=has_endpoint_r2)
+        print(f"Compare    : job {cjid}")
+
+    print()
+    print(f"Results → {args.out_root}/{study}")
+    print(f"Inspect:   python last-layer-ode/metrics/compare_runs.py {args.out_root}/{study} --csv results/{study}.csv")
+
+
+if __name__ == "__main__":
+    main()
