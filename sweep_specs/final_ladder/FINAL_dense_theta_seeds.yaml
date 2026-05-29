@@ -190,34 +190,240 @@ runs:
   # idx 6); the dataset obs_idx=[3, 5] (mm, pm) is lifted into this layout.
   # gru_u_cols and oxygen control wiring come from *m9ox_real (no change needed).
 
-  - exp_name: M9_dark_real_full_s0_lr0015
-    scaffold: txtl_model9_dark_stable
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CURRENT STATE OF DENSE COVERAGE (as of 2026-05-29):
+  #
+  # Seed 0 done: M3/M4/M5_real(drecipe), M7_bg×{synth1,synth005}, M8_bg×{both},
+  #              M9v3b_real, M9_dark_full_lr0015, M9_dark_min, M3_comb
+  # Seed 1 done: M3/M4/M5_real(drecipe), M5_real_minrecipe, M7_bg_synth1,
+  #              M8_bg_synth1 (mislabeled as _s0, real seed=1), M9v3b_real,
+  #              M9_dark_full_lr0015
+  # Seed 2 done: M3/M4_real(drecipe); M5_real(drecipe) incomplete
+  #
+  # KEY FINDINGS so far:
+  #   - M5 minrecipe BEATS drecipe by +0.26 R²p (s1 confirms s0)
+  #   - M9_dark needs lr=0.0015 (lr=0.002 collapses into a bad attractor)
+  #   - M7_bg synth=1.0 > synth=0.05; A/B settled
+  #   - M8_bg synth=0.05 ≥ synth=1.0 (close, downweight slightly wins)
+  #
+  # Below: the priority next-batch runs to close the matrix.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── M9_dark_stable seed 0 (canonical lr0015) — DONE, kept for reference ──
+  # - exp_name: M9_dark_real_full_s0_lr0015
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 0
+  #   lr: 0.0015
+  #   lambda_oxygen: 0.1
+  #   <<: [*real, *m9ox_real]
+
+  # M9_dark lr=0.002 deprecated: produced R²p=-0.056 (anomalous collapse).
+  # The lr=0.0015 retrain produced R²p=0.320 on the same seed/config.
+  # Do not relaunch lr=0.002 going forward.
+
+  # - exp_name: M9_dark_real_min_s0
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 0
+  #   lr: 0.0015
+  #   lambda_oxygen: 0.1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: [*real, *m9ox_real]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK A — HIGH PRIORITY: close M4/M5 minrecipe (plain) story
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── M5 real minrecipe (already have s1 R²p=0.589 — need s0, s2) ──
+  - exp_name: M5_real_minrecipe_s0
+    scaffold: txtl_resource_and_maturation_dna
     seed: 0
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  - exp_name: M5_real_minrecipe_s2
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 2
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  # ── M5 real drecipe seed 2 (incomplete on Snellius — re-run from scratch) ──
+  - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1, <<: *real}
+
+  # ── M4 real minrecipe × {s0, s1, s2} — completes the M4 plain story ──
+  - exp_name: M4_real_minrecipe_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  - exp_name: M4_real_minrecipe_s1
+    scaffold: txtl_model4_three_state
+    seed: 1
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  - exp_name: M4_real_minrecipe_s2
+    scaffold: txtl_model4_three_state
+    seed: 2
+    n_substeps: 1
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: *real
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK B — MEDIUM PRIORITY: close combined regime + M8/M9 seed gaps
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── COMBINED-data runs for M3/M4/M5/M9v3b — COMMENTED OUT ────────────────
+  # Scope decision: combined (real+synth) is reserved for M7_bg and M8_bg only,
+  # since those are the scaffolds designed to consume synth no-go data.
+  # M3/M4/M5/M9v3b stay real-only across all 3 seeds.
+  #
+  # - {exp_name: M9v3b_comb_s0, scaffold: txtl_model9_o2b, seed: 0, <<: *m9ox_comb}
+  # - {exp_name: M9v3b_comb_s1, scaffold: txtl_model9_o2b, seed: 1, <<: *m9ox_comb}
+  # - {exp_name: M9v3b_comb_s2, scaffold: txtl_model9_o2b, seed: 2, <<: *m9ox_comb}
+  #
+  # - {exp_name: M4_comb_s0, scaffold: txtl_model4_three_state, seed: 0, n_substeps: 1}
+  # - {exp_name: M4_comb_s1, scaffold: txtl_model4_three_state, seed: 1, n_substeps: 1}
+  # - {exp_name: M4_comb_s2, scaffold: txtl_model4_three_state, seed: 2, n_substeps: 1}
+  #
+  # - exp_name: M5_comb_minrecipe_s0
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 0
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  # - exp_name: M5_comb_minrecipe_s1
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 1
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  # - exp_name: M5_comb_minrecipe_s2
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 2
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+
+  # ── M8_bg comb synth=1.0 seed 2 (s0 done, s1 done at renamed dir) ──────────
+  # Recipe matches M7_bg: full synth weight (synth=1.0). M7 and M8 are the
+  # scaffolds designed for synth no-go data and should both use it at full
+  # weight. The s0 A/B (synth=1: 0.515 vs synth=0.05: 0.550, Δ=0.035) was
+  # within seed noise; we standardize on synth=1.0 for both M7 and M8.
+  - exp_name: M8_bg_comb_synth1_s2
+    scaffold: txtl_model8_bg_fixed
+    seed: 2
+    n_substeps: 2
+    lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 1.0
+
+  # ── M9_dark seed 2 (lr0015, full d-recipe) ──
+  - exp_name: M9_dark_real_full_s2_lr0015
+    scaffold: txtl_model9_dark_stable
+    seed: 2
     lr: 0.0015
     lambda_oxygen: 0.1
     <<: [*real, *m9ox_real]
 
-  - exp_name: M9_dark_real_full_s0_lr002
-    scaffold: txtl_model9_dark_stable
-    seed: 0
-    lambda_oxygen: 0.1
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK C — LOWER PRIORITY: backfill seed 2 for everything that has s0+s1
+  # Launch only after Blocks A and B finish.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - {exp_name: M7_bg_comb_synth1_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  - exp_name: M9v3b_real_s2
+    scaffold: txtl_model9_o2b
+    seed: 2
     <<: [*real, *m9ox_real]
 
-  - exp_name: M9_dark_real_min_s0
-    scaffold: txtl_model9_dark_stable
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BLOCK D — sLSTM ENCODER LADDER (seed 0, full scaffold lineup)
+  #
+  # Identical hparams to the GRU runs above, only `model_class: ode_slstm`
+  # changes. Per-scaffold best recipe is applied:
+  #   M3, M4    → drecipe (inherits fixed: species_weights/time_upweight)
+  #   M5        → minrecipe (M5 confirmed minimal-loss wins by +0.26 R²p)
+  #   M7_bg     → combined + synth=1.0 + L_zero=0.005
+  #   M8_bg     → combined + synth=1.0 + L_zero=0.005
+  #   M9v3b     → real-only + drecipe
+  #   M9_dark   → real-only + drecipe + lr=0.0015 + lambda_oxygen=0.1
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── M3 sLSTM real (drecipe) ──
+  - {exp_name: M3_real_slstm_s0, scaffold: txtl_model3_two_state, seed: 0, n_substeps: 1, model_class: ode_slstm, <<: *real}
+
+  # ── M4 sLSTM real (drecipe) ──
+  - {exp_name: M4_real_slstm_s0, scaffold: txtl_model4_three_state, seed: 0, n_substeps: 1, model_class: ode_slstm, <<: *real}
+
+  # ── M5 sLSTM real (minrecipe — M5's winning recipe on GRU) ──
+  - exp_name: M5_real_minrecipe_slstm_s0
+    scaffold: txtl_resource_and_maturation_dna
     seed: 0
-    lambda_oxygen: 0.1
+    n_substeps: 1
+    model_class: ode_slstm
     species_weights: null
     time_upweight: null
     endpoint_channels: null
+    <<: *real
+
+  # ── M7_bg sLSTM combined synth=1.0 + L_zero (M7's design recipe) ──
+  - exp_name: M7_bg_comb_synth1_slstm_s0
+    scaffold: txtl_model7_bg_fixed
+    seed: 0
+    n_substeps: 1
+    model_class: ode_slstm
+    lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 1.0
+
+  # ── M8_bg sLSTM combined synth=1.0 + L_zero (M8's design recipe) ──
+  - exp_name: M8_bg_comb_synth1_slstm_s0
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    n_substeps: 2
+    model_class: ode_slstm
+    lambda_zero_traj: 0.005
+    source_loss_weights:
+      new: 5.0
+      old: 1.0
+      synth: 1.0
+
+  # ── M9v3b sLSTM real (drecipe) ──
+  - exp_name: M9v3b_real_slstm_s0
+    scaffold: txtl_model9_o2b
+    seed: 0
+    model_class: ode_slstm
     <<: [*real, *m9ox_real]
 
-  # ── M3/M4/M5/M9v3b combined — runs right after the real-only block. ──────
-  # Inherits combined-default source_loss_weights = {new:5, old:1, synth:0.05}.
-  # - {exp_name: M3_comb_s0,    scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1}
-  # - {exp_name: M4_comb_s0,    scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1}
-  # - {exp_name: M5_comb_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1}
-  # - exp_name: M9v3b_comb_s0
-  #   scaffold: txtl_model9_o2b
-  #   seed: 0
-  #   <<: *m9ox_comb
+  # ── M9_dark sLSTM real (drecipe + lr=0.0015 + lambda_oxygen=0.1) ──
+  - exp_name: M9_dark_real_full_slstm_s0_lr0015
+    scaffold: txtl_model9_dark_stable
+    seed: 0
+    model_class: ode_slstm
+    lr: 0.0015
+    lambda_oxygen: 0.1
+    <<: [*real, *m9ox_real]

@@ -1,0 +1,92 @@
+# Remaining K=3 real-only runs for the sparse-K sweep.
+# Companion to FINAL_sparse_k_full_bob.yaml — picks up where it left off.
+#
+# Already done (in experiments/FINAL_sparse_k_full_bob/):
+#   - All K=1 × {M3, M4, M5, M7_bg, M8_bg, M9} ✓
+#   - M3_K3_real_s0 ✓
+#
+# Remaining (this file):
+#   - M4_K3_real_s0  ← may already be in progress; check timestamp + skip if r2_cache exists
+#   - M5_K3_real_s0
+#   - M7_bg_K3_real_s0
+#   - M8_bg_K3_real_s0
+#
+# M9_K3 / all K=6 / combined are not in scope per original sparse-K plan.
+#
+# Launch on Mac Mini (faster than laptop while developing):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_sparse_k_remaining.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_sparse_k_remaining/
+#
+# (Or use --out-root experiments to keep them grouped with the existing K-sweep
+# runs at experiments/FINAL_sparse_k_full_bob/ — pick whichever matches your
+# downstream cataloguing.)
+
+study: FINAL_sparse_k_remaining
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+fixed:
+  # Sparse-K budget: 80 epochs (K=1/K=3 done by ep 50-70).
+  epochs: 80
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_combined.npz   # overridden by *real
+  use_synthetic_data: true
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  balance_source_sampler: true
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+    synth: 0.05
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn_sparse_theta_v2
+  anchor_mode: uniform
+
+  # d-recipe loss
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  # M4_K3_real_s0 is being trained on the laptop — don't duplicate.
+  # Mac Mini picks up the 3 untouched K=3 runs.
+  - {exp_name: M5_K3_real_s0,    scaffold: txtl_resource_and_maturation_dna, seed: 0, n_theta_anchors: 3, <<: *real}
+  - {exp_name: M7_bg_K3_real_s0, scaffold: txtl_model7_bg_fixed,             seed: 0, n_theta_anchors: 3, n_substeps: 1, <<: *real}
+  - exp_name: M8_bg_K3_real_s0
+    scaffold: txtl_model8_bg_fixed
+    seed: 0
+    n_theta_anchors: 3
+    n_substeps: 2
+    <<: *real
