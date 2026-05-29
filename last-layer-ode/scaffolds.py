@@ -1912,6 +1912,105 @@ class TXTLModel9_DarkStable(MechanisticScaffold):
         )
 
 
+class TXTLModel9_DarkStableDual(MechanisticScaffold):
+    """
+    M9 dark_stable + oxygen-INDEPENDENT background maturation route (k_mat_bg).
+
+    Motivation: dark_stable produces P_fluor only via r_safe = soft-sat(k_ox * O2 * P_dark).
+    For "old" samples (no u_open event in the data) tube_opened stays 0, the O2 sink stays
+    active, O2 depletes, r_safe → 0, and pm prediction plateaus far below the observed
+    value (e.g. true pm ~1850 vs pred ~225 on test idx 529). The encoder has no parameter
+    it can dial up to rescue these samples.
+
+    Fix: add a parallel slow conversion pathway r_bg = k_mat_bg * P_dark (analogous to the
+    kmt term in v3b/M9_O2SourceB) so the dark pool can mature even when oxygen is
+    unavailable. New samples can still rely on the oxygen burst at tube opening; old
+    samples can learn a high k_mat_bg and produce a sustained rise. Encoder picks
+    per-sample.
+
+    Mass-balanced: r_bg flows from P_dark to P_fluor (P_dark loses it, P_fluor gains it).
+    The O2 sink uses only the oxygen-DEPENDENT rate r_safe — the background route does
+    not consume oxygen by construction.
+
+    States (9): same as dark_stable. [R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened]
+    theta (12): [lam, V_TX, V_TL, k_dm, k_matm, k_fold, k_degp, k_deg_dark,
+                  k_ox, c_ox, c_met, k_mat_bg]    ← NEW: k_mat_bg
+    Observed: [3, 6]   (mm, P_fluor)
+    """
+    def __init__(self):
+        super().__init__(P=9, theta_dim=12)
+        # Stability constant — matches dark_stable. Instance attr so TorchScript tracks it.
+        self.TAU_STABLE_SEC: float = 600.0
+        self.state_names = [
+            "R", "O2", "m", "mm", "p", "P_dark", "P_fluor",
+            "DNA", "tube_opened",
+        ]
+        # Bounds: first 11 identical to dark_stable; k_mat_bg lo=1e-7 (off) hi=5e-3/min
+        # (half-life ~140 min → ~91% maturation over an 8 h window). RK4 stability:
+        # |k_mat_bg · hdt| ≤ 5e-3 · 1 min = 5e-3 ≪ 1 → fine.
+        self.theta_lo_vec = [
+            1e-6,
+            3e-5, 3e-5,
+            1e-5, 5e-5,
+            1e-5, 1e-7, 1e-7,
+            1e-6,
+            1e-3, 1e-7,
+            1e-7,                   # k_mat_bg
+        ]
+        self.theta_hi_vec = [
+            5e-4,
+            1.2e-1, 8e-2,
+            1e-2, 3.5e-3,
+            3.5e-3, 1e-3, 1e-3,
+            5e-3,
+            1e0, 1e-3,
+            5e-3,                   # k_mat_bg
+        ]
+        self.obs_state_idx = [3, 6]
+        self.control_state_map = {"DNA c": 7, "u_open": 8}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, O2, m, mm, p, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)
+        (lam, V_TX, V_TL, kdm, kmatm,
+         k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met, k_mat_bg) = theta.unbind(dim=-1)
+
+        R_p     = torch.clamp_min(R,      0.0)
+        O2_p    = torch.clamp(O2,     0.0, 500.0)
+        m_p     = torch.clamp_min(m,      0.0)
+        mm_p    = torch.clamp_min(mm,     0.0)
+        p_p     = torch.clamp_min(p,      0.0)
+        Pdark_p = torch.clamp(P_dark, 0.0, 1e4)
+        DNA_p   = torch.clamp_min(DNA,    0.0)
+
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+        sink_mask = 1.0 - open_gate
+
+        # Oxygen-dependent path (soft-saturated, RK4-stable). Same as dark_stable.
+        r_bare = k_ox * O2_p * Pdark_p
+        TAU_MIN = self.TAU_STABLE_SEC / 60.0
+        max_rate = Pdark_p / TAU_MIN
+        r_safe = max_rate * torch.tanh(r_bare / (max_rate + 1e-12))
+
+        # Oxygen-INDEPENDENT background maturation: rescues old-sample pm when r_safe → 0.
+        r_bg = k_mat_bg * Pdark_p
+
+        dR        = -lam * R_p
+        dm        = R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm       = kmatm * m_p - kdm * mm_p
+        dp        = R_p * V_TL * (m_p + mm_p) - k_fold * p_p - k_degp * p_p
+        dPdark    = k_fold * p_p - r_safe - r_bg - k_deg_dark * Pdark_p
+        dPfluor   = r_safe + r_bg
+        # Only the O2-dependent rate consumes oxygen; background route is decoupled.
+        dO2       = -sink_mask * (c_ox * r_safe + c_met * O2_p)
+        dDNA      = torch.zeros_like(DNA)
+        dtube     = torch.zeros_like(tube_opened)
+
+        return torch.stack(
+            (dR, dO2, dm, dmm, dp, dPdark, dPfluor, dDNA, dtube),
+            dim=-1,
+        )
+
+
 class TXTLModel9_M5Oxygen(MechanisticScaffold):
     """
     M5 + tube-opening: numerically identical to M5 (TXTLResourceandMaturationDNAScaffold).
@@ -3202,7 +3301,8 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model9_m5_oxygen":        TXTLModel9_M5Oxygen(),             # v2: fallback for combined if v3b NaNs
     "txtl_model9_o2a":              TXTLModel9_O2SourceA(),            # v3a: source term, metabolic drain only
     "txtl_model9_o2b":              TXTLModel9_O2SourceB(),            # v3b: simplified 7-state (no dark pool); previous canonical
-    "txtl_model9_dark_stable":      TXTLModel9_DarkStable(),           # ← NEW canonical candidate: tex-faithful 9-state + soft-saturated stiff rate (RK4 stable)
+    "txtl_model9_dark_stable":      TXTLModel9_DarkStable(),           # ← v4 canonical candidate: tex-faithful 9-state + soft-saturated stiff rate (RK4 stable)
+    "txtl_model9_dark_stable_dual": TXTLModel9_DarkStableDual(),       # ← v5: dark_stable + O2-independent background maturation (closes the old-sample pm gap)
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),
