@@ -96,34 +96,10 @@ fixed:
   loss_clamp_min: 1.0
 
 runs:
-  # ────────────────────────────────────────────────────────────────────────
-  # Block 1 — K-on-OLD (real-only). 9 runs.
-  # ────────────────────────────────────────────────────────────────────────
-
-  # ── M7_bg old × K=1/3/6 ──
-  - {exp_name: M7_bg_K1_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 1}
-  - {exp_name: M7_bg_K3_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 3}
-  - {exp_name: M7_bg_K6_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 6}
-
-  # ── M8_bg old × K=1/3/6 ──
-  - {exp_name: M8_bg_K1_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 1}
-  - {exp_name: M8_bg_K3_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 3}
-  - {exp_name: M8_bg_K6_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 6}
-
-  # ── M9v3b old × K=1/3/6 ──
-  - {exp_name: M9v3b_K1_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 1, <<: *m9ox_old}
-  - {exp_name: M9v3b_K3_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 3, <<: *m9ox_old}
-  - {exp_name: M9v3b_K6_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 6, <<: *m9ox_old}
-
-  # ────────────────────────────────────────────────────────────────────────
-  # Block 2 — Dense-theta M9_dark on REAL-only. 2 runs.
-  # Overrides K-on-OLD fixed defaults: model_class (dense), epochs=100,
-  # val/test_n=125, real dataset via *real, plot_extra_new_samples=5.
-  # ────────────────────────────────────────────────────────────────────────
-
   - exp_name: M9_dark_real_full_s0
     scaffold: txtl_model9_dark_stable
     seed: 0
+    lr: 0.0017
     model_class: ode_rnn
     epochs: 100
     val_n: 125
@@ -150,4 +126,29 @@ runs:
   # DEFERRED (intentionally not in this sweep):
   #   - M3/M4/M5/M9v3b combined runs (non-M7/M8 scaffolds)
   #   - K runs on combined data (real/old-only first)
+  # ────────────────────────────────────────────────────────────────────────
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Block 1 — K-on-OLD (real-only). 9 runs.
+  # ────────────────────────────────────────────────────────────────────────
+
+  # ── M7_bg old × K=1/3/6 ──
+  - {exp_name: M7_bg_K1_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 1}
+  - {exp_name: M7_bg_K3_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 3}
+  - {exp_name: M7_bg_K6_old_s0, scaffold: txtl_model7_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 6}
+
+  # ── M8_bg old × K=1/3/6 ──
+  - {exp_name: M8_bg_K1_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 1}
+  - {exp_name: M8_bg_K3_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 3}
+  - {exp_name: M8_bg_K6_old_s0, scaffold: txtl_model8_bg_fixed, seed: 0, n_substeps: 1, n_theta_anchors: 6}
+
+  # ── M9v3b old × K=1/3/6 ──
+  # - {exp_name: M9v3b_K1_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 1, <<: *m9ox_old}
+  # - {exp_name: M9v3b_K3_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 3, <<: *m9ox_old}
+  # - {exp_name: M9v3b_K6_old_s0, scaffold: txtl_model9_o2b, seed: 0, n_theta_anchors: 6, <<: *m9ox_old}
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Block 2 — Dense-theta M9_dark on REAL-only. 2 runs.
+  # Overrides K-on-OLD fixed defaults: model_class (dense), epochs=100,
+  # val/test_n=125, real dataset via *real, plot_extra_new_samples=5.
   # ────────────────────────────────────────────────────────────────────────
