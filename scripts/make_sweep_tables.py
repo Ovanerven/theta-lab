@@ -28,7 +28,7 @@ LONG = os.path.join(ROOT, "results", "sweep_consolidated", "all_results_long.csv
 TBL  = os.path.join(ROOT, "results", "sweep_consolidated", "tables")
 N_ORDER = [3, 10, 100, 1000]
 
-DATA_MODEL_ORDER = ["baseline","l1reg","l2reg","unbounded","node_gru","node_mlp","node_corr","fixed_theta","sample_theta"]
+DATA_MODEL_ORDER = ["baseline","l1reg","unbounded","node_gru","node_mlp","node_corr","fixed_theta","sample_theta","b1_static"]
 ARCH_MODEL_ORDER = ["gru","lstm","slstm","transformer","mamba"]
 
 # system grouping for the per-system layout: (group_title, [scaffold_label in order])
@@ -43,8 +43,11 @@ ARCH_SYSTEMS = [
     ("Architecture sweep — glycolysis",    ["Glyc/8","Glyc/12"]),
 ]
 
+SKIP_MODEL_KEYS = {"l2reg"}  # not run across all scaffolds — drop from tables
+
 def load():
     rows = list(csv.DictReader(open(LONG)))
+    rows = [r for r in rows if r["model_key"] not in SKIP_MODEL_KEYS]
     for r in rows:
         r["n"] = int(r["n"]);
         for k in ("nrmse_median","nrmse_mean"):
@@ -151,7 +154,9 @@ def build_per_system(rows, ded, metric, systems, family):
     # data ablation: one table per (system, supervision) — keeps each ~one page.
     # arch sweep: one table per scenario, supervision shown as inner row-blocks.
     split_by_sup = (family == "data_ablation")
-    colspec = "l" + "r"*len(N_ORDER)
+    # tabular* with @{\extracolsep{\fill}} stretches to fill its minipage width
+    # exactly => every sibling table is the SAME width regardless of content.
+    colspec = "@{\\extracolsep{\\fill}}l" + "r"*len(N_ORDER)
     ncol = 1 + len(N_ORDER)
     header = "Model & " + " & ".join(f"$n={n}$" for n in N_ORDER) + r" \\"
 
@@ -196,11 +201,12 @@ def build_per_system(rows, ded, metric, systems, family):
             captsup = (", full obs" if suptag=="full" else ", first--last") if split_by_sup else ""
             caption = f"{title} — NRMSE ({metric}{captsup})."
             L = [f"% {caption}",
-                 f"\\begin{{tabular}}{{{colspec}}}", "\\toprule", header, "\\midrule"]
+                 f"\\begin{{tabular*}}{{\\linewidth}}{{{colspec}}}",
+                 "\\toprule", header, "\\midrule"]
             for bi, bt in enumerate(blocks_t):
                 if bi: L.append("\\midrule")
                 L += bt
-            L += ["\\bottomrule", "\\end{tabular}"]
+            L += ["\\bottomrule", "\\end{tabular*}"]
             Mh = [f"### {caption}", "", "| Model | " + " | ".join(f"n={n}" for n in N_ORDER) + " |",
                   "|" + "---|"*(ncol)]
             for bi, bm in enumerate(blocks_m):
@@ -237,35 +243,62 @@ def main():
         # per system (stacked tabular, A4 portrait — paired two-up via minipages
         # so every page shows two side-by-side tables; scaffolds are row-blocks).
         d2 = os.path.join(TBL,"per_system",metric); os.makedirs(d2,exist_ok=True)
-        wrap2=["% auto-generated; \\usepackage{booktabs,caption,graphicx}",
-               "\\captionsetup{font=footnotesize,labelfont=bf,skip=4pt}",""]
-        preview2=[f"# Per-system tables — NRMSE {metric}",""]
+        wrap2=["% auto-generated; \\usepackage{booktabs,caption,subcaption}",
+               "\\captionsetup{font=footnotesize,labelfont=bf,skip=4pt}",
+               "\\captionsetup[sub]{font=footnotesize,labelfont=bf,skip=2pt}",""]
+        preview2=[f"# Per-system tables — NRMSE {metric}", "",
+                  "_Abbreviations: CMVF-unb. = CMVF-unbounded; IC (θ) = initial-condition θ; NODE-corr. = NODE-correction._", ""]
 
-        def cap_for(title, sup):
-            if sup == "full":       captsup = ", full obs"
-            elif sup == "first_last": captsup = ", first--last"
-            else:                    captsup = ""
-            return f"{title} — NRMSE ({metric}{captsup})."
-
-        # Collect items in their natural emission order so the pairing falls out
-        # as (system_full, system_first_last), then next system, etc.
-        items = []  # (fn, caption, md_str)
+        # Build per-family dict: {title: {sup: (fn, md_str)}}
+        by_family = {}
         for family,systems in (("data_ablation",DATA_SYSTEMS),("arch_sweep",ARCH_SYSTEMS)):
             tex2,md2 = build_per_system(rows,ded,metric,systems,family)
+            entries = {}
             for (title,sup),t in tex2.items():
                 fn = f"{family}_{slug(title)}_{sup}_{metric}.tex"
                 open(os.path.join(d2,fn),"w").write(t+"\n")
-                items.append((fn, cap_for(title,sup), md2[(title,sup)]))
+                entries.setdefault(title,{})[sup] = (fn, md2[(title,sup)])
+            by_family[family] = entries
 
-        # Emit pairs (or a lone singleton) as one table float each.
-        for i in range(0, len(items), 2):
-            pair = items[i:i+2]
+        # Data ablation: one float per SYSTEM with ONE main caption and (a)(b)
+        # subcaptions for full / first-last side-by-side.
+        for title, _ in DATA_SYSTEMS:
+            ent = by_family.get("data_ablation",{}).get(title)
+            if not ent: continue
+            sups = [s for s in ("full","first_last") if s in ent]
             wrap2.append("\\begin{table}[t]\\centering\\footnotesize")
-            for j, (fn, cap, _) in enumerate(pair):
-                wrap2.append("\\begin{minipage}[t]{0.48\\textwidth}\\centering")
-                wrap2.append(f"\\captionof{{table}}{{{cap}}}")
-                # Shrink-only resize so the tabular always fits the minipage width.
-                wrap2.append(f"\\resizebox{{\\ifdim\\width>\\linewidth\\linewidth\\else\\width\\fi}}{{!}}{{\\input{{{fn}}}}}")
+            wrap2.append("\\setlength{\\tabcolsep}{2pt}")
+            wrap2.append(f"\\caption{{{title} --- NRMSE ({metric}).}}")
+            for j, sup in enumerate(sups):
+                fn, _ = ent[sup]
+                lab = "Full observation" if sup=="full" else "First--last observation"
+                wrap2.append("\\begin{minipage}[t]{0.49\\textwidth}\\centering")
+                wrap2.append(f"\\subcaption{{{lab}}}")
+                wrap2.append(f"\\input{{{fn}}}")
+                wrap2.append("\\end{minipage}")
+                if j == 0 and len(sups) == 2:
+                    wrap2.append("\\hfill")
+            wrap2.append("\\end{table}")
+            for sup in sups:
+                preview2.append(ent[sup][1]); preview2.append("")
+
+        # Arch sweep: one float per SCENARIO (full + first-last are already inner
+        # row-blocks). Pair scenarios 2-up with separate captions (unrelated).
+        arch_items = []
+        for title, _ in ARCH_SYSTEMS:
+            ent = by_family.get("arch_sweep",{}).get(title)
+            if not ent: continue
+            sup_key = next(iter(ent.keys()))
+            fn, md_str = ent[sup_key]
+            arch_items.append((title, fn, md_str))
+        for i in range(0, len(arch_items), 2):
+            pair = arch_items[i:i+2]
+            wrap2.append("\\begin{table}[t]\\centering\\footnotesize")
+            wrap2.append("\\setlength{\\tabcolsep}{2pt}")
+            for j, (title, fn, _) in enumerate(pair):
+                wrap2.append("\\begin{minipage}[t]{0.49\\textwidth}\\centering")
+                wrap2.append(f"\\captionof{{table}}{{{title} --- NRMSE ({metric}).}}")
+                wrap2.append(f"\\input{{{fn}}}")
                 wrap2.append("\\end{minipage}")
                 if j == 0 and len(pair) == 2:
                     wrap2.append("\\hfill")

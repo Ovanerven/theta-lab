@@ -18,6 +18,7 @@ build() {  # $1=layout (per_scaffold|per_system)  $2=metric  $3=orientation note
 \\usepackage[a4paper,margin=2.5cm]{geometry}
 \\usepackage{booktabs}
 \\usepackage{caption}
+\\usepackage{subcaption}
 \\usepackage{graphicx}
 \\setlength{\\tabcolsep}{4pt}
 \\begin{document}

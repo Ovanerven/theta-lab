@@ -101,9 +101,9 @@ fixed:
     synth: 0.05
 
 runs:
-  # - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 0, n_substeps: 1, <<: *real}
-  # - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 0, n_substeps: 1, <<: *real}
-  # - {exp_name: M5_real_s0, scaffold: txtl_resource_and_maturation_dna, seed: 0, n_substeps: 1, <<: *real}
+  - {exp_name: M3_real_s0, scaffold: txtl_model3_two_state,            seed: 2, n_substeps: 1, <<: *real}
+  - {exp_name: M4_real_s0, scaffold: txtl_model4_three_state,          seed: 2, n_substeps: 1, <<: *real}
+  - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1, <<: *real}
 
   # # ── M7_bg combined A/B: synth=1.0 (no downweight) vs synth=0.05 ──────────
   # - exp_name: M7_bg_comb_synth1_s0
@@ -190,27 +190,27 @@ runs:
   # idx 6); the dataset obs_idx=[3, 5] (mm, pm) is lifted into this layout.
   # gru_u_cols and oxygen control wiring come from *m9ox_real (no change needed).
 
-  - exp_name: M9_dark_real_full_s0_lr0015
-    scaffold: txtl_model9_dark_stable
-    seed: 0
-    lr: 0.0015
-    lambda_oxygen: 0.1
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9_dark_real_full_s0_lr0015
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 0
+  #   lr: 0.0015
+  #   lambda_oxygen: 0.1
+  #   <<: [*real, *m9ox_real]
 
-  - exp_name: M9_dark_real_full_s0_lr002
-    scaffold: txtl_model9_dark_stable
-    seed: 0
-    lambda_oxygen: 0.1
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9_dark_real_full_s0_lr002
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 0
+  #   lambda_oxygen: 0.1
+  #   <<: [*real, *m9ox_real]
 
-  - exp_name: M9_dark_real_min_s0
-    scaffold: txtl_model9_dark_stable
-    seed: 0
-    lambda_oxygen: 0.1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: [*real, *m9ox_real]
+  # - exp_name: M9_dark_real_min_s0
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 0
+  #   lambda_oxygen: 0.1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: [*real, *m9ox_real]
 
   # ── M3/M4/M5/M9v3b combined — runs right after the real-only block. ──────
   # Inherits combined-default source_loss_weights = {new:5, old:1, synth:0.05}.

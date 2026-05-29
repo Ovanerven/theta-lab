@@ -62,14 +62,15 @@ ARCH_STUDIES = [  # (study_key, family, scaffold_label, {n: folder})
 # ── label canonicalisation ───────────────────────────────────────────────────
 DATA_ABL_LABEL = {
     "A1_fixed_theta": ("fixed_theta", r"Global ($\theta$)"),
-    "A2_sample_theta": ("sample_theta", r"Initial-condition ($\theta$)"),
+    "A2_sample_theta": ("sample_theta", r"IC ($\theta$)"),
     "A3_neural_ode_gru": ("node_gru", "NODE-GRU"),
     "A4_neural_ode_mlp": ("node_mlp", "NODE-MLP"),
-    "A5_unbounded": ("unbounded", "CMVF-unbounded"),
+    "A5_unbounded": ("unbounded", "CMVF-unb."),
     "A6_baseline": ("baseline", "CMVF"),
     "A7_l1reg": ("l1reg", "CMVF-L1"),
     "A8_l2reg": ("l2reg", "CMVF-L2"),
-    "A9_neural_ode_correction": ("node_corr", "NODE-correction"),
+    "A9_neural_ode_correction": ("node_corr", "NODE-corr."),
+    "B1_gru_static_theta": ("b1_static", r"GRU-static ($\theta$)"),
 }
 # arch sweep tokens (order matters: check A6_baseline & slstm before lstm)
 ARCH_TOKENS = [

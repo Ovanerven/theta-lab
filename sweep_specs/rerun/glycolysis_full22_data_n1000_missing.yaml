@@ -1,0 +1,18 @@
+# Trimmed rerun for glycolysis_full22 data ablation: the 2 A9 cells at n=1000
+# whose training failed (no model.pt). A1/A2 first_last_n1000 are intentionally
+# NOT in this spec — the master spec doesn't include them (first-last is a no-op
+# for parametric ode_fixed_theta / ode_sample_theta at test time).
+study: glycolysis_full22_data_ablation
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+
+fixed:
+  base_config: configs/glycolisis/glycolisis.yaml
+  scaffold: glycolysis_oracle22
+  epochs: 100
+
+runs:
+  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000,            dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100}
+  - {model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 21]}

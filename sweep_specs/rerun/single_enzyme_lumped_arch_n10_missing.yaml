@@ -1,0 +1,21 @@
+# Trimmed rerun: GRU, LSTM, Mamba, Transformer at n=10 for single_enzyme_lumped.
+# 2-species scaffold => first_last == full, so no fl variants.
+study: single_enzyme_lumped_arch_sweep_n10
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  scaffold: single_enzyme_lumped
+  dataset_path: datasets/single_enzyme/single_enzyme_lumped_n10.npz
+  val_n: 1
+  test_n: 1
+  epochs: 100
+  batch_size: 32
+
+runs:
+  - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_enzlumped_n10_s42}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_enzlumped_n10_s42}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_enzlumped_n10_s42, env: mamba_env}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_enzlumped_n10_s42}
