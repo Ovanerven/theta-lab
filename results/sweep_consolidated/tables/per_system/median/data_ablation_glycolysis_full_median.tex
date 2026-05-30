@@ -1,46 +1,46 @@
 % Glycolysis — NRMSE (median, full obs).
-\begin{tabular}{lrrrr}
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lrrrr}
 \toprule
 Model & $n=3$ & $n=10$ & $n=100$ & $n=1000$ \\
 \midrule
 \multicolumn{5}{l}{\textbf{Glyc/4}} \\
 CMVF & \textbf{0.234} & 0.226 & 0.099 & \textbf{0.056} \\
 CMVF-L1 & 0.236 & 0.253 & 0.124 & 0.061 \\
-CMVF-unbounded & 0.261 & 0.545 & 0.209 & 0.066 \\
+CMVF-unb. & 0.261 & 0.545 & 0.209 & 0.066 \\
 NODE-GRU & 0.239 & 0.165 & 0.102 & 0.072 \\
 NODE-MLP & 0.268 & 0.141 & 0.118 & 0.103 \\
-NODE-correction & 0.295 & \textbf{0.100} & \textbf{0.092} & 0.098 \\
+NODE-corr. & 0.295 & \textbf{0.100} & \textbf{0.092} & 0.098 \\
 Global ($\theta$) & 0.480 & 0.876 & 0.494 & 0.221 \\
-Initial-condition ($\theta$) & 0.267 & 0.225 & 0.183 & 0.216 \\
+IC ($\theta$) & 0.267 & 0.225 & 0.183 & 0.216 \\
 \midrule
 \multicolumn{5}{l}{\textbf{Glyc/8}} \\
 CMVF & \textbf{0.146} & 0.112 & 0.102 & 0.090 \\
 CMVF-L1 & 0.181 & 0.146 & 0.138 & 0.079 \\
-CMVF-unbounded & 0.192 & \textbf{0.078} & \textbf{0.099} & \textbf{0.062} \\
+CMVF-unb. & 0.192 & \textbf{0.078} & \textbf{0.099} & \textbf{0.062} \\
 NODE-GRU & 0.169 & 0.135 & 0.117 & 0.102 \\
 NODE-MLP & 0.271 & 0.112 & 0.108 & 0.093 \\
-NODE-correction & 0.247 & 0.169 & 0.136 & 0.119 \\
+NODE-corr. & 0.247 & 0.169 & 0.136 & 0.119 \\
 Global ($\theta$) & 0.569 & 1.015 & 0.712 & 0.266 \\
-Initial-condition ($\theta$) & 0.182 & 0.442 & 0.175 & 0.202 \\
+IC ($\theta$) & 0.182 & 0.442 & 0.175 & 0.202 \\
 \midrule
 \multicolumn{5}{l}{\textbf{Glyc/12}} \\
 CMVF & 0.610 & 0.266 & \textbf{0.132} & \textbf{0.065} \\
 CMVF-L1 & 0.259 & 0.308 & 0.148 & 0.068 \\
-CMVF-unbounded & \textbf{0.215} & 0.266 & 0.161 & 0.077 \\
+CMVF-unb. & \textbf{0.215} & 0.266 & 0.161 & 0.077 \\
 NODE-GRU & 0.282 & 0.314 & 0.157 & 0.123 \\
 NODE-MLP & 0.252 & 0.312 & 0.188 & 0.116 \\
-NODE-correction & 0.266 & 0.266 & 0.152 & 0.149 \\
+NODE-corr. & 0.266 & 0.266 & 0.152 & 0.149 \\
 Global ($\theta$) & 0.334 & 0.609 & 0.425 & 0.160 \\
-Initial-condition ($\theta$) & 0.253 & \textbf{0.211} & 0.151 & 0.162 \\
+IC ($\theta$) & 0.253 & \textbf{0.211} & 0.151 & 0.162 \\
 \midrule
 \multicolumn{5}{l}{\textbf{Glyc/22}} \\
 CMVF & 0.375 & 0.069 & 0.020 & $6.5\!\times\!10^{6}$ \\
 CMVF-L1 & 0.812 & 0.069 & 0.025 & 0.005 \\
-CMVF-unbounded & \textbf{0.095} & \textbf{0.041} & \textbf{0.015} & \textbf{0.003} \\
+CMVF-unb. & \textbf{0.095} & \textbf{0.041} & \textbf{0.015} & \textbf{0.003} \\
 NODE-GRU & 562.012 & 663.087 & 506.099 & 0.130 \\
 NODE-MLP & 2.337 & $3.1\!\times\!10^{5}$ & 268.049 & 0.056 \\
-NODE-correction & 0.285 & 0.231 & $1.5\!\times\!10^{3}$ & -- \\
+NODE-corr. & 0.285 & 0.231 & $1.5\!\times\!10^{3}$ & -- \\
 Global ($\theta$) & 0.397 & 0.343 & 0.255 & 0.037 \\
-Initial-condition ($\theta$) & 0.310 & 0.112 & 0.027 & 0.012 \\
+IC ($\theta$) & 0.310 & 0.112 & 0.027 & 0.012 \\
 \bottomrule
-\end{tabular}
+\end{tabular*}

@@ -1,0 +1,27 @@
+# Trimmed rerun: GRU, LSTM, Mamba, Transformer at n=3 for mof_synthesis_6.
+# Full obs + first-last (obs_idx [0, 5]) = 8 runs.
+study: mof_synthesis_6_arch_sweep_n3
+runs_per_job: 1
+time: "08:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  scaffold: mof_synthesis_6
+  dataset_path: datasets/mof/mof_synthesis_6_n3.npz
+  val_n: 1
+  test_n: 1
+  epochs: 100
+  batch_size: 32
+
+runs:
+  # ── full obs ──────────────────────────────────────────────────────────
+  - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof6_n3_s42}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n3_s42}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n3_s42, env: mamba_env}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n3_s42}
+  # ── first_last (obs_idx [0, 5]) ───────────────────────────────────────
+  - {base_config: configs/archs/gru.yaml,         seed: 42, exp_name: gru_mof6_n3_fl_s42,   obs_idx: [0, 5]}
+  - {base_config: configs/archs/lstm.yaml,        seed: 42, exp_name: lstm_mof6_n3_fl_s42,  obs_idx: [0, 5]}
+  - {base_config: configs/archs/mamba.yaml,       seed: 42, exp_name: mamba_mof6_n3_fl_s42, env: mamba_env, obs_idx: [0, 5]}
+  - {base_config: configs/archs/transformer.yaml, seed: 42, exp_name: trans_mof6_n3_fl_s42, obs_idx: [0, 5]}
