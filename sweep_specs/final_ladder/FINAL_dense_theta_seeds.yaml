@@ -235,55 +235,56 @@ runs:
   # BLOCK A — HIGH PRIORITY: close M4/M5 minrecipe (plain) story
   # ═══════════════════════════════════════════════════════════════════════════
 
-  # ── M5 real minrecipe (already have s1 R²p=0.589 — need s0, s2) ──
-  - exp_name: M5_real_minrecipe_s0
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 0
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
-
-  - exp_name: M5_real_minrecipe_s2
-    scaffold: txtl_resource_and_maturation_dna
-    seed: 2
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
-
-  # ── M5 real drecipe seed 2 (incomplete on Snellius — re-run from scratch) ──
-  - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1, <<: *real}
-
-  # ── M4 real minrecipe × {s0, s1, s2} — completes the M4 plain story ──
-  - exp_name: M4_real_minrecipe_s0
-    scaffold: txtl_model4_three_state
-    seed: 0
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
-
-  - exp_name: M4_real_minrecipe_s1
-    scaffold: txtl_model4_three_state
-    seed: 1
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
-
-  - exp_name: M4_real_minrecipe_s2
-    scaffold: txtl_model4_three_state
-    seed: 2
-    n_substeps: 1
-    species_weights: null
-    time_upweight: null
-    endpoint_channels: null
-    <<: *real
+  # ── BLOCK A — ALL COMPLETED (rc=0) on 2026-05-30 run; commented out. ──────
+  # M5_real_minrecipe_s0, M5_real_minrecipe_s2, M5_real_s2,
+  # M4_real_minrecipe_s0/s1/s2 — all done. See experiments_final outputs.
+  #
+  # - exp_name: M5_real_minrecipe_s0
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 0
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
+  #
+  # - exp_name: M5_real_minrecipe_s2
+  #   scaffold: txtl_resource_and_maturation_dna
+  #   seed: 2
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
+  #
+  # - {exp_name: M5_real_s2, scaffold: txtl_resource_and_maturation_dna, seed: 2, n_substeps: 1, <<: *real}
+  #
+  # - exp_name: M4_real_minrecipe_s0
+  #   scaffold: txtl_model4_three_state
+  #   seed: 0
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
+  #
+  # - exp_name: M4_real_minrecipe_s1
+  #   scaffold: txtl_model4_three_state
+  #   seed: 1
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
+  #
+  # - exp_name: M4_real_minrecipe_s2
+  #   scaffold: txtl_model4_three_state
+  #   seed: 2
+  #   n_substeps: 1
+  #   species_weights: null
+  #   time_upweight: null
+  #   endpoint_channels: null
+  #   <<: *real
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BLOCK B — MEDIUM PRIORITY: close combined regime + M8/M9 seed gaps
@@ -324,11 +325,8 @@ runs:
   #   time_upweight: null
   #   endpoint_channels: null
 
-  # ── M8_bg comb synth=1.0 seed 2 (s0 done, s1 done at renamed dir) ──────────
-  # Recipe matches M7_bg: full synth weight (synth=1.0). M7 and M8 are the
-  # scaffolds designed for synth no-go data and should both use it at full
-  # weight. The s0 A/B (synth=1: 0.515 vs synth=0.05: 0.550, Δ=0.035) was
-  # within seed noise; we standardize on synth=1.0 for both M7 and M8.
+  # ── M8_bg comb synth=1.0 seed 2 — DID NOT FINISH (slowest run; still
+  #    running at ^C on the 2026-05-30 launch). KEPT ACTIVE to re-run. ───────
   - exp_name: M8_bg_comb_synth1_s2
     scaffold: txtl_model8_bg_fixed
     seed: 2
@@ -339,24 +337,25 @@ runs:
       old: 1.0
       synth: 1.0
 
-  # ── M9_dark seed 2 (lr0015, full d-recipe) ──
-  - exp_name: M9_dark_real_full_s2_lr0015
-    scaffold: txtl_model9_dark_stable
-    seed: 2
-    lr: 0.0015
-    lambda_oxygen: 0.1
-    <<: [*real, *m9ox_real]
+  # ── M9_dark seed 2 — COMPLETED (rc=0). Commented out. ──
+  # - exp_name: M9_dark_real_full_s2_lr0015
+  #   scaffold: txtl_model9_dark_stable
+  #   seed: 2
+  #   lr: 0.0015
+  #   lambda_oxygen: 0.1
+  #   <<: [*real, *m9ox_real]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BLOCK C — LOWER PRIORITY: backfill seed 2 for everything that has s0+s1
   # Launch only after Blocks A and B finish.
   # ═══════════════════════════════════════════════════════════════════════════
 
-  - {exp_name: M7_bg_comb_synth1_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
-  - exp_name: M9v3b_real_s2
-    scaffold: txtl_model9_o2b
-    seed: 2
-    <<: [*real, *m9ox_real]
+  # ── BLOCK C — BOTH COMPLETED (rc=0). Commented out. ──
+  # - {exp_name: M7_bg_comb_synth1_s2, scaffold: txtl_model7_bg_fixed, seed: 2, n_substeps: 1, lambda_zero_traj: 0.005, source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}}
+  # - exp_name: M9v3b_real_s2
+  #   scaffold: txtl_model9_o2b
+  #   seed: 2
+  #   <<: [*real, *m9ox_real]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BLOCK D — sLSTM ENCODER LADDER (seed 0, full scaffold lineup)
@@ -371,10 +370,10 @@ runs:
   #   M9_dark   → real-only + drecipe + lr=0.0015 + lambda_oxygen=0.1
   # ═══════════════════════════════════════════════════════════════════════════
 
-  # ── M3 sLSTM real (drecipe) ──
-  - {exp_name: M3_real_slstm_s0, scaffold: txtl_model3_two_state, seed: 0, n_substeps: 1, model_class: ode_slstm, <<: *real}
+  # ── M3 sLSTM real — COMPLETED (rc=0). Commented out. ──
+  # - {exp_name: M3_real_slstm_s0, scaffold: txtl_model3_two_state, seed: 0, n_substeps: 1, model_class: ode_slstm, <<: *real}
 
-  # ── M4 sLSTM real (drecipe) ──
+  # ── M4 sLSTM real (drecipe) — interrupted at ^C; re-run ──
   - {exp_name: M4_real_slstm_s0, scaffold: txtl_model4_three_state, seed: 0, n_substeps: 1, model_class: ode_slstm, <<: *real}
 
   # ── M5 sLSTM real (minrecipe — M5's winning recipe on GRU) ──

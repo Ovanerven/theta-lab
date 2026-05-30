@@ -472,14 +472,33 @@ def endpoint_mse(
     use_log_loss: bool = True,
     clamp_min: float = 0.0,
     sample_mask: Optional[torch.Tensor] = None,
+    loss_space: str = "log",
 ) -> torch.Tensor:
     """MSE at the final valid timestep on selected post-slice channels.
     `channels` indexes into the sliced (B, K, P) tensors, not raw state indices.
     `clamp_min`: floor pred/y before log1p (supervisor parity; 0 disables).
     `sample_mask`: (B,) bool — False rows are excluded from this loss term.
                    Used to skip synth samples when endpoint channels are masked.
+    `loss_space`: comparison space for the endpoint term.
+        "log"    — log1p space (DEFAULT; original behaviour, gated by use_log_loss).
+        "sqrt"   — sqrt space: penalises high-yield misses ~proportionally to the
+                   value, countering the log1p tail-underprediction bias without
+                   the magnitude blow-up of raw linear MSE.
+        "linear" — raw linear MSE (full high-end weight; can be unstable).
+      Note: when loss_space != "log", `use_log_loss` is ignored for this term so
+      the endpoint term can use a different (less-compressive) space than the
+      trajectory loss.
     """
-    if use_log_loss:
+    if loss_space == "sqrt":
+        # clamp_min floors values before sqrt (same dead-zone semantics as log path)
+        cm = clamp_min if clamp_min > 0.0 else 0.0
+        pred  = pred.clamp_min(cm).sqrt()
+        y_seq = y_seq.clamp_min(cm).sqrt()
+    elif loss_space == "linear":
+        cm = clamp_min if clamp_min > 0.0 else 0.0
+        pred  = pred.clamp_min(cm)
+        y_seq = y_seq.clamp_min(cm)
+    elif use_log_loss:  # loss_space == "log" (default)
         if clamp_min > 0.0:
             pred  = torch.log1p(pred.clamp_min(clamp_min))
             y_seq = torch.log1p(y_seq.clamp_min(clamp_min))
@@ -502,6 +521,70 @@ def endpoint_mse(
     if p_last.numel() == 0:
         return pred.new_zeros(())
     return (p_last - y_last).pow(2).mean()
+
+
+def peak_mse(
+    pred: torch.Tensor,
+    y_seq: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    channels: list[int],
+    use_log_loss: bool = True,
+    clamp_min: float = 0.0,
+    sample_mask: Optional[torch.Tensor] = None,
+    loss_space: str = "log",
+) -> torch.Tensor:
+    """MSE on the per-trajectory MAX value of selected post-slice channels.
+
+    The analog of endpoint_mse but for the trajectory PEAK rather than the final
+    point. Motivated by the R²(mRNA-max) metric and the M4/M5/M9 cascade: mRNA
+    rises then degrades, so its informative quantity is the interior peak, not
+    the endpoint. Anchoring mRNA-max (channel 3) + protein-final (endpoint_mse,
+    channel 5) pins both ends of the transcription→translation→maturation
+    cascade; the ODE enforces consistency between them.
+
+    `channels` indexes the sliced (B,K,P) tensors. `loss_space`: "log" (default),
+    "sqrt", or "linear" — same semantics as endpoint_mse. Max is sub-
+    differentiable (gradient flows to the argmax timestep), like maxpool.
+    """
+    # Mask padded timesteps to -inf so amax ignores them.
+    B, K, _ = pred.shape
+    if lengths is not None:
+        ar = torch.arange(K, device=pred.device).unsqueeze(0)
+        valid = ar < lengths.to(pred.device).unsqueeze(1)          # (B,K)
+        neg_inf = torch.finfo(pred.dtype).min
+        mask3 = valid.unsqueeze(-1)
+    chans = torch.tensor(channels, device=pred.device, dtype=torch.long)
+    p_sel = pred.index_select(dim=2, index=chans)                  # (B,K,|chans|)
+    y_sel = y_seq.index_select(dim=2, index=chans)
+    if lengths is not None:
+        p_sel = torch.where(mask3, p_sel, torch.full_like(p_sel, neg_inf))
+        y_sel = torch.where(mask3, y_sel, torch.full_like(y_sel, neg_inf))
+    p_peak = p_sel.amax(dim=1)   # (B, |chans|)
+    y_peak = y_sel.amax(dim=1)
+
+    if loss_space == "sqrt":
+        cm = clamp_min if clamp_min > 0.0 else 0.0
+        p_peak = p_peak.clamp_min(cm).sqrt()
+        y_peak = y_peak.clamp_min(cm).sqrt()
+    elif loss_space == "linear":
+        cm = clamp_min if clamp_min > 0.0 else 0.0
+        p_peak = p_peak.clamp_min(cm)
+        y_peak = y_peak.clamp_min(cm)
+    elif use_log_loss:
+        if clamp_min > 0.0:
+            p_peak = torch.log1p(p_peak.clamp_min(clamp_min))
+            y_peak = torch.log1p(y_peak.clamp_min(clamp_min))
+        else:
+            p_peak = torch.log1p(p_peak.clamp_min(0.0))
+            y_peak = torch.log1p(y_peak.clamp_min(0.0))
+
+    if sample_mask is not None:
+        keep = sample_mask.to(pred.device)
+        p_peak = p_peak[keep]
+        y_peak = y_peak[keep]
+    if p_peak.numel() == 0:
+        return pred.new_zeros(())
+    return (p_peak - y_peak).pow(2).mean()
 
 
 # DEPRECATED: superseded by the composable knobs on loss_fn (channel_weights,
@@ -1434,6 +1517,16 @@ class TrainConfig:
     #   endpoint_channels: [5]
     lambda_endpoint: float = 0.0
     endpoint_channels: list[int] | None = None
+    # Comparison space for the endpoint term: "log" (default, original behaviour),
+    # "sqrt" (penalise high-yield misses ~proportionally — counters log1p tail
+    # under-prediction), or "linear" (full high-end weight; can be unstable).
+    endpoint_loss_space: str = "log"
+    # PEAK term: MSE on the per-trajectory MAX of `peak_channels` (default off).
+    # Anchors mRNA-max (the R²(mRNA-max) metric) so the model is supervised on
+    # both cascade ends (mRNA-max + protein-final). Shares loss_clamp_min and
+    # endpoint_loss_space. lambda_peak=0 disables (default → no behaviour change).
+    lambda_peak: float = 0.0
+    peak_channels: list[int] | None = None
     # Supervisor's loss divides the final composite by the number of nonzero
     # loss-weight channels (=3 in his recipe: mm + pm-body + pm-endpoint).
     # Set this to that count to reproduce his /N normaliser exactly; leave None
@@ -1871,6 +1964,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         encoder_use_log_dt=cfg.encoder_use_log_dt,
         theta_head_transform=cfg.theta_head_transform,
         theta_head_tau=cfg.theta_head_tau,
+        # Channel-expanding u_transforms (pulse_cumsum_sqrt / decay_trace /
+        # cumsum_timesince_sqrt) must be known at construction to size the lift
+        # layer; ode_rnn reads self.u_transform in forward. Other models ignore
+        # it (absorbed by **kwargs) and use the forward-time u_transform arg.
+        u_transform=cfg.u_transform,
         **sparse_theta_kwargs,
     ).to(device)
 
@@ -2196,7 +2294,16 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                             pred, y_seq, batch_lengths, ep_post,
                             use_log_loss=use_log_loss,
                             clamp_min=float(cfg.loss_clamp_min),
-                            sample_mask=_synth_ep_keep)
+                            sample_mask=_synth_ep_keep,
+                            loss_space=str(cfg.endpoint_loss_space))
+                    if cfg.lambda_peak > 0.0 and cfg.peak_channels:
+                        pk_post = [obs_idx_list.index(int(c)) for c in cfg.peak_channels]
+                        loss = loss + float(cfg.lambda_peak) * peak_mse(
+                            pred, y_seq, batch_lengths, pk_post,
+                            use_log_loss=use_log_loss,
+                            clamp_min=float(cfg.loss_clamp_min),
+                            sample_mask=_synth_ep_keep,
+                            loss_space=str(cfg.endpoint_loss_space))
                     if cfg.loss_normalizer_channels:
                         loss = loss / float(cfg.loss_normalizer_channels)
 
@@ -2367,7 +2474,15 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                             loss = loss + float(cfg.lambda_endpoint) * endpoint_mse(
                                 pred, y_seq, batch_lengths, ep_post,
                                 use_log_loss=use_log_loss,
-                                clamp_min=float(cfg.loss_clamp_min))
+                                clamp_min=float(cfg.loss_clamp_min),
+                                loss_space=str(cfg.endpoint_loss_space))
+                        if cfg.lambda_peak > 0.0 and cfg.peak_channels:
+                            pk_post = [obs_idx_list.index(int(c)) for c in cfg.peak_channels]
+                            loss = loss + float(cfg.lambda_peak) * peak_mse(
+                                pred, y_seq, batch_lengths, pk_post,
+                                use_log_loss=use_log_loss,
+                                clamp_min=float(cfg.loss_clamp_min),
+                                loss_space=str(cfg.endpoint_loss_space))
                         if cfg.loss_normalizer_channels:
                             loss = loss / float(cfg.loss_normalizer_channels)
                         if (float(cfg.lambda_oxygen) > 0.0 and _ox_u_col is not None

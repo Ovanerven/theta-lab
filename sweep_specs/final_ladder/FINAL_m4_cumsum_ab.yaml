@@ -1,0 +1,89 @@
+# Clean A/B test of input-signal PERSISTENCE on M4.
+#
+# Hypothesis (from scripts/diag_failures.py): the dominant failure is dynamic-
+# range compression — the encoder hedges pm toward a central ~300-1600 band,
+# over-predicting low yields and under-predicting high ones. One candidate cause:
+# boluses are fed as INSTANTANEOUS pulses (u_transform=sqrt), so the recipe must
+# be memorized across ~1150 zero-input steps and gets forgotten.
+#
+# cumsum_sqrt feeds the RUNNING TOTAL dose at every step (see ode_rnn.py:334),
+# so the recipe persists with no long-range memory needed. Raw u still drives the
+# ODE bolus jumps (ode_rnn.py:367) — this is an ENCODER-only change, mechanism
+# untouched. sqrt keeps the cumulative magnitude bounded.
+#
+# ONLY u_transform differs between the two arms. Everything else = the winning
+# M4 combo (h400, lr0.0015, 200ep, vanilla loss, seed 0). After training, compare
+# with: python scripts/diag_failures.py <run_dir>  and look at the [2] tercile
+# bias — does cumsum_sqrt narrow the high-tercile under-prediction?
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m4_cumsum_ab.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+
+study: FINAL_m4_cumsum_ab
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  hidden: 400
+  lr: 0.0015
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  test_real_only: true
+  balance_source_sampler: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # VANILLA loss (the winning M4 combo)
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.1
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+runs:
+  # ── A: baseline — instantaneous bolus pulses (current ladder) ──
+  - {exp_name: M4_ut_sqrt_s0,        seed: 0, u_transform: sqrt,        <<: *real}
+
+  # ── B: persistent recipe — cumulative dose at every step ──
+  - {exp_name: M4_ut_cumsum_sqrt_s0, seed: 0, u_transform: cumsum_sqrt, <<: *real}

@@ -2011,6 +2011,80 @@ class TXTLModel9_DarkStableDual(MechanisticScaffold):
         )
 
 
+class TXTLModel9_DarkM4(MechanisticScaffold):
+    """
+    M9 dark-protein/oxygen mechanism (the plain `dark_stable` form — NOT the
+    Dual background route, which underperformed) on the SIMPLE M4 backbone.
+
+    Motivation: dark_stable currently sits on the M5 backbone (resource R +
+    immature/mature mRNA cascade). M5's rich backbone suffers negative transfer
+    on the combined old+new dataset (old-subset R²p drops 0.63→0.46 when new data
+    is added), while the simpler M4 backbone GENERALIZES (old-subset 0.39→0.69 —
+    more data helps the under-capacity model). So graft the SAME dark/oxygen
+    reveal used in txtl_model9_dark_stable onto M4's robust backbone: M4
+    generalization + M9's post-opening fluorescence-jump capability.
+
+    The dark mechanism lives entirely on the protein side, so M4's mRNA backbone
+    (single M state, no resource pool, no m→mm cascade) is sufficient — it just
+    needs to produce nascent protein P_imm, which the dark pool consumes.
+
+    Dynamics (identical protein/oxygen machinery to dark_stable):
+        dM/dt        = V_TX·DNA − k_M·M                       (M4 mRNA: single state, no R)
+        dP_imm/dt    = V_TL·M − k_fold·P_imm − k_degp·P_imm    (nascent protein)
+        dP_dark/dt   = k_fold·P_imm − r_safe − k_deg_dark·P_dark
+        dP_fluor/dt  = r_safe                                  (observed protein)
+        dO2/dt       = −(1−tube_opened)·(c_ox·r_safe + c_met·O2)
+      r_safe = soft-sat(k_ox·O2·P_dark)   oxygen-dependent only (RK4-stable, τ=10 min)
+
+    States (7): [M, O2, P_imm, P_dark, P_fluor, DNA, tube_opened]
+    theta (9):  [V_TX, k_M, V_TL, k_fold, k_degp, k_deg_dark, k_ox, c_ox, c_met]
+    Observed: [0, 4]   (M = mRNA, P_fluor = protein)
+    """
+    def __init__(self):
+        super().__init__(P=7, theta_dim=9)
+        self.TAU_STABLE_SEC: float = 600.0
+        self.state_names = ["M", "O2", "P_imm", "P_dark", "P_fluor", "DNA", "tube_opened"]
+        #                 V_TX  k_M   V_TL  k_fold k_degp k_degD k_ox  c_ox  c_met
+        self.theta_lo_vec = [3e-5, 1e-5, 3e-5, 1e-5, 1e-7, 1e-7, 1e-6, 1e-3, 1e-7]
+        self.theta_hi_vec = [1.2e-1, 1e-2, 8e-2, 3.5e-3, 1e-3, 1e-3, 5e-3, 1e0, 1e-3]
+        self.obs_state_idx = [0, 4]   # M (mRNA) @ 0, P_fluor @ 4
+        self.control_state_map = {"DNA c": 5, "u_open": 6}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        M, O2, P_imm, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)
+        (V_TX, k_M, V_TL, k_fold, k_degp, k_deg_dark,
+         k_ox, c_ox, c_met) = theta.unbind(dim=-1)
+
+        M_p     = torch.clamp_min(M,      0.0)
+        O2_p    = torch.clamp(O2,     0.0, 500.0)
+        Pimm_p  = torch.clamp_min(P_imm,  0.0)
+        Pdark_p = torch.clamp(P_dark, 0.0, 1e4)
+        DNA_p   = torch.clamp_min(DNA,    0.0)
+
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+        sink_mask = 1.0 - open_gate
+
+        # Oxygen-dependent conversion (soft-saturated, RK4-stable; τ=10 min).
+        # Identical to txtl_model9_dark_stable — oxygen-only, no background route.
+        r_bare = k_ox * O2_p * Pdark_p
+        TAU_MIN = self.TAU_STABLE_SEC / 60.0
+        max_rate = Pdark_p / TAU_MIN
+        r_safe = max_rate * torch.tanh(r_bare / (max_rate + 1e-12))
+
+        dM       = V_TX * DNA_p - k_M * M_p
+        dP_imm   = V_TL * M_p - k_fold * Pimm_p - k_degp * Pimm_p
+        dP_dark  = k_fold * Pimm_p - r_safe - k_deg_dark * Pdark_p
+        dP_fluor = r_safe
+        dO2      = -sink_mask * (c_ox * r_safe + c_met * O2_p)
+        dDNA     = torch.zeros_like(DNA)
+        dtube    = torch.zeros_like(tube_opened)
+
+        return torch.stack(
+            (dM, dO2, dP_imm, dP_dark, dP_fluor, dDNA, dtube),
+            dim=-1,
+        )
+
+
 class TXTLModel9_M5Oxygen(MechanisticScaffold):
     """
     M5 + tube-opening: numerically identical to M5 (TXTLResourceandMaturationDNAScaffold).
@@ -3303,6 +3377,7 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model9_o2b":              TXTLModel9_O2SourceB(),            # v3b: simplified 7-state (no dark pool); previous canonical
     "txtl_model9_dark_stable":      TXTLModel9_DarkStable(),           # ← v4 canonical candidate: tex-faithful 9-state + soft-saturated stiff rate (RK4 stable)
     "txtl_model9_dark_stable_dual": TXTLModel9_DarkStableDual(),       # ← v5: dark_stable + O2-independent background maturation (closes the old-sample pm gap)
+    "txtl_model9_dark_m4":          TXTLModel9_DarkM4(),               # ← dark_stable mechanism on the simpler, better-generalizing M4 backbone
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),

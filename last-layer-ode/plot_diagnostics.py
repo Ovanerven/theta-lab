@@ -317,6 +317,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         ar_gap=int(cfg.get("ar_gap", 4)),
         encoder_use_time=bool(cfg.get("encoder_use_time", False)),
         encoder_use_log_dt=bool(cfg.get("encoder_use_log_dt", False)),
+        # u_transform must be passed at construction for channel-expanding modes
+        # (pulse_cumsum_sqrt / decay_trace / cumsum_timesince_sqrt) so the rebuilt
+        # lift layer matches the checkpoint shape.
+        u_transform=str(cfg.get("u_transform", "none")),
         forget_bias_init=cfg.get("forget_bias_init", None),
         legacy_forget_bias_bug=bool(cfg.get("legacy_forget_bias_bug", False)),
         detach_y_prev=bool(cfg.get("detach_y_prev", True)),
@@ -365,7 +369,8 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
     missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
     # Allow non-persistent buffer drift (e.g. gru_u_idx, gru_y_idx, u_minmax_max_full)
     # but flag any param-shaped drift loudly.
-    _benign = {"gru_u_idx", "gru_y_idx", "u_minmax_max_full", "theta_lo_vec", "theta_hi_vec", "u_to_y_jump"}
+    _benign = {"gru_u_idx", "gru_y_idx", "u_minmax_max_full", "theta_lo_vec", "theta_hi_vec", "u_to_y_jump",
+               "u_decay_taus"}
     real_missing = [k for k in missing if k.split(".")[-1] not in _benign]
     real_unexpected = [k for k in unexpected if k.split(".")[-1] not in _benign]
     if real_missing or real_unexpected:

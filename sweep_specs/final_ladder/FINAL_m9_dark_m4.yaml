@@ -1,0 +1,108 @@
+# M9 dark-protein/oxygen mechanism on the M4 backbone — seed 0 probe.
+#
+# Hypothesis: dark_stable (M5 backbone) suffers M5's negative transfer on
+# old+new (old-subset 0.63→0.46), while the M4 backbone generalizes
+# (0.39→0.69). Grafting the SAME dark/oxygen reveal onto M4's robust backbone
+# should give M4-level generalization + M9's post-opening fluorescence jump.
+#
+# scaffold txtl_model9_dark_m4: 7-state [M,O2,P_imm,P_dark,P_fluor,DNA,tube_opened],
+# oxygen-only conversion (plain dark_stable form, NO Dual background route).
+#
+# Recipe matches the working M9_dark runs: real-only, lr=0.0015 (dark scaffolds
+# are lr-fragile), lambda_oxygen=0.1, d-recipe. Compared head-to-head against
+# the M5-backbone dark_stable at the same seed/recipe.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m9_dark_m4.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_m9_dark_m4
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+# oxygen control wiring (u_open feeds the O2 state); cols 0..12 = real-data controls
+_m9_real: &m9ox_real
+  gru_u_cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  n_substeps: 1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  hidden: 400
+  lr: 0.0015                  # dark scaffolds collapse at 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  test_real_only: true
+  balance_source_sampler: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  lambda_oxygen: 0.1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: "u_open"
+
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+runs:
+  # ── NEW: dark mechanism on M4 backbone ──
+  - exp_name: M9_dark_m4_real_s0
+    scaffold: txtl_model9_dark_m4
+    seed: 0
+    <<: [*real, *m9ox_real]
+
+  # ── HEAD-TO-HEAD reference: dark mechanism on M5 backbone (current canonical) ──
+  - exp_name: M9_dark_m5_real_s0
+    scaffold: txtl_model9_dark_stable
+    seed: 0
+    <<: [*real, *m9ox_real]
+
+  # ── M9_dark_m4 minimal-recipe variant (M4 liked plain loss) ──
+  - exp_name: M9_dark_m4_real_minrecipe_s0
+    scaffold: txtl_model9_dark_m4
+    seed: 0
+    species_weights: null
+    time_upweight: null
+    endpoint_channels: null
+    <<: [*real, *m9ox_real]
