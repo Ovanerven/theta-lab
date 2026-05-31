@@ -171,7 +171,7 @@ class OdeRNN(nn.Module):
         self.u_transform = str(u_transform)
         if self.u_transform == "pulse_cumsum_sqrt" or self.u_transform == "cumsum_timesince_sqrt":
             self._u_feat_mult = 2
-        elif self.u_transform == "decay_trace":
+        elif self.u_transform == "decay_trace" or self.u_transform == "pulse_cumsum_timesince":
             self._u_feat_mult = 3
         else:
             self._u_feat_mult = 1
@@ -417,6 +417,13 @@ class OdeRNN(nn.Module):
                 u_gru = torch.cat([pulse, cum], dim=2)
             elif self.u_transform == "decay_trace":
                 u_gru = self._decay_trace(u_base, dt_seq)                   # multi-timescale (B,K,C*3)
+            elif self.u_transform == "pulse_cumsum_timesince":
+                # Union of the two half-frontier winners: magnitude (old's driver) +
+                # persistence + recency (new's driver). 3 channels per col.
+                pulse  = u_base.clamp_min(1e-6).sqrt()                      # exact magnitude (old needs this)
+                cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # persistent recipe
+                tsince = self._time_since(u_base, dt_seq)                   # recency (new benefits)
+                u_gru  = torch.cat([pulse, cum, tsince], dim=2)
             else:  # cumsum_timesince_sqrt
                 cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # magnitude
                 tsince = self._time_since(u_base, dt_seq)                   # recency

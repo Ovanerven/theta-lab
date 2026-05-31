@@ -1,0 +1,98 @@
+# MASTER coarse A/B — consolidates every open axis we've discussed into one sweep.
+# All arms: COARSENED real-only + {new:1} + 200ep. Default base = M4 / h400 / pulse_cumsum
+# / HY2 loss (species_weight{3} + late-protein upweight, NO endpoint anchor). Each arm
+# overrides ONE axis so effects are isolable. Anything already run is referenced, not repeated:
+#   CO_*  (d-recipe, pulse): M3/M4/M5 h400 + M5 h600   [FINAL_coarse_scaffold_test]
+#   COP_* (plain,   pulse): M3/M4 h400                 [FINAL_coarse_scaffold_test_plain]
+#   coarsenold: sqrt/pulse/timesince {new:1,2}         [FINAL_m4_coarsenold]
+#
+# AXES TESTED HERE:
+#  LOSS    : HY (species only) vs HY2 (species+late-protein) — completes plain/HY/HY2/d-recipe
+#  FEATURE : pulse_cumsum vs pulse_cumsum_timesince (magnitude+persistence+recency)
+#  CAPACITY: h400 vs h600 (does bigger pay off now compression is reduced?)
+#  SCAFFOLD: M4 vs M5
+#  U_OPEN  : add col 12 to encoder (explicit time-since-opening)
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_master.yaml \
+#     --out-root experiments_final/experiments
+
+study: FINAL_coarse_master
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # ROUND-1 WINNER = HY: mRNA species-weight ONLY. The loss decomposition showed
+  # late-protein upweight (HY2) and the endpoint anchor (d-recipe) both HURT protein;
+  # only the mRNA species-weight helps (mRNA↑ at a small protein cost). So round 2
+  # anchors on HY. (plain is ~equal on protein, better if protein-only — within noise.)
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  endpoint_loss_space: log
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# ROUND 2 — runs feature/scaffold/capacity/u_open at the WINNING loss from round 1
+# (FINAL_coarse_hybrid_loss). The DEFAULT loss block above is set to HY2 as a placeholder;
+# once round 1 names the winner, set the `fixed:` loss to it (one edit) before launching.
+# Loss decomposition arms are NOT here — round 1 (hybrid_loss) + done CO_*/COP_* cover them.
+runs:
+  # ── reference at the winning loss: pulse, M4 h400 ──
+  - {exp_name: MAS_pulse_M4h400_s0, seed: 0}
+
+  # ── CAPACITY (pulse): does h600 beat h400 now? ──
+  - {exp_name: MAS_pulse_M4h600_s0, seed: 0, hidden: 600}
+
+  # ── SCAFFOLD M5 (pulse) at both capacities ──
+  - {exp_name: MAS_pulse_M5h400_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: MAS_pulse_M5h600_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+
+  # ── COMBINED FEATURE pulse_cumsum_timesince (magnitude+persistence+recency) ──
+  - {exp_name: MAS_PT_M4h400_s0, seed: 0, u_transform: pulse_cumsum_timesince}
+  - {exp_name: MAS_PT_M4h600_s0, seed: 0, u_transform: pulse_cumsum_timesince, hidden: 600}
+  - {exp_name: MAS_PT_M5h400_s0, seed: 0, u_transform: pulse_cumsum_timesince, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: MAS_PT_M5h600_s0, seed: 0, u_transform: pulse_cumsum_timesince, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+
+  # ── U_OPEN awareness (combined feature + col 12 in encoder) ──
+  - {exp_name: MAS_PTUO_M4h400_s0, seed: 0, u_transform: pulse_cumsum_timesince, gru_u_cols: [0,1,3,4,5,6,7,8,9,10,11,12]}
+  - {exp_name: MAS_PTUO_M5h600_s0, seed: 0, u_transform: pulse_cumsum_timesince, gru_u_cols: [0,1,3,4,5,6,7,8,9,10,11,12], scaffold: txtl_resource_and_maturation_dna, hidden: 600}

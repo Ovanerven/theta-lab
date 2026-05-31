@@ -1,0 +1,93 @@
+# Coarsened-OLD grid unification — THE clean test of the old/new grid mismatch.
+#
+# Dataset: txtl_native_real_only_coarsenold.npz — OLD adaptively downsampled 1318→283
+# steps (fine 60s through 10000s incl. all boluses + early mRNA, then 600s tail; PURE
+# decimation, no fabrication). NEW unchanged (269). Grids now matched; pm-final EXACTLY
+# preserved (0.0000 diff), mm-max ~exact, variance preserved pm 0.9994 / mm 0.980.
+# Per-sample step ratio new:old 0.20 -> 0.96, so source weight is now a PURE semantic knob.
+#
+# 2x2: encoder {sqrt, pulse_cumsum} x new-weight {1, 2}.
+#   sqrt + {new:1}  = apples-to-apples vs native M4sq_07 (whose {new:5} was ≈per-sample-fair):
+#                     does unifying the grid ALONE change the old/new balance?
+#   {new:2}         = dataset-balanced (~50/50), corrects for 2.2x fewer new SAMPLES.
+#   pulse_cumsum    = grid-invariant persistence feature, stacked on the unified grid.
+#
+# REFERENCES (native data): M4sq_07 (sqrt,{new:5}) pm 0.663/old 0.759/new 0.266;
+#   M4_uf_pulse_cumsum (pulse,{new:5}) pm 0.300/old 0.204/new 0.536.
+# pm-final is preserved exactly under coarsening, so R²s are comparable. Read with
+# scripts/diag_failures.py; goal = a run that holds old high AND lifts new (no trade).
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m4_coarsenold.yaml \
+#     --out-root experiments_final/experiments
+
+study: FINAL_m4_coarsenold
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  # ── identical to M4sq_07 training setup, except dataset = coarsenold ──
+  epochs: 100
+  warmup_epochs: 5
+  hidden: 400
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # d-recipe loss (matches M4sq_07)
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  endpoint_loss_space: log
+  lambda_peak: 0.0
+  peak_channels: null
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  # ── A/B step 1: does the COARSENED data work? (vanilla sqrt encoder) ──
+  - {exp_name: M4_co_sqrt_new1_s0,  seed: 0, u_transform: sqrt,              source_loss_weights: {new: 1.0, old: 1.0}}
+  - {exp_name: M4_co_sqrt_new2_s0,  seed: 0, u_transform: sqrt,              source_loss_weights: {new: 2.0, old: 1.0}}
+
+  # ── A/B step 2: + pulse_cumsum feature on the unified grid (exact timing + persistence) ──
+  - {exp_name: M4_co_pulse_new1_s0, seed: 0, u_transform: pulse_cumsum_sqrt, source_loss_weights: {new: 1.0, old: 1.0}}
+  - {exp_name: M4_co_pulse_new2_s0, seed: 0, u_transform: pulse_cumsum_sqrt, source_loss_weights: {new: 2.0, old: 1.0}}
+
+  # ── A/B step 3: + cumsum_timesince (persistence + per-reagent recency).
+  #    NOTE: default gru_u_cols EXCLUDES u_open(12), so the encoder is BLIND to opening. ──
+  - {exp_name: M4_co_timesince_new1_s0, seed: 0, u_transform: cumsum_timesince_sqrt, source_loss_weights: {new: 1.0, old: 1.0}}
+  - {exp_name: M4_co_timesince_new2_s0, seed: 0, u_transform: cumsum_timesince_sqrt, source_loss_weights: {new: 2.0, old: 1.0}}
+
+  # ── A/B step 4: SAME but ADD u_open(12) to the encoder → cumsum="has-opened",
+  #    time_since="time-since-opening" (new's actual causal driver). Tests opening-awareness. ──
+  - {exp_name: M4_co_timesince_uopen_new1_s0, seed: 0, u_transform: cumsum_timesince_sqrt, gru_u_cols: [0,1,3,4,5,6,7,8,9,10,11,12], source_loss_weights: {new: 1.0, old: 1.0}}
+  - {exp_name: M4_co_timesince_uopen_new2_s0, seed: 0, u_transform: cumsum_timesince_sqrt, gru_u_cols: [0,1,3,4,5,6,7,8,9,10,11,12], source_loss_weights: {new: 2.0, old: 1.0}}

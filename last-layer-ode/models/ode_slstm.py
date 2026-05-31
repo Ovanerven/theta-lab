@@ -83,12 +83,19 @@ class sLSTMCell(nn.Module):
 
 
 class _StackedSLSTM(nn.Module):
-    """A stack of sLSTMCell layers with optional dropout between layers."""
+    """A stack of sLSTMCell layers with dropout. `drop_last_layer` controls whether
+    dropout is applied after the final layer too (True = match GRU StackedGRUCell, so
+    the head sees a dropped activation; False = original behaviour, dropout BETWEEN
+    layers only)."""
 
-    def __init__(self, input_size: int, hidden_size: int, num_layers: int, dropout: float, forget_bias: float):
+    __constants__ = ["num_layers", "drop_last_layer"]
+
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int, dropout: float,
+                 forget_bias: float, drop_last_layer: bool = True):
         super().__init__()
         self.num_layers = int(num_layers)
         self.hidden_size = int(hidden_size)
+        self.drop_last_layer = bool(drop_last_layer)
         cells: List[sLSTMCell] = []
         for ell in range(self.num_layers):
             in_dim = input_size if ell == 0 else hidden_size
@@ -115,7 +122,9 @@ class _StackedSLSTM(nn.Module):
         for ell, cell in enumerate(self.cells):
             h, st = cell(h, states_in[ell])
             new_states.append(st)
-            if ell < self.num_layers - 1:
+            # drop_last_layer=True → dropout after every layer incl. last (matches GRU,
+            # head sees a dropped activation); False → original (between layers only).
+            if self.drop_last_layer or ell < self.num_layers - 1:
                 h = self.drop(h)
         return h, new_states
 
@@ -146,6 +155,7 @@ class OdesLSTM(nn.Module):
         use_basal: bool = False,
         theta_bounded: bool = True,
         forget_bias_init: Optional[float] = None,
+        slstm_drop_last_layer: bool = True,   # True = dropout every layer (match GRU); False = original (between layers)
         gru_u_cols: Optional[list] = None,
         gru_y_cols: Optional[list] = None,
         lift_skip: bool = False,
@@ -215,6 +225,7 @@ class OdesLSTM(nn.Module):
             num_layers=int(num_layers),
             dropout=float(dropout),
             forget_bias=float(forget_bias_init) if forget_bias_init is not None else 0.0,
+            drop_last_layer=bool(slstm_drop_last_layer),
         )
 
         head_out = self.theta_dim + self.P if self.use_basal else self.theta_dim

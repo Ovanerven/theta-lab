@@ -1315,6 +1315,7 @@ class TrainConfig:
     nn_layers: int = 2
 
     forget_bias_init: Optional[float] = None  # None = PyTorch default; 1.0 = Gers/Jozefowicz positive shift
+    slstm_drop_last_layer: bool = True         # ode_slstm: True = dropout every layer (match GRU); False = original (between layers)
     legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
 
     # Plain MSE on (mm, pm) in raw scale, no normalization, no aux terms.
@@ -1947,6 +1948,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         expand=cfg.expand,
         d_conv=cfg.d_conv,
         forget_bias_init=cfg.forget_bias_init,
+        slstm_drop_last_layer=cfg.slstm_drop_last_layer,
         legacy_forget_bias_bug=cfg.legacy_forget_bias_bug,
         # Partial-observability: override the dataset-space gru_y_cols with the
         # scaffold's obs positions, so the encoder reads mm/pm at scaffold cols
