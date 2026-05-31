@@ -81,6 +81,13 @@ runs:
   - {exp_name: S_M4h400_nsub3_s1, seed: 1, hidden: 400}
   - {exp_name: S_M4h400_nsub3_s2, seed: 2, hidden: 400}
 
+  # ── (1b) M4 h300 nsub3 with PLAIN loss — loss decomposition favored plain on PROTEIN
+  #    (0.632 vs HY 0.592 at base hparams), but we never tested plain at the winning hparams.
+  #    plain = drop the mRNA species-weight too. Settles HY-vs-plain at the optimum. ──
+  - {exp_name: S_M4h300_nsub3_PLAIN_s0, seed: 0, species_weights: null}
+  - {exp_name: S_M4h300_nsub3_PLAIN_s1, seed: 1, species_weights: null}
+  - {exp_name: S_M4h300_nsub3_PLAIN_s2, seed: 2, species_weights: null}
+
   # ── (3) M4 h300 nsub5 — more substeps ──
   - {exp_name: S_M4h300_nsub5_s0, seed: 0, n_substeps: 5}
   - {exp_name: S_M4h300_nsub5_s1, seed: 1, n_substeps: 5}

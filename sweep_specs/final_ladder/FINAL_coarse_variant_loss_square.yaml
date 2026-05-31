@@ -1,0 +1,91 @@
+# Variant × Loss square, seeded — settles cell-variant AND loss jointly at the winning config.
+# Fixed: M4 / h300 / nsub3 / pulse_cumsum / coarse / {new:1} / 200ep. Vary only:
+#   gru_variant {stacked_cell, nn_gru}  ×  loss {HY (species-weight only), plain (none)}.
+# 4 configs × seeds {0,1,2} = 12 runs. Self-contained (doesn't rely on seed_combo).
+#
+# Scan context: nn_gru had best-old (0.726) but was never combined with h300/nsub3;
+# loss decomp favored plain on protein (0.632) over HY (0.592). This resolves both, seeded.
+#
+# Launch (laptop):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_variant_loss_square.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# (~20-40 min/run coarse on a laptop → several hours; set --set epochs=100 to halve it,
+#  the 4-way comparison stays internally valid either way.)
+
+study: FINAL_coarse_variant_loss_square
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: stacked_cell        # overridden to nn_gru per-run
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # DEFAULT loss = HY (species-weight only). plain arms override species_weights: null.
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── stacked_cell × HY ──
+  - {exp_name: SQ_stacked_HY_s0, seed: 0}
+  - {exp_name: SQ_stacked_HY_s1, seed: 1}
+  - {exp_name: SQ_stacked_HY_s2, seed: 2}
+
+  # ── nn_gru × HY ──
+  - {exp_name: SQ_nngru_HY_s0, seed: 0, gru_variant: nn_gru}
+  - {exp_name: SQ_nngru_HY_s1, seed: 1, gru_variant: nn_gru}
+  - {exp_name: SQ_nngru_HY_s2, seed: 2, gru_variant: nn_gru}
+
+  # ── stacked_cell × plain ──
+  - {exp_name: SQ_stacked_plain_s0, seed: 0, species_weights: null}
+  - {exp_name: SQ_stacked_plain_s1, seed: 1, species_weights: null}
+  - {exp_name: SQ_stacked_plain_s2, seed: 2, species_weights: null}
+
+  # ── nn_gru × plain ──
+  - {exp_name: SQ_nngru_plain_s0, seed: 0, gru_variant: nn_gru, species_weights: null}
+  - {exp_name: SQ_nngru_plain_s1, seed: 1, gru_variant: nn_gru, species_weights: null}
+  - {exp_name: SQ_nngru_plain_s2, seed: 2, gru_variant: nn_gru, species_weights: null}
