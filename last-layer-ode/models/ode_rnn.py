@@ -171,7 +171,8 @@ class OdeRNN(nn.Module):
         self.u_transform = str(u_transform)
         if self.u_transform == "pulse_cumsum_sqrt" or self.u_transform == "cumsum_timesince_sqrt":
             self._u_feat_mult = 2
-        elif self.u_transform == "decay_trace" or self.u_transform == "pulse_cumsum_timesince":
+        elif (self.u_transform == "decay_trace" or self.u_transform == "pulse_cumsum_timesince"
+              or self.u_transform == "pulse_cumsum_static"):
             self._u_feat_mult = 3
         else:
             self._u_feat_mult = 1
@@ -424,6 +425,15 @@ class OdeRNN(nn.Module):
                 cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # persistent recipe
                 tsince = self._time_since(u_base, dt_seq)                   # recency (new benefits)
                 u_gru  = torch.cat([pulse, cum, tsince], dim=2)
+            elif self.u_transform == "pulse_cumsum_static":
+                # pulse + progressive cumsum + STATIC full recipe (final total broadcast to all
+                # steps). The recipe is a known control input, so giving the COMPLETE recipe from
+                # t=0 (not just progressively) lets the encoder set theta correctly upfront. 3 ch.
+                cum_raw = u_base.cumsum(dim=1)
+                pulse   = u_base.clamp_min(1e-6).sqrt()
+                cum     = cum_raw.clamp_min(1e-6).sqrt()
+                total   = cum_raw[:, -1:, :].expand(-1, cum_raw.shape[1], -1).clamp_min(1e-6).sqrt()
+                u_gru   = torch.cat([pulse, cum, total], dim=2)
             else:  # cumsum_timesince_sqrt
                 cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # magnitude
                 tsince = self._time_since(u_base, dt_seq)                   # recency

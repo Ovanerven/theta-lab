@@ -1,0 +1,102 @@
+# Overnight NEW-AVENUES exploration (mac mini, ~8h). All on the locked M4 best config
+# (nn_gru / h300 / nsub3 / plain / coarse / real / {new:1}); each block varies ONE new thing
+# we haven't tested seeded. GRU-only (MPS-friendly; no mamba/transformer here).
+#
+#   1. OPENING-AWARENESS (u_open in encoder, cols incl 12) — M4 is currently BLIND to the
+#      tube-opening; this is the biggest untested feature idea, targets NEW.
+#        UO_pulse     : pulse + u_open  (sees "opened" + opening time)
+#        UO_timesince : cumsum_timesince + u_open  (TIME-SINCE-OPENING = the causal var for the reveal)
+#   2. STATIC RECIPE  : pulse_cumsum_static — full known recipe from t=0 (new feature).
+#   3. NORM TIME      : encoder_use_time (tau=t/horizon, grid-invariant phase signal).
+#   4. SCHEDULE       : 300 epochs + cosine decay (we always did 200/no-cosine).
+#   5. LR             : 0.003 (edged in the single-seed scan).
+# 6 blocks x 3 seeds = 18 runs.
+#
+# Launch (mini):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_newavenues.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_coarse_newavenues
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  cosine_decay: false
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  encoder_use_time: false
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+_uopen: &uopen
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+runs:
+  # 1a. opening-awareness: pulse + u_open
+  - {exp_name: NA_UOpulse_s0, seed: 0, <<: *uopen}
+  - {exp_name: NA_UOpulse_s1, seed: 1, <<: *uopen}
+  - {exp_name: NA_UOpulse_s2, seed: 2, <<: *uopen}
+  # 1b. opening-awareness: time-since-opening
+  - {exp_name: NA_UOtimesince_s0, seed: 0, u_transform: cumsum_timesince_sqrt, <<: *uopen}
+  - {exp_name: NA_UOtimesince_s1, seed: 1, u_transform: cumsum_timesince_sqrt, <<: *uopen}
+  - {exp_name: NA_UOtimesince_s2, seed: 2, u_transform: cumsum_timesince_sqrt, <<: *uopen}
+  # 2. static full recipe from t=0
+  - {exp_name: NA_static_s0, seed: 0, u_transform: pulse_cumsum_static}
+  - {exp_name: NA_static_s1, seed: 1, u_transform: pulse_cumsum_static}
+  - {exp_name: NA_static_s2, seed: 2, u_transform: pulse_cumsum_static}
+  # 3. normalized time feature (grid-invariant phase)
+  - {exp_name: NA_normtime_s0, seed: 0, encoder_use_time: true}
+  - {exp_name: NA_normtime_s1, seed: 1, encoder_use_time: true}
+  - {exp_name: NA_normtime_s2, seed: 2, encoder_use_time: true}
+  # 4. longer + cosine schedule
+  - {exp_name: NA_sched_s0, seed: 0, epochs: 300, cosine_decay: true}
+  - {exp_name: NA_sched_s1, seed: 1, epochs: 300, cosine_decay: true}
+  - {exp_name: NA_sched_s2, seed: 2, epochs: 300, cosine_decay: true}
+  # 5. lr 0.003
+  - {exp_name: NA_lr003_s0, seed: 0, lr: 0.003}
+  - {exp_name: NA_lr003_s1, seed: 1, lr: 0.003}
+  - {exp_name: NA_lr003_s2, seed: 2, lr: 0.003}
