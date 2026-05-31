@@ -1,0 +1,91 @@
+# Phase 0.5b — hidden scout for the SPECIAL scaffolds (M7_bg, M8_bg, M9_dark) on coarse.
+# Shared new knobs: nn_gru / nsub3 / pulse / coarse. Scaffold-intrinsic config kept canonical:
+#   M7_bg, M8_bg  -> coarse-COMBINED + synth (synth:1.0) + L_zero 0.005 + balance sampler + test_real_only
+#   M9_dark       -> coarse-real + lambda_oxygen 0.1 + lr 0.0015 (lr-fragile!) + dark_stable
+# d-recipe loss kept (their canonical; ladder can revisit). Single-seed hidden scout.
+#
+# Launch (laptop/mini when free):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_hidden_scout_b.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+
+study: FINAL_coarse_hidden_scout_b
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # d-recipe (canonical for M7/M8/M9)
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# M7/M8: coarse-combined + full synth + L_zero
+_combined: &combined
+  dataset_path: datasets/cell-free/txtl_native_combined_coarsenold.npz
+  use_synthetic_data: true
+  test_real_only: true
+  balance_source_sampler: true
+  lambda_zero_traj: 0.005
+  source_loss_weights: {new: 5.0, old: 1.0, synth: 1.0}
+
+# M9: coarse-real + oxygen wiring + lr 0.0015 (fragile)
+_m9: &m9
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  lr: 0.0015
+  lambda_oxygen: 0.1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+  source_loss_weights: {new: 5.0, old: 1.0}
+
+runs:
+  # ── M7_bg hidden scout (combined+synth) ──
+  - {exp_name: HSb_M7_h400_s0, seed: 0, scaffold: txtl_model7_bg_fixed, hidden: 400, <<: *combined}
+  - {exp_name: HSb_M7_h600_s0, seed: 0, scaffold: txtl_model7_bg_fixed, hidden: 600, <<: *combined}
+
+  # ── M8_bg hidden scout (combined+synth) ──
+  - {exp_name: HSb_M8_h400_s0, seed: 0, scaffold: txtl_model8_bg_fixed, hidden: 400, <<: *combined}
+  - {exp_name: HSb_M8_h600_s0, seed: 0, scaffold: txtl_model8_bg_fixed, hidden: 600, <<: *combined}
+
+  # ── M9_dark hidden scout (real + oxygen, lr0.0015) ──
+  - {exp_name: HSb_M9_h400_s0, seed: 0, scaffold: txtl_model9_dark_stable, hidden: 400, <<: *m9}
+  - {exp_name: HSb_M9_h600_s0, seed: 0, scaffold: txtl_model9_dark_stable, hidden: 600, <<: *m9}
