@@ -80,10 +80,12 @@ runs:
   - {exp_name: ES_gru_s0, seed: 0, model_class: ode_rnn}
   - {exp_name: ES_gru_s1, seed: 1, model_class: ode_rnn}
   - {exp_name: ES_gru_s2, seed: 2, model_class: ode_rnn}
-  # mamba (mambapy)
-  - {exp_name: ES_mamba_s0, seed: 0, model_class: ode_mambapy}
-  - {exp_name: ES_mamba_s1, seed: 1, model_class: ode_mambapy}
-  - {exp_name: ES_mamba_s2, seed: 2, model_class: ode_mambapy}
+  # minGRU — minimal LINEAR-recurrence (SSM-adjacent; "Were RNNs All We Needed?").
+  # Replaces mamba: mambapy is broken and mamba-ssm has no autograd-through-step.
+  # This is the parallelizable-linear-recurrence data point, pure-pytorch, works.
+  - {exp_name: ES_mingru_s0, seed: 0, model_class: ode_mingru}
+  - {exp_name: ES_mingru_s1, seed: 1, model_class: ode_mingru}
+  - {exp_name: ES_mingru_s2, seed: 2, model_class: ode_mingru}
   # transformer (sliding-window + flash attention; now feasible on coarse)
   - {exp_name: ES_transformer_s0, seed: 0, model_class: ode_transformer}
   - {exp_name: ES_transformer_s1, seed: 1, model_class: ode_transformer}
