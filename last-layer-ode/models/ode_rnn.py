@@ -400,6 +400,10 @@ class OdeRNN(nn.Module):
                                               # Without a transform, large protein values (~10^3) dominate
                                               # the lift layer over reagent values (~1) and the GRU stops
                                               # responding to inputs. sqrt or log1p compresses the scale.
+        theta_override: Optional[torch.Tensor] = None,  # (B,K,theta_dim) — if given, REPLACES the encoder's
+                                              # emitted theta_k before integration (for parameter-gating
+                                              # ablations: zero/floor, freeze-to-mean, scale). Encoder still
+                                              # runs; only the value fed to the ODE is overridden.
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -554,6 +558,8 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw_theta)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 beta_out[:, k, :] = beta_k
                 y = y_prev + (u_k @ self.u_to_y_jump)
@@ -566,6 +572,8 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 if self._analytic_scaffold:
                     # Closed-form integrator owns the step (no u-jump, no RK4).
                     y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
