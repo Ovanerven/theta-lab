@@ -1,0 +1,31 @@
+# M4 sweep for the Mac mini — idea #1 (stage-evaluated neural residual) and
+# idea #3 (theta-smoothness L2 penalty), 3 seeds each = 6 runs.
+#
+# BASELINE IS NOT RE-RUN. It already exists multi-seed at
+#   experiments_final/FINAL_coarse_nngru_finalize/NG_plain_s{0,1,2,3}
+# base_config below is an EXACT match to that NG_plain config, so each run here
+# differs from the baseline only by the toggled flag — a clean ablation.
+#
+# Run locally (no SLURM):
+#   source .venv/bin/activate
+#   python launch_sweep.py sweep_specs/m4_mac_sweep.yaml --local --max-parallel 1
+#   # smoke test first:
+#   python launch_sweep.py sweep_specs/m4_mac_sweep.yaml --local --dry-run
+#
+# Logs: slurm_outputs/m4_mac_sweep/local_<exp_name>.log
+# Results: experiments/<exp_name>/
+
+study: m4_mac_sweep
+base_config: configs/m4_mac_sweep.yaml
+no_plot: true
+
+runs:
+  # ── idea #3: theta-smoothness L2 penalty ─────────────────────────────────
+  - {exp_name: l2pen_s0, seed: 0, l2_regularization: true, lambda_reg: 0.001}
+  - {exp_name: l2pen_s1, seed: 1, l2_regularization: true, lambda_reg: 0.001}
+  - {exp_name: l2pen_s2, seed: 2, l2_regularization: true, lambda_reg: 0.001}
+
+  # ── idea #1: stage-evaluated neural residual g(y) on the RHS ──────────────
+  - {exp_name: rk4resid_s0, seed: 0, rk4_residual: true, rk4_residual_hidden: 64, rk4_residual_layers: 2}
+  - {exp_name: rk4resid_s1, seed: 1, rk4_residual: true, rk4_residual_hidden: 64, rk4_residual_layers: 2}
+  - {exp_name: rk4resid_s2, seed: 2, rk4_residual: true, rk4_residual_hidden: 64, rk4_residual_layers: 2}
