@@ -45,9 +45,18 @@ ARCH_SYSTEMS = [
 
 SKIP_MODEL_KEYS = {"l2reg"}  # not run across all scaffolds — drop from tables
 
+def _is_redundant(r):
+    """Enzyme/2 (single_enzyme_lumped) is 2-state, so 'first_last' observation
+    is identical to 'full' (the two observed species ARE first+last). Drop the
+    first_last block for that scaffold in BOTH families (data ablation and the
+    one stray arch-sweep GRU/FL run copied over from A6_baseline)."""
+    return (r["scaffold_label"] == "Enzyme/2"
+            and r["supervision"] == "first_last")
+
 def load():
     rows = list(csv.DictReader(open(LONG)))
-    rows = [r for r in rows if r["model_key"] not in SKIP_MODEL_KEYS]
+    rows = [r for r in rows
+            if r["model_key"] not in SKIP_MODEL_KEYS and not _is_redundant(r)]
     for r in rows:
         r["n"] = int(r["n"]);
         for k in ("nrmse_median","nrmse_mean"):

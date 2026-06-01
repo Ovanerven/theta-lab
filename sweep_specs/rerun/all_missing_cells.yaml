@@ -1,0 +1,64 @@
+# All missing data-ablation and arch-sweep cells in one spec.
+# Generated from results/sweep_consolidated/all_results_long.csv.
+#
+# 3 data-ablation runs + 29 arch-sweep runs = 32 total.
+#
+# Filters: skipped l2reg (you removed CMVF-L2 from the tables); skipped
+# A1/A2 first_last for full22 (parametric, no-op at test time); skipped
+# Enzyme/2 arch-sweep first_last (fl == std for 2 species).
+#
+# Each run sets per-run `study:` so outputs land in the matching existing
+# experiments/<study>/ folder. Mamba runs are tagged `env: mamba_env` so
+# launch_sweep batches them separately (or activate mamba_env in --local).
+#
+# Launch (local on Snellius via the sbatch wrapper):
+#   sbatch slurm_jobs/parallel_one_gpu.job sweep_specs/rerun/all_missing_cells.yaml 4
+# Or one node at a time:
+#   python launch_sweep.py sweep_specs/rerun/all_missing_cells.yaml --local --max-parallel 4 --no-compare
+
+study: all_missing_cells_sweep    # placeholder; per-run `study:` overrides
+runs_per_job: 1
+time: "06:00:00"
+partition: gpu_a100
+no_plot: false
+
+fixed:
+  epochs: 100
+
+runs:
+
+  # ───── DATA ABLATION GAPS ─────────────────────────────────────────
+  - {study: mof_synthesis_4_data_ablation, base_config: configs/archs/gru_optimal.yaml, scaffold: mof_synthesis_4, model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000, dataset_path: datasets/mof/mof_synthesis_4_n1000.npz, val_n: 100, test_n: 100}
+  - {study: glycolysis_full22_data_ablation, base_config: configs/glycolisis/glycolisis.yaml, scaffold: glycolysis_oracle22, model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_first_last_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100, obs_idx: [0, 21]}
+  - {study: glycolysis_full22_data_ablation, base_config: configs/glycolisis/glycolisis.yaml, scaffold: glycolysis_oracle22, model_class: neural_ode_correction, exp_name: A9_neural_ode_correction_n1000, dataset_path: datasets/glycolysis/glycolysis_oracle22_n1000.npz, val_n: 100, test_n: 100}
+
+  # ───── ARCH SWEEP GAPS ────────────────────────────────────────────
+  - {study: single_enzyme_lumped_arch_sweep_n3, base_config: configs/archs/gru.yaml, scaffold: single_enzyme_lumped, exp_name: gru_enzlumped_n3_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n3, base_config: configs/archs/lstm.yaml, scaffold: single_enzyme_lumped, exp_name: lstm_enzlumped_n3_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n3, base_config: configs/archs/transformer.yaml, scaffold: single_enzyme_lumped, exp_name: trans_enzlumped_n3_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n3, base_config: configs/archs/mamba.yaml, scaffold: single_enzyme_lumped, exp_name: mamba_enzlumped_n3_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, env: mamba_env}
+  - {study: single_enzyme_lumped_arch_sweep_n10, base_config: configs/archs/gru.yaml, scaffold: single_enzyme_lumped, exp_name: gru_enzlumped_n10_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n10, base_config: configs/archs/lstm.yaml, scaffold: single_enzyme_lumped, exp_name: lstm_enzlumped_n10_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n10, base_config: configs/archs/transformer.yaml, scaffold: single_enzyme_lumped, exp_name: trans_enzlumped_n10_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n10, base_config: configs/archs/mamba.yaml, scaffold: single_enzyme_lumped, exp_name: mamba_enzlumped_n10_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, env: mamba_env}
+  - {study: single_enzyme_lumped_arch_sweep_n1000, base_config: configs/archs/gru.yaml, scaffold: single_enzyme_lumped, exp_name: gru_enzlumped_n1000_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n1000, base_config: configs/archs/lstm.yaml, scaffold: single_enzyme_lumped, exp_name: lstm_enzlumped_n1000_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n1000, base_config: configs/archs/transformer.yaml, scaffold: single_enzyme_lumped, exp_name: trans_enzlumped_n1000_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32}
+  - {study: single_enzyme_lumped_arch_sweep_n1000, base_config: configs/archs/mamba.yaml, scaffold: single_enzyme_lumped, exp_name: mamba_enzlumped_n1000_s42, dataset_path: datasets/single_enzyme/single_enzyme_lumped.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32, env: mamba_env}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/gru.yaml, scaffold: mof_synthesis_6, exp_name: gru_mof6_n3_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/gru.yaml, scaffold: mof_synthesis_6, exp_name: gru_mof6_n3_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5]}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/lstm.yaml, scaffold: mof_synthesis_6, exp_name: lstm_mof6_n3_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/lstm.yaml, scaffold: mof_synthesis_6, exp_name: lstm_mof6_n3_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5]}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/transformer.yaml, scaffold: mof_synthesis_6, exp_name: trans_mof6_n3_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/transformer.yaml, scaffold: mof_synthesis_6, exp_name: trans_mof6_n3_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5]}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/mamba.yaml, scaffold: mof_synthesis_6, exp_name: mamba_mof6_n3_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, env: mamba_env}
+  - {study: mof_synthesis_6_arch_sweep_n3, base_config: configs/archs/mamba.yaml, scaffold: mof_synthesis_6, exp_name: mamba_mof6_n3_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n3.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5], env: mamba_env}
+  - {study: mof_synthesis_6_arch_sweep_n10, base_config: configs/archs/lstm.yaml, scaffold: mof_synthesis_6, exp_name: lstm_mof6_n10_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5]}
+  - {study: mof_synthesis_6_arch_sweep_n10, base_config: configs/archs/transformer.yaml, scaffold: mof_synthesis_6, exp_name: trans_mof6_n10_s42, dataset_path: datasets/mof/mof_synthesis_6_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32}
+  - {study: mof_synthesis_6_arch_sweep_n10, base_config: configs/archs/transformer.yaml, scaffold: mof_synthesis_6, exp_name: trans_mof6_n10_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5]}
+  - {study: mof_synthesis_6_arch_sweep_n10, base_config: configs/archs/mamba.yaml, scaffold: mof_synthesis_6, exp_name: mamba_mof6_n10_s42, dataset_path: datasets/mof/mof_synthesis_6_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, env: mamba_env}
+  - {study: mof_synthesis_6_arch_sweep_n10, base_config: configs/archs/mamba.yaml, scaffold: mof_synthesis_6, exp_name: mamba_mof6_n10_fl_s42, dataset_path: datasets/mof/mof_synthesis_6_n10.npz, val_n: 1, test_n: 1, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 5], env: mamba_env}
+  - {study: glycolysis_reduced8_arch_sweep, base_config: configs/archs/slstm.yaml, scaffold: glycolysis_reduced8, exp_name: slstm_glyc8_n100_s42, dataset_path: datasets/glycolysis/glycolysis_reduced8_n100.npz, val_n: 10, test_n: 10, seed: 42, epochs: 100, batch_size: 32}
+  - {study: glycolysis_reduced8_arch_sweep, base_config: configs/archs/slstm.yaml, scaffold: glycolysis_reduced8, exp_name: slstm_glyc8_n100_fl_s42, dataset_path: datasets/glycolysis/glycolysis_reduced8_n100.npz, val_n: 10, test_n: 10, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 7]}
+  - {study: glycolysis_reduced8_arch_sweep_n1000, base_config: configs/archs/slstm.yaml, scaffold: glycolysis_reduced8, exp_name: slstm_glyc8_n1000_s42, dataset_path: datasets/glycolysis/glycolysis_reduced8_n1000.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32}
+  - {study: glycolysis_reduced8_arch_sweep_n1000, base_config: configs/archs/slstm.yaml, scaffold: glycolysis_reduced8, exp_name: slstm_glyc8_n1000_fl_s42, dataset_path: datasets/glycolysis/glycolysis_reduced8_n1000.npz, val_n: 100, test_n: 100, seed: 42, epochs: 100, batch_size: 32, obs_idx: [0, 7]}
