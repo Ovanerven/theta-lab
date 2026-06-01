@@ -1,0 +1,105 @@
+# Transformer ablation on coarse — stage in three architectural fixes one at a time.
+#
+# Baseline ref: FINAL_coarse_encoder_swap ES_transformer_s1 (window-relative pos,
+# no checkpoint, no time feature) → val diverged after ep 40, mm channel collapsed
+# to a constant from ep 67 onward, R²(mRNA max) = -0.61.
+#
+# Stages:
+#   A — absolute pos embed   (free; gives the model absolute trajectory position)
+#   B — A + gradient checkpoint  (memory cut; checkpoint per-step transformer call)
+#   C — B + time-since-bolus feature  (continuous time scalar appended to encoder input)
+#
+# Same single seed (s1) as the original encoder_swap run so results are directly comparable.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_transformer_ablation.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_transformer_ablation
+runs_per_job: 1
+time: "00:02:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 1
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: cumsum_sqrt
+  y_transform: sqrt_clamp1
+  # mamba params (ignored by transformer)
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  # transformer base params
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: true
+  max_seq_len: 512                  # absolute-pos embedding table size
+  model_class: ode_transformer
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # Stage A: absolute pos only
+  - exp_name: TA_A_abspos_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: false
+    append_time_feature: false
+
+  # Stage B: + gradient checkpoint (mostly a memory test — should not change accuracy)
+  # - exp_name: TA_B_abspos_ckpt_s1
+  #   seed: 1
+  #   use_absolute_pos: true
+  #   grad_checkpoint: true
+  #   append_time_feature: false
+
+  # Stage C: + time-since-start (normalized cumsum-dt scalar)
+  - exp_name: TA_C_abspos_ckpt_time_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: true
+    append_time_feature: true

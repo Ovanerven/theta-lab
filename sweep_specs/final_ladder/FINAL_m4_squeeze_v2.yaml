@@ -1,0 +1,140 @@
+# M4 performance-squeeze sweep — seed 0 only.  (v2: balanced log-space anchors)
+#
+# DIAGNOSIS (best M4, old-protein ~0.72): the model under-predicts high-yield
+# samples (log1p-MSE tail-compression) AND mRNA-max is under-supervised — it
+# only gets the ~0.07%-diluted trajectory signal, no direct anchor.
+#
+# WHAT WE LEARNED (CHECK_NOW runs):
+#   - sqrt-endpoint(0.3) is a DISASTER: it's ~15x the trajectory-loss scale, so
+#     it dominates → model force-fits protein → mRNA R² COLLAPSED to -10.5 →
+#     and protein got WORSE too (0.559 vs 0.602). Blowing up one term's scale
+#     wrecks the loss landscape. DROPPED.
+#   - Plain 2x-late-protein (log, matched scale) is healthy: R²p=0.602, mRNA=0.457.
+#   - The gap vs the d-recipe baseline's mRNA (0.602) is the missing mRNA
+#     supervision — the d-recipe's species_weights{3:1.25} was doing that.
+#
+# PRINCIPLE (v2): keep EVERY term on the d-recipe LOG scale (~1), matched to the
+# trajectory loss. Add the missing mRNA-max anchor (lambda_peak, LOG space) at
+# the same gentle scale as the protein endpoint that already works. Balanced
+# anchoring of BOTH cascade ends (mRNA-max + protein-final); the ODE connects them.
+#
+# Base: M4 real-only, H400, lr 0.002, 100 epochs, u=sqrt, y=sqrt_clamp1,
+#       {new:5,old:1} upweight, vanilla trajectory loss. endpoint_loss_space=log
+#       everywhere (default). Protein endpoint fixed at lambda_endpoint=0.1;
+#       we sweep the NEW mRNA-max anchor lambda_peak to isolate what it buys.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m4_squeeze.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_m4_squeeze
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+_real_only_overrides: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+fixed:
+  epochs: 100
+  warmup_epochs: 5
+  hidden: 400
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  test_real_only: true
+  balance_source_sampler: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # vanilla trajectory loss; LOG-space everywhere (matched scale, NO blow-ups)
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0          # set per-run
+  endpoint_loss_space: log      # default — DO NOT use sqrt (it wrecked the landscape)
+  lambda_peak: 0.0              # set per-run (mRNA-max anchor)
+  peak_channels: null
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+  source_loss_weights:
+    new: 5.0
+    old: 1.0
+
+# Run order = most promising first.
+# Core idea: protein-final anchor FIXED at 0.1 (known-good), sweep the NEW
+# mRNA-max anchor (lambda_peak) to isolate what balanced mRNA supervision buys.
+runs:
+  # ── BALANCED DUAL ANCHORS: protein-final(0.1) + mRNA-max(sweep), all LOG ──
+  - {exp_name: M4sq_01_ep01_peak01_s0,  seed: 0, lambda_endpoint: 0.1, endpoint_channels: [5], lambda_peak: 0.1,  peak_channels: [3], <<: *real}
+  - {exp_name: M4sq_02_ep01_peak005_s0, seed: 0, lambda_endpoint: 0.1, endpoint_channels: [5], lambda_peak: 0.05, peak_channels: [3], <<: *real}
+  - {exp_name: M4sq_03_ep01_peak02_s0,  seed: 0, lambda_endpoint: 0.1, endpoint_channels: [5], lambda_peak: 0.2,  peak_channels: [3], <<: *real}
+
+  # ── mRNA-max anchor ALONE (no protein endpoint) — does the mRNA anchor
+  #    alone improve protein via the cascade? ──────────────────────────────
+  - {exp_name: M4sq_04_peak01_only_s0, seed: 0, lambda_peak: 0.1, peak_channels: [3], <<: *real}
+
+  # ── protein endpoint ALONE (log 0.1) — the known-good single anchor ──────
+  - {exp_name: M4sq_05_ep01_only_s0, seed: 0, lambda_endpoint: 0.1, endpoint_channels: [5], <<: *real}
+
+  # ── dual anchors + mild 2x late-protein (the confirmed-healthy time lever) ─
+  - exp_name: M4sq_06_ep01_peak01_lateP2x_s0
+    seed: 0
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    lambda_peak: 0.1
+    peak_channels: [3]
+    time_upweight: {5: [0.5, 2.0]}
+    <<: *real
+
+  # ── full d-recipe replica (species_weights{3:1.25} + 3x late-P + endpoint) ─
+  #    reference: the recipe whose mRNA-upweight we're trying to reproduce more
+  #    cleanly via lambda_peak.
+  - exp_name: M4sq_07_drecipe_ref_s0
+    seed: 0
+    species_weights: {3: 1.25, 5: 1.0}
+    time_upweight: {5: [0.5, 3.0]}
+    lambda_endpoint: 0.1
+    endpoint_channels: [5]
+    <<: *real
+
+  # ── REFERENCE baseline — vanilla, no anchors ─────────────────────────────
+  - {exp_name: M4sq_08_baseline_s0, seed: 0, <<: *real}
+
+  # ── feature engineering: cumulative reagent totals (RF's predictive signal) ─
+  - {exp_name: M4sq_09_cumsum_dualanchor_s0, seed: 0, lambda_endpoint: 0.1, endpoint_channels: [5], lambda_peak: 0.1, peak_channels: [3], u_transform: cumsum_sqrt, <<: *real}
+
+  # ── CONTROL: the sqrt-endpoint that wrecked the landscape (documented bad) ─
+  #    kept as the cautionary data point; expect mRNA collapse.
+  # - {exp_name: M4sq_10_epsqrt03_CONTROL_s0, seed: 0, lambda_endpoint: 0.3, endpoint_channels: [5], endpoint_loss_space: sqrt, time_upweight: {5: [0.5, 2.0]}, <<: *real}

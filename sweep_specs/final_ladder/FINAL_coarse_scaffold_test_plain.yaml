@@ -1,0 +1,76 @@
+# Scaffold fork on COARSE data — PLAIN loss variant (no d-recipe).
+#
+# Companion to FINAL_coarse_scaffold_test.yaml (which uses d-recipe). Identical in
+# every way EXCEPT the loss: here it's vanilla — equal channel weighting, no time-
+# upweight, no endpoint anchor (only the structural loss_normalizer + clamp kept).
+#
+# WHY: the d-recipe (mRNA species-weight + late-protein upweight + protein endpoint
+# anchor) was tuned on the NATIVE mixed grid, partly to compensate for the old/new
+# mismatch. Now that the grid is unified (coarsened), that shaping may be unnecessary
+# or even counterproductive. This tests whether plain loss matches/beats d-recipe per
+# scaffold on the unified grid. Compare arm-for-arm against the d-recipe sweep.
+#
+# All arms: COARSENED real-only + pulse_cumsum + {new:1} + PLAIN loss. M3/M4/M5,
+# M5 at h400 (matched) and h600 (preferred).
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_scaffold_test_plain.yaml \
+#     --out-root experiments_final/experiments
+
+study: FINAL_coarse_scaffold_test_plain
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # PLAIN loss (no d-recipe): equal channels, no time-upweight, no endpoint anchor.
+  # Structural bits kept (normalizer + clamp). lambda_endpoint is a no-op while
+  # endpoint_channels is null.
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  endpoint_loss_space: log
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: COP_M3_h400_s0,  seed: 0, scaffold: txtl_model3_two_state,            hidden: 400}
+  - {exp_name: COP_M4_h400_s0,  seed: 0, scaffold: txtl_model4_three_state,          hidden: 400}
+  - {exp_name: COP_M5_h400_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: COP_M5_h600_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}

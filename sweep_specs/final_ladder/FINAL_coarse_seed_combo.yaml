@@ -1,0 +1,120 @@
+# SEEDED combo of the gru_scan winners — converts single-seed leads into real numbers.
+# Scan findings (single-seed): n_substeps↑ helps (monotonic, nsub3 new=0.593, best ever);
+# smaller hidden wins (h300 best, h1024 collapses); nn_gru best old (0.726); sLSTM < GRU.
+#
+# Each config run at seeds {0,1,2}. Anchor: coarse / HY / {new:1} / pulse_cumsum / M4 / nsub3.
+# Tests: (1) h300 vs h400 ACROSS SEEDS (confirm hidden), (2) nsub3 vs nsub5, (3) +nn_gru,
+# (4) sLSTM @ h300 (does small-h help it?), (5) nsub3 on M5 (never tried).
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_seed_combo.yaml \
+#     --out-root experiments_final/experiments --max-parallel 3
+
+study: FINAL_coarse_seed_combo
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: stacked_cell
+  gru_init: supervisor
+  head_init: supervisor
+  d_state: 16          # mamba params (ignored by GRU/sLSTM via **kwargs)
+  expand: 2
+  d_conv: 4
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 3
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── (1) M4 h300 nsub3 — the combined winner ──
+  - {exp_name: S_M4h300_nsub3_s0, seed: 0}
+  - {exp_name: S_M4h300_nsub3_s1, seed: 1}
+  - {exp_name: S_M4h300_nsub3_s2, seed: 2}
+
+  # ── (2) M4 h400 nsub3 — hidden control (confirm h300 vs h400 across seeds) ──
+  - {exp_name: S_M4h400_nsub3_s0, seed: 0, hidden: 400}
+  - {exp_name: S_M4h400_nsub3_s1, seed: 1, hidden: 400}
+  - {exp_name: S_M4h400_nsub3_s2, seed: 2, hidden: 400}
+
+  # ── (1b) M4 h300 nsub3 with PLAIN loss — loss decomposition favored plain on PROTEIN
+  #    (0.632 vs HY 0.592 at base hparams), but we never tested plain at the winning hparams.
+  #    plain = drop the mRNA species-weight too. Settles HY-vs-plain at the optimum. ──
+  - {exp_name: S_M4h300_nsub3_PLAIN_s0, seed: 0, species_weights: null}
+  - {exp_name: S_M4h300_nsub3_PLAIN_s1, seed: 1, species_weights: null}
+  - {exp_name: S_M4h300_nsub3_PLAIN_s2, seed: 2, species_weights: null}
+
+  # ── (3) M4 h300 nsub5 — more substeps ──
+  - {exp_name: S_M4h300_nsub5_s0, seed: 0, n_substeps: 5}
+  - {exp_name: S_M4h300_nsub5_s1, seed: 1, n_substeps: 5}
+  - {exp_name: S_M4h300_nsub5_s2, seed: 2, n_substeps: 5}
+
+  # ── (4) M4 h300 nsub3 + nn_gru (best-old variant) ──
+  - {exp_name: S_M4h300_nsub3_nngru_s0, seed: 0, gru_variant: nn_gru}
+  - {exp_name: S_M4h300_nsub3_nngru_s1, seed: 1, gru_variant: nn_gru}
+  - {exp_name: S_M4h300_nsub3_nngru_s2, seed: 2, gru_variant: nn_gru}
+
+  # ── (5a) sLSTM @ h300 nsub3, MATCHED dropout (every layer, = the SL_* scan runs) ──
+  - {exp_name: S_SLh300_nsub3_s0, seed: 0, model_class: ode_slstm, u_transform: cumsum_sqrt}
+  - {exp_name: S_SLh300_nsub3_s1, seed: 1, model_class: ode_slstm, u_transform: cumsum_sqrt}
+  - {exp_name: S_SLh300_nsub3_s2, seed: 2, model_class: ode_slstm, u_transform: cumsum_sqrt}
+
+  # ── (5b) sLSTM @ h300 nsub3, DEFAULT dropout (between layers only) — did matching hurt it? ──
+  - {exp_name: S_SLdef_h300_nsub3_s0, seed: 0, model_class: ode_slstm, u_transform: cumsum_sqrt, slstm_drop_last_layer: false}
+  - {exp_name: S_SLdef_h300_nsub3_s1, seed: 1, model_class: ode_slstm, u_transform: cumsum_sqrt, slstm_drop_last_layer: false}
+  - {exp_name: S_SLdef_h300_nsub3_s2, seed: 2, model_class: ode_slstm, u_transform: cumsum_sqrt, slstm_drop_last_layer: false}
+
+  # ── (6) M5 h600 nsub3 — nsub3 on the complex scaffold (never tried) ──
+  - {exp_name: S_M5h600_nsub3_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+  - {exp_name: S_M5h600_nsub3_s1, seed: 1, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+  - {exp_name: S_M5h600_nsub3_s2, seed: 2, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+
+  # ── (7) MAMBA (mambapy) @ h300 & h600 nsub3 (cumsum_sqrt) — now that mambapy is on the box ──
+  - {exp_name: S_MBh300_nsub3_s0, seed: 0, model_class: ode_mambapy, u_transform: cumsum_sqrt}
+  - {exp_name: S_MBh300_nsub3_s1, seed: 1, model_class: ode_mambapy, u_transform: cumsum_sqrt}
+  - {exp_name: S_MBh600_nsub3_s0, seed: 0, model_class: ode_mambapy, u_transform: cumsum_sqrt, hidden: 600}
+  - {exp_name: S_MBh600_nsub3_s1, seed: 1, model_class: ode_mambapy, u_transform: cumsum_sqrt, hidden: 600}

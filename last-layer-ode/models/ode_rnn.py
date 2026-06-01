@@ -68,6 +68,7 @@ class OdeRNN(nn.Module):
     __constants__ = [
         "_analytic_scaffold", "_tf_at_k_zero", "theta_dim_emit",
         "_has_gru_u_cols", "_has_gru_y_cols", "encoder_use_time", "encoder_use_log_dt",
+        "u_transform", "_u_preselected", "rk4_residual",
     ]
 
     def __init__(
@@ -111,6 +112,18 @@ class OdeRNN(nn.Module):
         encoder_use_time: bool = False,               # if True, concat τ_k = k/(K-1) ∈ [0,1] to the encoder
         encoder_use_log_dt: bool = False,             # if True, concat log(dt_k) to the encoder (dt-awareness for variable grids)
                                                       # feature vector (Experiment A in new_scaffolds.tex §3.1).
+        u_transform: str = "none",                    # encoder u-feature transform. Channel-EXPANDING modes must be known
+                                                      # at init so the lift layer is sized correctly:
+                                                      #   "pulse_cumsum_sqrt"     → [sqrt(pulse), sqrt(cumsum)]    (2x cols)
+                                                      #   "cumsum_timesince_sqrt" → [sqrt(cumsum), log1p(t_since)] (2x cols)
+                                                      #   "decay_trace"           → 3 dt-aware leaky integrators   (3x cols)
+                                                      # all other modes ("none"/"sqrt"/"cumsum"/"cumsum_sqrt"/minmax) stay 1x.
+        u_decay_taus: Optional[list] = None,          # leaky-integrator time constants (seconds) for "decay_trace"; default fast/med/slow
+        rk4_residual: bool = False,                   # idea #1: add a state-dependent neural residual g(y) to the RHS,
+                                                      # re-evaluated at EVERY RK4 stage (true UDE term), not step-constant
+                                                      # like the basal beta. Zero-init so training starts as pure mechanism.
+        rk4_residual_hidden: int = 64,                # width of the residual MLP
+        rk4_residual_layers: int = 2,                 # number of hidden layers in the residual MLP
         **kwargs,
     ):
         super().__init__()
@@ -157,6 +170,22 @@ class OdeRNN(nn.Module):
         self.gru_variant = str(gru_variant)
         self.gru_init = str(gru_init)
         self.head_init = str(head_init)
+        # ── encoder u-feature transform ──────────────────────────────────────
+        # Channel-expanding modes carry persistent magnitude AND timing/recency.
+        # The multiplier sizes the lift layer; the per-step build lives in forward.
+        self.u_transform = str(u_transform)
+        if self.u_transform == "pulse_cumsum_sqrt" or self.u_transform == "cumsum_timesince_sqrt":
+            self._u_feat_mult = 2
+        elif (self.u_transform == "decay_trace" or self.u_transform == "pulse_cumsum_timesince"
+              or self.u_transform == "pulse_cumsum_static"):
+            self._u_feat_mult = 3
+        else:
+            self._u_feat_mult = 1
+        # These modes pre-select gru_u_cols ONCE (loop-invariant) then expand, so
+        # the per-step index_select in the forward loop is skipped for them.
+        self._u_preselected = (self._u_feat_mult > 1)
+        _taus = list(u_decay_taus) if u_decay_taus is not None else [300.0, 3600.0, 36000.0]
+        self.register_buffer("u_decay_taus", torch.tensor(_taus, dtype=torch.float32), persistent=False)
         self.y0_theta_init = bool(y0_theta_init)
         self.encoder_use_time = bool(encoder_use_time)
         self.encoder_use_log_dt = bool(encoder_use_log_dt)
@@ -183,7 +212,7 @@ class OdeRNN(nn.Module):
         )
         gru_y_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
-        gru_feat_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
+        gru_feat_dim = (len(self.gru_u_cols) if self.gru_u_cols is not None else self.U) * self._u_feat_mult
         feat_in = gru_feat_dim + gru_y_dim
         if self.encoder_use_time:
             feat_in += 1
@@ -296,6 +325,65 @@ class OdeRNN(nn.Module):
             self._has_u_minmax = False
         self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
+        # ── idea #1: stage-evaluated neural residual g(y) ────────────────────
+        # A small MLP P->P added to the RHS at every RK4 stage (so the residual
+        # tracks y(t) inside the step, unlike the step-constant basal beta).
+        # Last layer zero-init → starts as pure mechanism (matches the
+        # NeuralOdeCorrection baseline). Always built (cheap) so TorchScript can
+        # resolve the attribute; only USED when self.rk4_residual is True.
+        self.rk4_residual = bool(rk4_residual)
+        res_layers: list[nn.Module] = [nn.Linear(self.P, int(rk4_residual_hidden)), nn.SiLU()]
+        for _ in range(int(rk4_residual_layers) - 1):
+            res_layers += [nn.Linear(int(rk4_residual_hidden), int(rk4_residual_hidden)), nn.SiLU()]
+        res_layers.append(nn.Linear(int(rk4_residual_hidden), self.P))
+        nn.init.zeros_(res_layers[-1].weight)
+        nn.init.zeros_(res_layers[-1].bias)
+        self.rk4_residual_mlp = nn.Sequential(*res_layers)
+
+    def _decay_trace(self, u: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+        """dt-aware multi-timescale leaky integrators.
+
+        For each time constant τ, integrate  tr_k = exp(-dt_k/τ)·tr_{k-1} + u_k.
+        The value at any step encodes how much was dosed AND how recently (it
+        decays over τ). Stacking several τ's gives a fast→persistent view: the
+        fast trace tracks event timing/recency, the slow trace approximates the
+        cumulative recipe. Sequential scan (not the closed form) for numerical
+        stability — exp(T/τ) would overflow for T~1e4 s, τ~1e2 s.
+
+        u: (B,K,C), dt: (B,K)  →  (B,K, C*n_tau).  sqrt-compressed for scale.
+        """
+        B = u.shape[0]; K = u.shape[1]; C = u.shape[2]
+        n_tau = self.u_decay_taus.shape[0]
+        out = torch.zeros(B, K, C * n_tau, device=u.device, dtype=u.dtype)
+        for ti in range(n_tau):
+            tau = self.u_decay_taus[ti]
+            decay = torch.exp(-dt / tau)                  # (B,K)
+            tr = torch.zeros(B, C, device=u.device, dtype=u.dtype)
+            for k in range(K):
+                tr = decay[:, k].unsqueeze(1) * tr + u[:, k, :]
+                out[:, k, ti * C:(ti + 1) * C] = tr
+        return out.clamp_min(1e-6).sqrt()
+
+    def _time_since(self, u: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+        """Per-channel elapsed time since the last nonzero dose in that channel.
+
+        Resets to 0 at each event step, grows by dt otherwise → "how long ago did
+        this reagent last arrive." log1p-compressed (times reach ~1e4 s). Paired
+        with cumsum (magnitude), gives magnitude + recency; the u_open column's
+        trace is the time-since-tube-opening signal the new-data dynamics need.
+
+        u: (B,K,C), dt: (B,K)  →  (B,K,C).
+        """
+        B = u.shape[0]; K = u.shape[1]; C = u.shape[2]
+        out = torch.zeros(B, K, C, device=u.device, dtype=u.dtype)
+        tsince = torch.zeros(B, C, device=u.device, dtype=u.dtype)
+        event = u.abs() > 1e-8                            # (B,K,C)
+        for k in range(K):
+            tsince = tsince + dt[:, k].unsqueeze(1)
+            tsince = torch.where(event[:, k, :], torch.zeros_like(tsince), tsince)
+            out[:, k, :] = tsince
+        return torch.log1p(out)
+
     def forward(
         self,
         y0: torch.Tensor,                     # (B,P)
@@ -312,6 +400,10 @@ class OdeRNN(nn.Module):
                                               # Without a transform, large protein values (~10^3) dominate
                                               # the lift layer over reagent values (~1) and the GRU stops
                                               # responding to inputs. sqrt or log1p compresses the scale.
+        theta_override: Optional[torch.Tensor] = None,  # (B,K,theta_dim) — if given, REPLACES the encoder's
+                                              # emitted theta_k before integration (for parameter-gating
+                                              # ablations: zero/floor, freeze-to-mean, scale). Encoder still
+                                              # runs; only the value fed to the ODE is overridden.
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -333,20 +425,56 @@ class OdeRNN(nn.Module):
         # Pre-compute the GRU's view of u_seq (separate from the raw delta used for ODE jumps).
         # cumsum: after a bolus at step t, the GRU sees it at ALL subsequent steps — no long-range
         # memory required. The ODE jump always uses the raw delta u_seq.
+        # NOTE: the model uses `self.u_transform` (fixed at init, sizes the lift layer), not the
+        # forward arg — keeps the architecture and the feature build in lock-step.
         # Replaced `in (...)` membership tests with explicit `==` chains —
         # TorchScript handles plain string equality but not always the tuple membership form.
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_gru = u_seq.cumsum(dim=1)
+        if self._u_preselected:
+            # Channel-expanding modes: select gru_u_cols ONCE (loop-invariant), then expand so the
+            # feature carries persistent magnitude AND timing/recency. Loop skips re-selection.
+            if self._has_gru_u_cols:
+                u_base = torch.index_select(u_seq, 2, self.gru_u_idx)
+            else:
+                u_base = u_seq
+            if self.u_transform == "pulse_cumsum_sqrt":
+                pulse = u_base.clamp_min(1e-6).sqrt()                       # exact event timing+magnitude
+                cum   = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()         # persistent running recipe
+                u_gru = torch.cat([pulse, cum], dim=2)
+            elif self.u_transform == "decay_trace":
+                u_gru = self._decay_trace(u_base, dt_seq)                   # multi-timescale (B,K,C*3)
+            elif self.u_transform == "pulse_cumsum_timesince":
+                # Union of the two half-frontier winners: magnitude (old's driver) +
+                # persistence + recency (new's driver). 3 channels per col.
+                pulse  = u_base.clamp_min(1e-6).sqrt()                      # exact magnitude (old needs this)
+                cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # persistent recipe
+                tsince = self._time_since(u_base, dt_seq)                   # recency (new benefits)
+                u_gru  = torch.cat([pulse, cum, tsince], dim=2)
+            elif self.u_transform == "pulse_cumsum_static":
+                # pulse + progressive cumsum + STATIC full recipe (final total broadcast to all
+                # steps). The recipe is a known control input, so giving the COMPLETE recipe from
+                # t=0 (not just progressively) lets the encoder set theta correctly upfront. 3 ch.
+                cum_raw = u_base.cumsum(dim=1)
+                pulse   = u_base.clamp_min(1e-6).sqrt()
+                cum     = cum_raw.clamp_min(1e-6).sqrt()
+                total   = cum_raw[:, -1:, :].expand(-1, cum_raw.shape[1], -1).clamp_min(1e-6).sqrt()
+                u_gru   = torch.cat([pulse, cum, total], dim=2)
+            else:  # cumsum_timesince_sqrt
+                cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # magnitude
+                tsince = self._time_since(u_base, dt_seq)                   # recency
+                u_gru  = torch.cat([cum, tsince], dim=2)
         else:
-            u_gru = u_seq
-        if u_transform == "minmax" or u_transform == "minmax_sqrt":
-            if not self._has_u_minmax:
-                raise ValueError(
-                    "u_transform=" + str(u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
-                )
-            u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt" or u_transform == "minmax_sqrt":
-            u_gru = u_gru.clamp_min(1e-6).sqrt()
+            if self.u_transform == "cumsum" or self.u_transform == "cumsum_sqrt":
+                u_gru = u_seq.cumsum(dim=1)
+            else:
+                u_gru = u_seq
+            if self.u_transform == "minmax" or self.u_transform == "minmax_sqrt":
+                if not self._has_u_minmax:
+                    raise ValueError(
+                        "u_transform=" + str(self.u_transform) + " requires u_minmax_max/u_minmax_cols at model init."
+                    )
+                u_gru = u_gru / self.u_minmax_max_full.view(1, 1, -1)
+            if self.u_transform == "sqrt" or self.u_transform == "cumsum_sqrt" or self.u_transform == "minmax_sqrt":
+                u_gru = u_gru.clamp_min(1e-6).sqrt()
 
         # Per-sample logit bias from y0 MLP (None when y0_theta_init=False).
         if self.y0_mlp is not None:
@@ -382,7 +510,11 @@ class OdeRNN(nn.Module):
 
             # Use index_select on the precomputed long buffer instead of advanced
             # indexing with a Python list (TorchScript can't reliably script `t[:, list]`).
-            u_gru_k_feat = torch.index_select(u_gru_k, dim=1, index=self.gru_u_idx) if self._has_gru_u_cols else u_gru_k
+            # Pre-selected expanding modes already applied gru_u_cols in the pre-loop.
+            if self._u_preselected:
+                u_gru_k_feat = u_gru_k
+            else:
+                u_gru_k_feat = torch.index_select(u_gru_k, dim=1, index=self.gru_u_idx) if self._has_gru_u_cols else u_gru_k
 
             y_in_feat = torch.index_select(y_in, dim=1, index=self.gru_y_idx) if self._has_gru_y_cols else y_in
             if y_transform == "sqrt":
@@ -426,6 +558,8 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw_theta)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 beta_out[:, k, :] = beta_k
                 y = y_prev + (u_k @ self.u_to_y_jump)
@@ -438,12 +572,17 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 if self._analytic_scaffold:
                     # Closed-form integrator owns the step (no u-jump, no RK4).
                     y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
                 else:
                     y = y_prev + (u_k @ self.u_to_y_jump)
-                    y = self._rk4_substeps(y, dt_k, theta_k)
+                    if self.rk4_residual:
+                        y = self._rk4_substeps_residual(y, dt_k, theta_k)
+                    else:
+                        y = self._rk4_substeps(y, dt_k, theta_k)
 
             y_out[:, k, :] = y
             # When the scaffold defines a wider loss-facing theta layout (e.g. Bob's
@@ -468,6 +607,29 @@ class OdeRNN(nn.Module):
             k2 = rhs(y + 0.5 * hdt * k1, theta)
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y +       hdt * k3,  theta)
+            y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+            y  = y.clamp(0.0, 1e5)
+        return y
+
+    def _rk4_substeps_residual(
+        self,
+        y: torch.Tensor,
+        dt: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        # Idea #1: RHS = mechanism(theta) + g(y), with g re-evaluated at each RK4
+        # stage so the neural residual tracks the integrated state within the step
+        # (the UDE form), rather than being a step-constant add like basal beta.
+        rhs = self.rhs
+        g = self.rk4_residual_mlp
+        n_sub = self.n_substeps
+        dt = dt.unsqueeze(1)
+        hdt = dt / float(n_sub)
+        for _ in range(n_sub):
+            k1 = rhs(y,                   theta) + g(y)
+            k2 = rhs(y + 0.5 * hdt * k1, theta) + g(y + 0.5 * hdt * k1)
+            k3 = rhs(y + 0.5 * hdt * k2, theta) + g(y + 0.5 * hdt * k2)
+            k4 = rhs(y +       hdt * k3,  theta) + g(y +       hdt * k3)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             y  = y.clamp(0.0, 1e5)
         return y

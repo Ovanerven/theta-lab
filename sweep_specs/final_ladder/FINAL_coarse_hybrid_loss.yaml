@@ -1,0 +1,79 @@
+# HYBRID loss on coarse: keep the mRNA upweight, drop the protein endpoint crutch.
+#
+# FINDING (CO d-recipe vs COP plain, coarse): plain BEATS d-recipe on protein
+# (M4 pm 0.611->0.632, new 0.329->0.414) — confirming the log-space endpoint anchor
+# was a mean-regression crutch no longer needed on the unified grid. BUT plain TANKS
+# mRNA (M4 mm 0.555->0.402, M3 0.401->0.047) because it also drops species_weights{3}.
+#
+# So the d-recipe bundled (a) a harmful protein endpoint anchor + (b) a helpful mRNA
+# upweight. HYBRID = keep (b), drop (a): species_weights{3:1.25} only, NO endpoint
+# anchor, NO late-protein time_upweight. Target: plain's protein + d-recipe's mRNA.
+#
+# Coarse + pulse_cumsum + {new:1}. Compare arm-for-arm vs CO_* (d-recipe) and COP_* (plain).
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_hybrid_loss.yaml \
+#     --out-root experiments_final/experiments
+
+study: FINAL_coarse_hybrid_loss
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # HYBRID: mRNA upweight ONLY. No endpoint anchor, no late-protein time_upweight.
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}   # keep — helps mRNA
+  time_upweight: null                  # drop — part of the protein crutch
+  endpoint_channels: null              # drop — the mean-regression anchor
+  lambda_endpoint: 0.0
+  endpoint_loss_space: log
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── HY: mRNA species-weight ONLY (no late-protein upweight, no endpoint anchor) ──
+  - {exp_name: HY_M4_h400_s0, seed: 0, scaffold: txtl_model4_three_state,          hidden: 400}
+  - {exp_name: HY_M5_h400_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: HY_M5_h600_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+
+  # ── HY2: ADD back the late-protein upweight (#2), still NO endpoint anchor (#3).
+  #    Isolates whether #2 is helpful (balances the mRNA upweight, lifts protein) or a
+  #    milder version of the endpoint crutch. HY2 vs HY = effect of time_upweight alone. ──
+  - {exp_name: HY2_M4_h400_s0, seed: 0, scaffold: txtl_model4_three_state,          hidden: 400, time_upweight: {5: [0.5, 3.0]}}
+  - {exp_name: HY2_M5_h400_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400, time_upweight: {5: [0.5, 3.0]}}
+  - {exp_name: HY2_M5_h600_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600, time_upweight: {5: [0.5, 3.0]}}

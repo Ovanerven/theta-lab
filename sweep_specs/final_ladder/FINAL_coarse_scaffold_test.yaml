@@ -1,0 +1,78 @@
+# Does grid-unification let the COMPLEX scaffold (M5) finally beat the SIMPLE one (M4)?
+#
+# HYPOTHESIS (user): M4 beat M5 on old+new because its simplicity "regularized" across
+# the hard-to-bridge old(60s)/new(600s) grid gap. With the grids now unified (coarse),
+# M5's extra expressiveness might finally pay off.
+#
+# CRITICAL DOUBTS (why this is a real test, not a foregone conclusion):
+#   1. Coarsening didn't even help M4 overall (0.663->0.577) -> grid may not be the main barrier.
+#   2. M5's failure was capacity/negative-transfer, which coarsening doesn't fix.
+#   3. Coarse 600s integration likely hurts M5's 7 stiffer states MORE than M4's simple cascade.
+# So this is a clean fork: M5-coarse > M4-coarse => grid was the barrier; else => capacity, not grid.
+#
+# All arms: COARSENED real-only data + pulse_cumsum + {new:1} + d-recipe. M4 coarse-pulse-{new:1}
+# already exists (pm 0.577/old 0.608/new 0.395) but re-run here for a same-sweep comparison.
+# M5 run at BOTH h400 (matched to M4) and h600 (its dense-ladder preferred capacity).
+#
+# Decision: only build the full coarse ladder (M7/M8 + synth via coarsenold-combined, M9)
+# IF M5 here is competitive with M4. Don't gamble the ladder compute before this answers.
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_scaffold_test.yaml \
+#     --out-root experiments_final/experiments
+
+study: FINAL_coarse_scaffold_test
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  n_substeps: 1
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  plot_extra_new_samples: 5
+  dropout: 0.2
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # d-recipe
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  endpoint_loss_space: log
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: CO_M3_h400_s0,  seed: 0, scaffold: txtl_model3_two_state,            hidden: 400}
+  - {exp_name: CO_M4_h400_s0,  seed: 0, scaffold: txtl_model4_three_state,          hidden: 400}
+  - {exp_name: CO_M5_h400_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: CO_M5_h600_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}

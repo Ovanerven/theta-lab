@@ -1,0 +1,77 @@
+# Phase 0.5a — per-scaffold HIDDEN scout (M3, M5) on the locked recipe.
+# Recipe: nn_gru / nsub3 / pulse / plain / coarse / {new:1} (M4's winner). Find each scaffold's
+# best hidden BEFORE the seeded ladder (user chose "tune hidden per scaffold first").
+# Single-seed scout (find rough best); the LADDER then seeds the chosen hidden.
+# M4 already done (h300). M9/M7/M8 need their oxygen/combined+synth configs -> Phase 0.5b.
+#
+# Launch (box):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_hidden_scout.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_coarse_hidden_scout
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # plain loss (best-supported); lateP swap if nngru_finalize says so
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # M3 (two-state) hidden scout
+  - {exp_name: HS_M3_h200_s0, seed: 0, scaffold: txtl_model3_two_state, hidden: 200}
+  - {exp_name: HS_M3_h300_s0, seed: 0, scaffold: txtl_model3_two_state, hidden: 300}
+  - {exp_name: HS_M3_h400_s0, seed: 0, scaffold: txtl_model3_two_state, hidden: 400}
+  - {exp_name: HS_M3_h600_s0, seed: 0, scaffold: txtl_model3_two_state, hidden: 600}
+
+  # M5 (resource+maturation) hidden scout
+  - {exp_name: HS_M5_h300_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 300}
+  - {exp_name: HS_M5_h400_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+  - {exp_name: HS_M5_h600_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+  - {exp_name: HS_M5_h800_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 800}

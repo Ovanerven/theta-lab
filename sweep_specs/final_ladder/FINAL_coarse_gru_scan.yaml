@@ -1,0 +1,144 @@
+# OVERNIGHT GRU hyperparameter scan on the unified coarse grid.
+# Anchor (from our findings): coarse real-only, HY loss (species-weight only),
+# {new:1}, pulse_cumsum feature, M4 h400. Each arm varies ONE GRU axis (OFAT) so
+# effects are isolable. sLSTM (matched dropout) + a GRU reference at the end on
+# cumsum_sqrt (the feature sLSTM supports) for a fair encoder comparison.
+#
+# Timing: ~15min (M4 h400) to ~22min (M5 h600) per 200-epoch coarse run. ~35 runs.
+# Run with --max-parallel 2 or 3 (coarse models are small) → ~4-6h.
+#
+# Launch (GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_gru_scan.yaml \
+#     --out-root experiments_final/experiments --max-parallel 3
+
+study: FINAL_coarse_gru_scan
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  # ── anchor config ──
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 1
+  gru_variant: stacked_cell
+  gru_init: supervisor
+  head_init: supervisor
+  d_state: 16          # mamba params (ignored by GRU/sLSTM via **kwargs)
+  expand: 2
+  d_conv: 4
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  encoder_use_time: false
+  plot_extra_new_samples: 3
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # HY loss (round-1 winner): mRNA species-weight only.
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ════════ GRU AXES on M4 (h400 anchor) ════════
+  - {exp_name: G_M4_base_s0,    seed: 0}                                      # anchor reference
+
+  # ── n_substeps: integration precision (the R²-squeeze lever for high-yield) ──
+  - {exp_name: G_M4_nsub2_s0,   seed: 0, n_substeps: 2}
+  - {exp_name: G_M4_nsub3_s0,   seed: 0, n_substeps: 3}
+
+  # ── hidden width ──
+  - {exp_name: G_M4_h300_s0,    seed: 0, hidden: 300}
+  - {exp_name: G_M4_h600_s0,    seed: 0, hidden: 600}
+  - {exp_name: G_M4_h800_s0,    seed: 0, hidden: 800}
+  - {exp_name: G_M4_h1024_s0,   seed: 0, hidden: 1024}
+
+  # ── depth (num_layers) ──
+  - {exp_name: G_M4_L1_s0,      seed: 0, num_layers: 1}
+  - {exp_name: G_M4_L3_s0,      seed: 0, num_layers: 3}
+  - {exp_name: G_M4_L4_s0,      seed: 0, num_layers: 4}
+
+  # ── lift_dim (encoder input projection) ──
+  - {exp_name: G_M4_lift16_s0,  seed: 0, lift_dim: 16, lift_skip: false}
+  - {exp_name: G_M4_lift64_s0,  seed: 0, lift_dim: 64, lift_skip: false}
+  - {exp_name: G_M4_lift128_s0, seed: 0, lift_dim: 128, lift_skip: false}
+
+  # ── dropout ──
+  - {exp_name: G_M4_drop0_s0,   seed: 0, dropout: 0.0}
+  - {exp_name: G_M4_drop01_s0,  seed: 0, dropout: 0.1}
+  - {exp_name: G_M4_drop03_s0,  seed: 0, dropout: 0.3}
+
+  # ── learning rate ──
+  - {exp_name: G_M4_lr001_s0,   seed: 0, lr: 0.001}
+  - {exp_name: G_M4_lr0015_s0,  seed: 0, lr: 0.0015}
+  - {exp_name: G_M4_lr003_s0,   seed: 0, lr: 0.003}
+
+  # ── theta-head temperature / variant / bottleneck / time feature / lift_skip ──
+  - {exp_name: G_M4_tau1_s0,    seed: 0, theta_head_tau: 1.0}
+  - {exp_name: G_M4_nngru_s0,   seed: 0, gru_variant: nn_gru}
+  - {exp_name: G_M4_bottle_s0,  seed: 0, head_bottle: true}
+  - {exp_name: G_M4_usetime_s0, seed: 0, encoder_use_time: true}
+  - {exp_name: G_M4_noskip_s0,  seed: 0, lift_skip: false}
+
+  # ── promising combos (R²-squeeze: capacity + integration; bigger + deeper) ──
+  - {exp_name: G_M4_h800_nsub2_s0, seed: 0, hidden: 800, n_substeps: 2}
+  - {exp_name: G_M4_h600_L3_s0,    seed: 0, hidden: 600, num_layers: 3}
+
+  # ════════ GRU AXES on M5 (h600 anchor — the current leader) ════════
+  - {exp_name: G_M5_base_s0,    seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+  - {exp_name: G_M5_nsub2_s0,   seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600, n_substeps: 2}
+  - {exp_name: G_M5_h800_s0,    seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 800}
+  - {exp_name: G_M5_L3_s0,      seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600, num_layers: 3}
+  - {exp_name: G_M5_drop01_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600, dropout: 0.1}
+  - {exp_name: G_M5_lr0015_s0,  seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 600, lr: 0.0015}
+  - {exp_name: G_M5_h800_nsub2_s0, seed: 0, scaffold: txtl_resource_and_maturation_dna, hidden: 800, n_substeps: 2}
+
+  # ════════ ENCODER COMPARISON: sLSTM (matched per-layer dropout) vs GRU, on cumsum_sqrt ════════
+  # (sLSTM doesn't support pulse_cumsum; cumsum_sqrt is the shared grid-invariant feature)
+  - {exp_name: G_M4_cumsumref_s0,  seed: 0, u_transform: cumsum_sqrt}                                                    # GRU ref @ cumsum_sqrt
+  - {exp_name: G_M5_cumsumref_s0,  seed: 0, u_transform: cumsum_sqrt, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+  - {exp_name: SL_M4_h400_s0,      seed: 0, model_class: ode_slstm, u_transform: cumsum_sqrt}
+  - {exp_name: SL_M4_h600_s0,      seed: 0, model_class: ode_slstm, u_transform: cumsum_sqrt, hidden: 600}
+  - {exp_name: SL_M5_h600_s0,      seed: 0, model_class: ode_slstm, u_transform: cumsum_sqrt, scaffold: txtl_resource_and_maturation_dna, hidden: 600}
+
+  # ── MAMBA (mambapy) — same cumsum_sqrt feature, completes the GRU/sLSTM/mamba comparison.
+  #    NOTE: untested in this env (mambapy installed on the GPU box); the first MB arm is the
+  #    de-facto smoke test — if mambapy errors, only MB_* fail, the rest of the scan completes. ──
+  - {exp_name: MB_M4_h400_s0,      seed: 0, model_class: ode_mambapy, u_transform: cumsum_sqrt}
+  - {exp_name: MB_M4_h600_s0,      seed: 0, model_class: ode_mambapy, u_transform: cumsum_sqrt, hidden: 600}
+  - {exp_name: MB_M5_h600_s0,      seed: 0, model_class: ode_mambapy, u_transform: cumsum_sqrt, scaffold: txtl_resource_and_maturation_dna, hidden: 600}

@@ -1,0 +1,78 @@
+# Combined feature (pulse_cumsum_timesince) at the leading config, SEEDED, both losses.
+# Mac-mini sweep. Tests the most promising untested lever (magnitude+persistence+recency)
+# vs the pulse baseline — with enough seeds to beat the ±0.05 seed noise we just measured.
+# Anchor: M4 / h300 / nsub3 / coarse / {new:1} / 200ep. Run at HY AND plain (don't assume loss).
+#
+# Compare against (same config, seeded): pulse+HY ≈ 0.62±0.04 (seed_combo S_M4h300_nsub3),
+# pulse+plain (plain_check).
+#
+# Launch (mac mini):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_ptfeature_seeds.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+
+study: FINAL_coarse_ptfeature_seeds
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: stacked_cell
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_timesince
+  y_transform: sqrt_clamp1
+
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+  # DEFAULT loss = HY (species-weight only); plain arms override species_weights: null.
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # combined feature × HY × 3 seeds
+  - {exp_name: PTF_HY_s0, seed: 0}
+  - {exp_name: PTF_HY_s1, seed: 1}
+  - {exp_name: PTF_HY_s2, seed: 2}
+  # combined feature × plain × 3 seeds
+  - {exp_name: PTF_plain_s0, seed: 0, species_weights: null}
+  - {exp_name: PTF_plain_s1, seed: 1, species_weights: null}
+  - {exp_name: PTF_plain_s2, seed: 2, species_weights: null}
