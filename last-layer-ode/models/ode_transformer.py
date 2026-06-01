@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint_utils
 
 from scaffolds import MechanisticScaffold
 
@@ -50,6 +51,10 @@ class OdeTransformer(nn.Module):
         gru_u_cols: Optional[list] = None,   # restrict u columns into the encoder (e.g. drop DNA c)
         gru_y_cols: Optional[list] = None,   # restrict y columns into the encoder (e.g. obs only)
         lift_skip: bool = False,
+        use_absolute_pos: bool = False,
+        max_seq_len: int = 512,
+        grad_checkpoint: bool = False,
+        append_time_feature: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -87,11 +92,16 @@ class OdeTransformer(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
+        self.use_absolute_pos = bool(use_absolute_pos)
+        self.max_seq_len = int(max_seq_len)
+        self.grad_checkpoint = bool(grad_checkpoint)
+        self.append_time_feature = bool(append_time_feature)
+
         # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
         # the analogue of GRU/LSTM's intrinsic W_ih projection. The Transformer
         # requires d_model=hidden so the projection cannot be skipped entirely.
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim
+        feat_in = u_cols_dim + y_cols_dim + (1 if self.append_time_feature else 0)
         if self.lift_skip:
             self.lift = nn.Linear(feat_in, hidden)
         else:
@@ -101,9 +111,12 @@ class OdeTransformer(nn.Module):
                 nn.Linear(lift_dim, hidden),
             )
 
-        self.pos_embed = nn.Embedding(self.context_len, hidden)
+        pos_table_len = self.max_seq_len if self.use_absolute_pos else self.context_len
+        self.pos_embed = nn.Embedding(pos_table_len, hidden)
 
         nhead = max(1, hidden // 32)
+        while nhead > 1 and hidden % nhead != 0:
+            nhead -= 1
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden,
             nhead=nhead,
@@ -183,6 +196,12 @@ class OdeTransformer(nn.Module):
         if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
             u_enc = u_enc.clamp_min(0.0).sqrt()
 
+        if self.append_time_feature:
+            t_cum = dt_seq.cumsum(dim=1)                                  # (B, K)
+            t_norm = t_cum / t_cum[:, -1:].clamp_min(1e-6)                # (B, K) in [0, 1]
+        else:
+            t_norm = None
+
         feat_history: List[torch.Tensor] = []  # (B, hidden) tensors, grows to context_len
 
         for k in range(K):
@@ -209,7 +228,11 @@ class OdeTransformer(nn.Module):
                 y_feat = y_feat.clamp_min(0.0).sqrt().clamp_min(1.0)
             elif y_transform == "log1p":
                 y_feat = torch.log1p(y_feat.clamp_min(0.0))
-            feat = self.lift(torch.cat([u_feat, y_feat], dim=-1))  # (B, hidden)
+            if t_norm is not None:
+                cat_in = torch.cat([u_feat, y_feat, t_norm[:, k:k+1]], dim=-1)
+            else:
+                cat_in = torch.cat([u_feat, y_feat], dim=-1)
+            feat = self.lift(cat_in)  # (B, hidden)
             feat_history.append(feat)
 
             # Detach features that have scrolled out of the context window so
@@ -225,18 +248,22 @@ class OdeTransformer(nn.Module):
 
             seq = torch.stack(window, dim=1)  # (B, W, hidden)
 
-            # Window-relative positional embedding: 0 = oldest, W-1 = newest
-            pos_ids = torch.arange(W, device=device, dtype=torch.long)
+            if self.use_absolute_pos:
+                # Absolute trajectory position: window's tokens occupy abs indices [start, k].
+                pos_ids = torch.arange(start, start + W, device=device, dtype=torch.long)
+                pos_ids = pos_ids.clamp(max=self.max_seq_len - 1)
+            else:
+                # Window-relative: 0 = oldest, W-1 = newest.
+                pos_ids = torch.arange(W, device=device, dtype=torch.long)
             seq = seq + self.pos_embed(pos_ids).unsqueeze(0)
 
-            # Don't need the causal mask
-            # causal_mask = torch.triu(
-            #     torch.full((W, W), float("-inf"), device=device, dtype=dtype),
-            #     diagonal=1,
-            # )
-            
             mask = self._causal_mask[:W, :W].to(dtype=seq.dtype)
-            out = self.transformer(seq, mask=mask, is_causal=True)
+            if self.grad_checkpoint and self.training:
+                out = checkpoint_utils.checkpoint(
+                    self._transformer_call, seq, mask, use_reentrant=False,
+                )
+            else:
+                out = self.transformer(seq, mask=mask, is_causal=True)
 
             # out = self.transformer(seq, is_causal=True)  # (B, W, hidden)
             z   = out[:, -1, :]                            # (B, hidden)
@@ -261,6 +288,9 @@ class OdeTransformer(nn.Module):
             y_prev = y
 
         return y_out, th_out, beta_out
+
+    def _transformer_call(self, seq: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return self.transformer(seq, mask=mask, is_causal=True)
 
     def _rk4_substeps(
         self, y: torch.Tensor, dt: torch.Tensor, theta: torch.Tensor

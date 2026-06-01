@@ -11,13 +11,13 @@
 
 study: FINAL_coarse_encoder_swap
 runs_per_job: 1
-time: "02:00:00"
-partition: gpu_a100
+time: "00:50:00"
+partition: gpu_h100
 no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
-  epochs: 200
+  epochs: 100
   warmup_epochs: 5
   lr: 0.002
   endpoint_r2: true
@@ -76,25 +76,7 @@ fixed:
   source_loss_weights: {new: 1.0, old: 1.0}
 
 runs:
-  # GRU reference (cumsum_sqrt) — fair baseline for the swap
-  - {exp_name: ES_gru_s0, seed: 0, model_class: ode_rnn}
-  - {exp_name: ES_gru_s1, seed: 1, model_class: ode_rnn}
-  - {exp_name: ES_gru_s2, seed: 2, model_class: ode_rnn}
-  # minGRU — minimal LINEAR-recurrence (SSM-adjacent; "Were RNNs All We Needed?").
-  # Replaces mamba: mambapy is broken and mamba-ssm has no autograd-through-step.
-  # This is the parallelizable-linear-recurrence data point, pure-pytorch, works.
-  - {exp_name: ES_mingru_s0, seed: 0, model_class: ode_mingru}
-  - {exp_name: ES_mingru_s1, seed: 1, model_class: ode_mingru}
-  - {exp_name: ES_mingru_s2, seed: 2, model_class: ode_mingru}
-  # transformer (sliding-window + flash attention; now feasible on coarse)
-  - {exp_name: ES_transformer_s0, seed: 0, model_class: ode_transformer}
+  # - {exp_name: ES_transformer_s0, seed: 0, model_class: ode_transformer}
   - {exp_name: ES_transformer_s1, seed: 1, model_class: ode_transformer}
-  - {exp_name: ES_transformer_s2, seed: 2, model_class: ode_transformer}
-  # normal LSTM (nn.LSTM — the exact LSTM analogue of nn_gru)
-  - {exp_name: ES_lstm_s0, seed: 0, model_class: lstm_rnn}
-  - {exp_name: ES_lstm_s1, seed: 1, model_class: lstm_rnn}
-  - {exp_name: ES_lstm_s2, seed: 2, model_class: lstm_rnn}
-  # sLSTM with the CORRECT (nn_gru-analogue) between-layers dropout
-  - {exp_name: ES_slstm_s0, seed: 0, model_class: ode_slstm, slstm_drop_last_layer: false}
-  - {exp_name: ES_slstm_s1, seed: 1, model_class: ode_slstm, slstm_drop_last_layer: false}
-  - {exp_name: ES_slstm_s2, seed: 2, model_class: ode_slstm, slstm_drop_last_layer: false}
+  # - {exp_name: ES_transformer_s2, seed: 2, model_class: ode_transformer}
+

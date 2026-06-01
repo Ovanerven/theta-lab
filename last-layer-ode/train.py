@@ -1304,6 +1304,11 @@ class TrainConfig:
     context_len: int = 64  # sliding window size; set >= sequence length for full context
     tf_group_size: int = 32  # grouped-TF chunk size for ode_transformer_grouped
     ar_gap: int = 4  # autoregressive steps inserted between grouped-TF chunks
+    # Transformer ablation knobs
+    use_absolute_pos: bool = False     # window-relative pos-embed (False) vs absolute trajectory pos (True)
+    max_seq_len: int = 512             # embedding table size when use_absolute_pos=True
+    grad_checkpoint: bool = False      # checkpoint the per-step transformer call to cut activation memory
+    append_time_feature: bool = False  # append normalized cumulative time as an extra encoder input
 
     # Mamba-specific (ignored by non-Mamba models via **kwargs)
     d_state: int = 16
@@ -1943,6 +1948,10 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         context_len=cfg.context_len,
         tf_group_size=cfg.tf_group_size,
         ar_gap=cfg.ar_gap,
+        use_absolute_pos=cfg.use_absolute_pos,
+        max_seq_len=cfg.max_seq_len,
+        grad_checkpoint=cfg.grad_checkpoint,
+        append_time_feature=cfg.append_time_feature,
         theta_bounded=cfg.theta_bounded,
         d_state=cfg.d_state,
         expand=cfg.expand,

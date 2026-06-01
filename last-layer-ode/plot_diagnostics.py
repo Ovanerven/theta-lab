@@ -315,6 +315,10 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         # --- NEW ADDITIONS TO SYNC WITH TRAIN.PY ---
         tf_group_size=int(cfg.get("tf_group_size", 32)),
         ar_gap=int(cfg.get("ar_gap", 4)),
+        use_absolute_pos=bool(cfg.get("use_absolute_pos", False)),
+        max_seq_len=int(cfg.get("max_seq_len", 512)),
+        grad_checkpoint=bool(cfg.get("grad_checkpoint", False)),
+        append_time_feature=bool(cfg.get("append_time_feature", False)),
         encoder_use_time=bool(cfg.get("encoder_use_time", False)),
         encoder_use_log_dt=bool(cfg.get("encoder_use_log_dt", False)),
         # u_transform must be passed at construction for channel-expanding modes
