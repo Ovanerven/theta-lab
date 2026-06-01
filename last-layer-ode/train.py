@@ -1373,6 +1373,13 @@ class TrainConfig:
 
     lambda_reg: float = 0.001
 
+    # Idea #1: state-dependent neural residual added to the RHS and RE-EVALUATED at
+    # every RK4 stage (UDE-style g(y)), as opposed to the step-constant basal beta.
+    # Only wired into model_class="ode_rnn"; other models absorb these via **kwargs.
+    rk4_residual: bool = False
+    rk4_residual_hidden: int = 64
+    rk4_residual_layers: int = 2
+
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
     obs_idx: list[int] | None = None
@@ -1980,6 +1987,9 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         # layer; ode_rnn reads self.u_transform in forward. Other models ignore
         # it (absorbed by **kwargs) and use the forward-time u_transform arg.
         u_transform=cfg.u_transform,
+        rk4_residual=cfg.rk4_residual,
+        rk4_residual_hidden=cfg.rk4_residual_hidden,
+        rk4_residual_layers=cfg.rk4_residual_layers,
         **sparse_theta_kwargs,
     ).to(device)
 

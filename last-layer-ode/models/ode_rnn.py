@@ -68,7 +68,7 @@ class OdeRNN(nn.Module):
     __constants__ = [
         "_analytic_scaffold", "_tf_at_k_zero", "theta_dim_emit",
         "_has_gru_u_cols", "_has_gru_y_cols", "encoder_use_time", "encoder_use_log_dt",
-        "u_transform", "_u_preselected",
+        "u_transform", "_u_preselected", "rk4_residual",
     ]
 
     def __init__(
@@ -119,6 +119,11 @@ class OdeRNN(nn.Module):
                                                       #   "decay_trace"           → 3 dt-aware leaky integrators   (3x cols)
                                                       # all other modes ("none"/"sqrt"/"cumsum"/"cumsum_sqrt"/minmax) stay 1x.
         u_decay_taus: Optional[list] = None,          # leaky-integrator time constants (seconds) for "decay_trace"; default fast/med/slow
+        rk4_residual: bool = False,                   # idea #1: add a state-dependent neural residual g(y) to the RHS,
+                                                      # re-evaluated at EVERY RK4 stage (true UDE term), not step-constant
+                                                      # like the basal beta. Zero-init so training starts as pure mechanism.
+        rk4_residual_hidden: int = 64,                # width of the residual MLP
+        rk4_residual_layers: int = 2,                 # number of hidden layers in the residual MLP
         **kwargs,
     ):
         super().__init__()
@@ -320,6 +325,21 @@ class OdeRNN(nn.Module):
             self._has_u_minmax = False
         self.register_buffer("u_minmax_max_full", u_max_full, persistent=False)
 
+        # ── idea #1: stage-evaluated neural residual g(y) ────────────────────
+        # A small MLP P->P added to the RHS at every RK4 stage (so the residual
+        # tracks y(t) inside the step, unlike the step-constant basal beta).
+        # Last layer zero-init → starts as pure mechanism (matches the
+        # NeuralOdeCorrection baseline). Always built (cheap) so TorchScript can
+        # resolve the attribute; only USED when self.rk4_residual is True.
+        self.rk4_residual = bool(rk4_residual)
+        res_layers: list[nn.Module] = [nn.Linear(self.P, int(rk4_residual_hidden)), nn.SiLU()]
+        for _ in range(int(rk4_residual_layers) - 1):
+            res_layers += [nn.Linear(int(rk4_residual_hidden), int(rk4_residual_hidden)), nn.SiLU()]
+        res_layers.append(nn.Linear(int(rk4_residual_hidden), self.P))
+        nn.init.zeros_(res_layers[-1].weight)
+        nn.init.zeros_(res_layers[-1].bias)
+        self.rk4_residual_mlp = nn.Sequential(*res_layers)
+
     def _decay_trace(self, u: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
         """dt-aware multi-timescale leaky integrators.
 
@@ -380,6 +400,10 @@ class OdeRNN(nn.Module):
                                               # Without a transform, large protein values (~10^3) dominate
                                               # the lift layer over reagent values (~1) and the GRU stops
                                               # responding to inputs. sqrt or log1p compresses the scale.
+        theta_override: Optional[torch.Tensor] = None,  # (B,K,theta_dim) — if given, REPLACES the encoder's
+                                              # emitted theta_k before integration (for parameter-gating
+                                              # ablations: zero/floor, freeze-to-mean, scale). Encoder still
+                                              # runs; only the value fed to the ODE is overridden.
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         y_out    = torch.empty(B, K, self.P, device=y0.device, dtype=y0.dtype)
@@ -534,6 +558,8 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw_theta, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw_theta)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 beta_k = raw[:, self.theta_dim:] * (y_prev / (y_prev + 1.0))
                 beta_out[:, k, :] = beta_k
                 y = y_prev + (u_k @ self.u_to_y_jump)
@@ -546,12 +572,17 @@ class OdeRNN(nn.Module):
                         theta_k = log_gamma(raw, self.theta_lo_vec, self.theta_hi_vec, tau=self.theta_head_tau)
                 else:
                     theta_k = F.softplus(raw)
+                if theta_override is not None:
+                    theta_k = theta_override[:, k, :]
                 if self._analytic_scaffold:
                     # Closed-form integrator owns the step (no u-jump, no RK4).
                     y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
                 else:
                     y = y_prev + (u_k @ self.u_to_y_jump)
-                    y = self._rk4_substeps(y, dt_k, theta_k)
+                    if self.rk4_residual:
+                        y = self._rk4_substeps_residual(y, dt_k, theta_k)
+                    else:
+                        y = self._rk4_substeps(y, dt_k, theta_k)
 
             y_out[:, k, :] = y
             # When the scaffold defines a wider loss-facing theta layout (e.g. Bob's
@@ -576,6 +607,29 @@ class OdeRNN(nn.Module):
             k2 = rhs(y + 0.5 * hdt * k1, theta)
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y +       hdt * k3,  theta)
+            y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+            y  = y.clamp(0.0, 1e5)
+        return y
+
+    def _rk4_substeps_residual(
+        self,
+        y: torch.Tensor,
+        dt: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        # Idea #1: RHS = mechanism(theta) + g(y), with g re-evaluated at each RK4
+        # stage so the neural residual tracks the integrated state within the step
+        # (the UDE form), rather than being a step-constant add like basal beta.
+        rhs = self.rhs
+        g = self.rk4_residual_mlp
+        n_sub = self.n_substeps
+        dt = dt.unsqueeze(1)
+        hdt = dt / float(n_sub)
+        for _ in range(n_sub):
+            k1 = rhs(y,                   theta) + g(y)
+            k2 = rhs(y + 0.5 * hdt * k1, theta) + g(y + 0.5 * hdt * k1)
+            k3 = rhs(y + 0.5 * hdt * k2, theta) + g(y + 0.5 * hdt * k2)
+            k4 = rhs(y +       hdt * k3,  theta) + g(y +       hdt * k3)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             y  = y.clamp(0.0, 1e5)
         return y

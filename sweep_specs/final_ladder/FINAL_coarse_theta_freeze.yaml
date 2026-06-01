@@ -1,0 +1,89 @@
+# θ-FREEZE RETRAIN: confirm the inference-time parameter-gating result by retraining M4 with a
+# parameter HARD-FROZEN during training (pin_theta collapses its (lo,hi) box to a constant, so the
+# encoder physically cannot emit anything else — the param is removed as a per-sample DOF).
+#
+# Two questions, directly mirroring the FREEZE result from analysis/diag_param_gate.py:
+#   (1) FZ_vTX  — freeze v_TX (θ0, the PRIMARY recipe knob; inference-FREEZE = catastrophic -24 R²).
+#                 "Can M4 COMPENSATE when its most important parameter is frozen?"
+#                 Expect: it cannot recover the unfrozen baseline (v_TX carries the recipe→output map).
+#   (2) FZ_kmat — freeze k_mat (θ3, the recipe-INVARIANT param; inference-FREEZE ≈ 0).
+#                 "Can M4 train FAIRLY when its least important parameter is frozen?"
+#                 Expect: it trains ~on par with the unfrozen baseline -> M4 is really a 4-θ model.
+#
+# Pin values = cross-seed grand-mean of the trained NG_plain emitted θ (matches what inference-FREEZE
+# pinned to): v_TX -> 0.00194, k_mat -> 3.16e-5.
+# Everything else is the LOCKED M4 recipe (nn_gru / h300 / nsub3 / pulse_cumsum_sqrt / plain / coarse
+# / {new:1}), identical to FINAL_coarse_newavenues so this is head-to-head vs the NG_plain baseline
+# (experiments_final/FINAL_coarse_nngru_finalize, same seeds 0-3). NO baseline re-run needed.
+#
+# Launch (mini):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_theta_freeze.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_coarse_theta_freeze
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  cosine_decay: false
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  encoder_use_time: false
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # (1) freeze v_TX (most important — test compensation)
+  - {exp_name: FZ_vTX_s0,  seed: 0, pin_theta: {0: 0.00194}}
+  - {exp_name: FZ_vTX_s1,  seed: 1, pin_theta: {0: 0.00194}}
+  - {exp_name: FZ_vTX_s2,  seed: 2, pin_theta: {0: 0.00194}}
+  - {exp_name: FZ_vTX_s3,  seed: 3, pin_theta: {0: 0.00194}}
+  # (2) freeze k_mat (least important — test it trains fairly)
+  - {exp_name: FZ_kmat_s0, seed: 0, pin_theta: {3: 3.16e-5}}
+  - {exp_name: FZ_kmat_s1, seed: 1, pin_theta: {3: 3.16e-5}}
+  - {exp_name: FZ_kmat_s2, seed: 2, pin_theta: {3: 3.16e-5}}
+  - {exp_name: FZ_kmat_s3, seed: 3, pin_theta: {3: 3.16e-5}}
