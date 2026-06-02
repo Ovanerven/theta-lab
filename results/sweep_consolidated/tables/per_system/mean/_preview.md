@@ -38,15 +38,6 @@ _Abbreviations: CMVF-unb. = CMVF-unbounded; IC (θ) = initial-condition θ; NODE
 
 | Model | n=3 | n=10 | n=100 | n=1000 |
 |---|---|---|---|---|
-| **Enzyme/2** | | | | |
-| CMVF | 0.526 | 0.148 | 0.046 | -- |
-| CMVF-L1 | 0.526 | 0.148 | **0.044** | -- |
-| CMVF-unb. | 0.606 | **0.080** | 0.055 | -- |
-| NODE-GRU | 0.776 | 0.103 | 0.083 | -- |
-| NODE-MLP | 0.729 | 0.116 | 0.181 | -- |
-| NODE-corr. | **0.424** | 0.083 | 0.177 | -- |
-| Global ($\theta$) | 0.466 | 0.348 | 0.241 | **0.413** |
-| IC ($\theta$) | 0.500 | 0.180 | 0.266 | 0.422 |
 | **Enzyme/4** | | | | |
 | CMVF | **0.030** | 0.060 | **0.005** | **0.004** |
 | CMVF-L1 | 0.038 | 0.060 | 0.009 | 0.007 |
@@ -234,14 +225,12 @@ _Abbreviations: CMVF-unb. = CMVF-unbounded; IC (θ) = initial-condition θ; NODE
 
 | Model | n=3 | n=10 | n=100 | n=1000 |
 |---|---|---|---|---|
-| **Enzyme/2 — full obs** | | | | |
+| **Enzyme/2** | | | | |
 | GRU | -- | -- | 0.046 | -- |
 | LSTM | -- | -- | 0.079 | -- |
 | sLSTM | **0.533** | **0.114** | 0.064 | **0.012** |
 | Transformer | -- | -- | **0.042** | -- |
 | Mamba | -- | -- | 0.160 | -- |
-| **Enzyme/2 — first--last** | | | | |
-| GRU | -- | -- | **0.046** | -- |
 
 ### Architecture sweep — MOF synthesis — NRMSE (mean).
 
