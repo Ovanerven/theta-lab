@@ -8,6 +8,14 @@
 #   A — absolute pos embed   (free; gives the model absolute trajectory position)
 #   B — A + gradient checkpoint  (memory cut; checkpoint per-step transformer call)
 #   C — B + time-since-bolus feature  (continuous time scalar appended to encoder input)
+#   D — C + pulse_cumsum_sqrt feature  (the winning GRU feature, now ported to the transformer:
+#         [sqrt(pulse), sqrt(cumsum)] = 2x u cols — exact event timing+magnitude AND persistent
+#         recipe. The biggest expected gain; free on speed. Window still 64.)
+#   E — D + FULL-sequence attention  (context_len=512 > seq ~283, so the window never truncates;
+#         the model can attend back to the t=0 bolus directly. ~7.7x attention FLOPs, but memory
+#         is fine — peak attn buffers ~190MB. RUN THIS ON THE BOX, not MPS.)
+#   F — C + full-window WITHOUT pulse  (cumsum_sqrt + full attention — isolates the window
+#         contribution from the feature contribution, so D vs F attributes the gain.)
 #
 # Same single seed (s1) as the original encoder_swap run so results are directly comparable.
 #
@@ -23,7 +31,7 @@ no_plot: false
 base_config: configs/txtl_gru_new_baseline.yaml
 
 fixed:
-  epochs: 1
+  epochs: 200
   warmup_epochs: 5
   lr: 0.002
   endpoint_r2: true
@@ -84,11 +92,11 @@ fixed:
 
 runs:
   # Stage A: absolute pos only
-  - exp_name: TA_A_abspos_s1
-    seed: 1
-    use_absolute_pos: true
-    grad_checkpoint: false
-    append_time_feature: false
+  # - exp_name: TA_A_abspos_s1
+  #   seed: 1
+  #   use_absolute_pos: true
+  #   grad_checkpoint: false
+  #   append_time_feature: false
 
   # Stage B: + gradient checkpoint (mostly a memory test — should not change accuracy)
   # - exp_name: TA_B_abspos_ckpt_s1
@@ -98,8 +106,62 @@ runs:
   #   append_time_feature: false
 
   # Stage C: + time-since-start (normalized cumsum-dt scalar)
-  - exp_name: TA_C_abspos_ckpt_time_s1
+  # - exp_name: TA_C_abspos_ckpt_time_s1
+  #   seed: 1
+  #   use_absolute_pos: true
+  #   grad_checkpoint: true
+  #   append_time_feature: true
+
+  # Stage D: + pulse_cumsum_sqrt feature (the winning GRU feature, now ported). Window still 64.
+  - exp_name: TA_D_pulse_s1
     seed: 1
     use_absolute_pos: true
     grad_checkpoint: true
     append_time_feature: true
+    u_transform: pulse_cumsum_sqrt
+
+  # Stage E: D + FULL-sequence attention (context_len=512 > seq). Both fixes together. RUN ON BOX.
+  - exp_name: TA_E_pulse_full_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: true
+    append_time_feature: true
+    u_transform: pulse_cumsum_sqrt
+    context_len: 512
+
+  # Stage F: full-window WITHOUT pulse (cumsum_sqrt) — isolates window vs feature. RUN ON BOX.
+  - exp_name: TA_F_cumsum_full_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: true
+    append_time_feature: true
+    u_transform: cumsum_sqrt
+    context_len: 512
+
+  # Stage G: RAW-BOLUS-ONLY + full window (u_transform=sqrt = pulse only, NO cumsum). This is the
+  # "full-trajectory attention reconstructs the recipe by attending to the raw bolus token, so we
+  # don't need cumsum" hypothesis, tested directly. Prediction: still risks mRNA collapse (the
+  # bolus-retrieval circuit must be learned against the mean-θ attractor with no persistent signal
+  # to fall back on), but this is the clean test. RUN ON BOX.
+  - exp_name: TA_G_pulseonly_full_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: true
+    append_time_feature: true
+    u_transform: sqrt
+    context_len: 512
+
+  # Stage H: G + mRNA-channel UPWEIGHT (rescue). If pulse-only+full-window collapses (mm pins at
+  # 3.0086), this stops the model from abandoning mRNA — forcing gradient through the
+  # bolus -> v_TX -> mRNA path so attention has a reason to LEARN to retrieve the raw bolus token.
+  # If mRNA recovers AND protein holds, full-trajectory attention reconstructs the recipe without
+  # cumsum (your hypothesis vindicated). If it still collapses, the GRU's carry-forward bias is what
+  # makes the bolus usable. species_weights ch3=mRNA (heavy), ch5=protein. RUN ON BOX.
+  - exp_name: TA_H_pulseonly_full_mmup_s1
+    seed: 1
+    use_absolute_pos: true
+    grad_checkpoint: true
+    append_time_feature: true
+    u_transform: sqrt
+    context_len: 512
+    species_weights: {3: 3.0, 5: 1.0}

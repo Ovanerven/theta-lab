@@ -1,0 +1,118 @@
+# K=6 SWEEP — the "stage-like" anchor count, separate from FINAL_coarse_K_sweep (which is K∈{1,2,3}).
+# Same ladder-best backbones, datasets, and locked coarse recipe; only n_theta_anchors=6.
+# Together with the K123 sweep this gives the full K ∈ {1,2,3,6} anchor curve per scaffold
+# (dense per-timestep θ = K=∞ reference from the scaffold ladder).
+# model_class = ode_rnn_sparse_theta, anchor_interp = piecewise (Model B2), uniform placement.
+#
+# Backbones (ladder-best hidden): M3 h400 | M4 h300 | M5 h400 | M7 h600 | M8 h600 | M9_dark_stable h400
+# Datasets/recipe scaffold-intrinsic, identical to FINAL_coarse_K_sweep (real vs combined+synth).
+# ORDER = breadth-first over seeds: all 6 scaffolds at seed 0, then seed 1, then seed 2.
+# 6 scaffolds × 3 seeds = 18 runs.
+#
+# Launch (mac mini):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_K6_sweep.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+
+study: FINAL_coarse_K6_sweep
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn_sparse_theta     # K-anchor sparse-θ readout
+  anchor_interp: piecewise              # Model B2 (constant between anchors)
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked) for everyone
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# real-only (M3, M4, M5)
+_real: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# M9 oxygen extras (merged with *real)
+_m9oxy: &m9oxy
+  lr: 0.0015
+  lambda_oxygen: 0.1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+
+# M7/M8: coarse-combined + full synth + L_zero
+_combined: &combined
+  dataset_path: datasets/cell-free/txtl_native_combined_coarsenold.npz
+  use_synthetic_data: true
+  test_real_only: true
+  balance_source_sampler: true
+  lambda_zero_traj: 0.005
+  source_loss_weights: {new: 1.0, old: 1.0, synth: 1.0}
+
+# per-scaffold backbone anchors (scaffold + ladder-best hidden + dataset block)
+_M3: &M3 {scaffold: txtl_model3_two_state,            hidden: 400, <<: *real}
+_M4: &M4 {scaffold: txtl_model4_three_state,          hidden: 300, <<: *real}
+_M5: &M5 {scaffold: txtl_resource_and_maturation_dna, hidden: 400, <<: *real}
+_M7: &M7 {scaffold: txtl_model7_bg_fixed,             hidden: 600, <<: *combined}
+_M8: &M8 {scaffold: txtl_model8_bg_fixed,             hidden: 600, <<: *combined}
+_M9: &M9 {scaffold: txtl_model9_dark_stable,          hidden: 400, <<: [*real, *m9oxy]}
+
+runs:
+  # ---------- SEED 0: all 6 scaffolds at K=6 ----------
+  - {exp_name: K6_M3_s0, seed: 0, n_theta_anchors: 6, <<: *M3}
+  - {exp_name: K6_M4_s0, seed: 0, n_theta_anchors: 6, <<: *M4}
+  - {exp_name: K6_M5_s0, seed: 0, n_theta_anchors: 6, <<: *M5}
+  - {exp_name: K6_M7_s0, seed: 0, n_theta_anchors: 6, <<: *M7}
+  - {exp_name: K6_M8_s0, seed: 0, n_theta_anchors: 6, <<: *M8}
+  - {exp_name: K6_M9_s0, seed: 0, n_theta_anchors: 6, <<: *M9}
+  # ---------- SEED 1 ----------
+  - {exp_name: K6_M3_s1, seed: 1, n_theta_anchors: 6, <<: *M3}
+  - {exp_name: K6_M4_s1, seed: 1, n_theta_anchors: 6, <<: *M4}
+  - {exp_name: K6_M5_s1, seed: 1, n_theta_anchors: 6, <<: *M5}
+  - {exp_name: K6_M7_s1, seed: 1, n_theta_anchors: 6, <<: *M7}
+  - {exp_name: K6_M8_s1, seed: 1, n_theta_anchors: 6, <<: *M8}
+  - {exp_name: K6_M9_s1, seed: 1, n_theta_anchors: 6, <<: *M9}
+  # ---------- SEED 2 ----------
+  - {exp_name: K6_M3_s2, seed: 2, n_theta_anchors: 6, <<: *M3}
+  - {exp_name: K6_M4_s2, seed: 2, n_theta_anchors: 6, <<: *M4}
+  - {exp_name: K6_M5_s2, seed: 2, n_theta_anchors: 6, <<: *M5}
+  - {exp_name: K6_M7_s2, seed: 2, n_theta_anchors: 6, <<: *M7}
+  - {exp_name: K6_M8_s2, seed: 2, n_theta_anchors: 6, <<: *M8}
+  - {exp_name: K6_M9_s2, seed: 2, n_theta_anchors: 6, <<: *M9}
