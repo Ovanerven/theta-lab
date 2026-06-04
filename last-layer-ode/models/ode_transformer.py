@@ -55,6 +55,7 @@ class OdeTransformer(nn.Module):
         max_seq_len: int = 512,
         grad_checkpoint: bool = False,
         append_time_feature: bool = False,
+        u_transform: str = "none",   # fixed at init (sizes the lift); pulse_cumsum_sqrt is 2x cols
         **kwargs,
     ):
         super().__init__()
@@ -97,11 +98,19 @@ class OdeTransformer(nn.Module):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.append_time_feature = bool(append_time_feature)
 
+        # Encoder u-feature transform fixed at init (mirrors OdeRNN): channel-EXPANDING
+        # modes must be known here so the lift layer is sized correctly. pulse_cumsum_sqrt
+        # emits [sqrt(pulse), sqrt(cumsum)] = 2x the u columns; gru_u_cols is pre-selected
+        # in forward before the expansion (so the loop skips re-selection).
+        self.u_transform = str(u_transform)
+        self._u_feat_mult = 2 if self.u_transform == "pulse_cumsum_sqrt" else 1
+        self._u_preselected = (self._u_feat_mult > 1)
+
         # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
         # the analogue of GRU/LSTM's intrinsic W_ih projection. The Transformer
         # requires d_model=hidden so the projection cannot be skipped entirely.
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim + (1 if self.append_time_feature else 0)
+        feat_in = u_cols_dim * self._u_feat_mult + y_cols_dim + (1 if self.append_time_feature else 0)
         if self.lift_skip:
             self.lift = nn.Linear(feat_in, hidden)
         else:
@@ -187,14 +196,24 @@ class OdeTransformer(nn.Module):
         else:
             y_prev = y0
 
-        # Pre-compute the encoder's view of u (cumsum/sqrt/etc.); ODE jump always
-        # uses the raw delta in u_seq. Mirrors OdeRNN's u_transform pipeline.
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_enc = u_seq.cumsum(dim=1)
+        # Pre-compute the encoder's view of u; ODE jump always uses the raw delta in
+        # u_seq. Built from self.u_transform (init-fixed, sizes the lift) so channels stay
+        # in lock-step. pulse_cumsum_sqrt is channel-EXPANDING and pre-selects gru_u_cols
+        # here (loop then skips re-selection); mirrors OdeRNN's pipeline exactly.
+        ut = self.u_transform
+        if self._u_preselected:
+            u_base = u_seq[:, :, self.gru_u_cols] if self.gru_u_cols is not None else u_seq
+            # pulse_cumsum_sqrt: exact event timing+magnitude AND persistent running recipe
+            pulse = u_base.clamp_min(1e-6).sqrt()
+            cum   = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()
+            u_enc = torch.cat([pulse, cum], dim=2)
         else:
-            u_enc = u_seq
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(0.0).sqrt()
+            if ut == "cumsum" or ut == "cumsum_sqrt":
+                u_enc = u_seq.cumsum(dim=1)
+            else:
+                u_enc = u_seq
+            if ut == "sqrt" or ut == "cumsum_sqrt":
+                u_enc = u_enc.clamp_min(0.0).sqrt()
 
         if self.append_time_feature:
             t_cum = dt_seq.cumsum(dim=1)                                  # (B, K)
@@ -220,7 +239,11 @@ class OdeTransformer(nn.Module):
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
             # Encoder feature: optionally subset u/y columns and apply y_transform.
-            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
+            # Channel-expanding modes (pulse_cumsum_sqrt) already pre-selected gru_u_cols.
+            if self._u_preselected:
+                u_feat = u_enc_k
+            else:
+                u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_feat = y_feat.clamp_min(0.0).sqrt()
