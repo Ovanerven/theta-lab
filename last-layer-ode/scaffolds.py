@@ -2235,6 +2235,111 @@ class TXTLModel9_O2SourceB(MechanisticScaffold):
         return torch.stack((dR, dO2, dm, dmm, dp, dpm, dDNA), dim=-1)
 
 
+class TXTLModel9_EventDark(MechanisticScaffold):
+    """
+    M9 (event-gated dark-protein maturation) — the bug-fixed dark_stable.
+
+    PROBLEM with txtl_model9_dark_stable / dark_m4 (the FINAL runs):
+        Those gate the OXYGEN SINK on the opening event (sink_mask = 1 - open_gate)
+        but leave the dark->fluor conversion r = soft-sat(k_ox*O2*P_dark) running
+        CONTINUOUSLY. With O2 initialised at 1.0 for *every* sample (old and new
+        alike — verified in the dataset y0) the conversion never switches: O2 just
+        drifts to ~0.55 and freezes, so r is roughly constant throughout. There is
+        no term that releases the dark pool AT the opening event, so the model
+        cannot reproduce the flat-then-jump pm trajectory the new (tube-opening)
+        samples show. Result: predicted pm plateaus far below the post-opening
+        jump (~20 vs ~120 on idx702) and M9 underperforms even M5 on new data.
+
+    FIX (this scaffold): make the opening event gate the conversion itself, the
+    way v3a (TXTLModel9_O2SourceA) did, but keep dark_stable's explicit dark pool
+    ("savings account") so protein synthesised pre-opening is held until release:
+
+        k_mat_eff = k_mat_base + k_open * open_gate
+            k_mat_base : baseline maturation, always on -> matures the dark pool of
+                         OLD (always-aerobic) samples; the encoder can keep it small
+                         for NEW samples (old/new are identifiable from y0: new start
+                         with mm,pm > 0).
+            k_open     : extra maturation UNLOCKED at the opening event -> converts
+                         the accumulated dark pool into fluorescent protein in a
+                         burst, reproducing the post-opening jump.
+
+        dPdark/dt  = k_fold*p - r_safe - k_deg_dark*P_dark
+        dPfluor/dt = r_safe,   r_safe = soft-sat(k_mat_eff * P_dark)
+
+    The soft-saturation cap (eigenvalue <= 1/tau, tau=10 min) is retained from
+    dark_stable for RK4 stability on the coarse grid. The explicit O2 state is
+    dropped: it was inert (IC=1 for all samples, no gating role left), so removing
+    it only sheds dead weight — oxygen now enters implicitly as the *reason* the
+    opening event unlocks maturation.
+
+    States (8): [R, m, mm, p, P_dark, P_fluor, DNA, tube_opened]
+    theta (10): [lam, V_TX, V_TL, k_dm, k_matm,
+                  k_fold, k_degp, k_deg_dark, k_mat_base, k_open]
+    Observed:   [2, 5]   (mm, P_fluor)
+    """
+
+    def __init__(self):
+        super().__init__(P=8, theta_dim=10)
+        # Same RK4-stability time-scale as dark_stable (10 min = 600 s).
+        self.TAU_STABLE_SEC: float = 600.0
+        self.state_names = [
+            "R", "m", "mm", "p", "P_dark", "P_fluor", "DNA", "tube_opened",
+        ]
+        #                  lam   V_TX   V_TL  k_dm  k_matm k_fold k_degp k_degD
+        self.theta_lo_vec = [1e-6, 3e-5, 3e-5, 1e-5, 5e-5, 1e-5, 1e-7, 1e-7,
+                             # k_mat_base  k_open
+                             1e-6,         1e-4]
+        self.theta_hi_vec = [5e-4, 1.2e-1, 8e-2, 1e-2, 3.5e-3, 3.5e-3, 1e-3, 1e-3,
+                             # k_mat_base: up to ~0.1/min so old samples can fully
+                             # mature; soft-sat still caps the eigenvalue at 0.1/min.
+                             1e-1,
+                             # k_open: large so the post-opening rate saturates the
+                             # cap -> a sharp burst rather than a slow ramp.
+                             1e0]
+        self.obs_state_idx = [2, 5]   # mm @ 2, P_fluor @ 5
+        self.control_state_map = {"DNA c": 6, "u_open": 7}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        R, m, mm, p, P_dark, P_fluor, DNA, tube_opened = y.unbind(dim=-1)
+        (lam, V_TX, V_TL, kdm, kmatm,
+         k_fold, k_degp, k_deg_dark, k_mat_base, k_open) = theta.unbind(dim=-1)
+
+        R_p     = torch.clamp_min(R,      0.0)
+        m_p     = torch.clamp_min(m,      0.0)
+        mm_p    = torch.clamp_min(mm,     0.0)
+        p_p     = torch.clamp_min(p,      0.0)
+        Pdark_p = torch.clamp(P_dark, 0.0, 1e4)
+        DNA_p   = torch.clamp_min(DNA,    0.0)
+
+        # 0 before opening, 1 after (clamped against integration overshoot).
+        open_gate = torch.clamp(tube_opened, 0.0, 1.0)
+
+        # Event-gated maturation rate: baseline (matures old samples) + an
+        # opening-unlocked boost (releases the dark pool as the post-opening jump).
+        k_mat_eff = k_mat_base + k_open * open_gate
+
+        # Soft-saturate the conversion so the eigenvalue k_mat_eff <= 1/tau,
+        # keeping RK4 stable on the coarse grid (identical scheme to dark_stable).
+        r_bare = k_mat_eff * Pdark_p
+        TAU_MIN = self.TAU_STABLE_SEC / 60.0
+        max_rate = Pdark_p / TAU_MIN
+        r_safe = max_rate * torch.tanh(r_bare / (max_rate + 1e-12))
+
+        dR        = -lam * R_p
+        dm        = R_p * V_TX * DNA_p - (kdm + kmatm) * m_p
+        dmm       = kmatm * m_p - kdm * mm_p
+        dp        = R_p * V_TL * (m_p + mm_p) - k_fold * p_p - k_degp * p_p
+        dPdark    = k_fold * p_p - r_safe - k_deg_dark * Pdark_p
+        dPfluor   = r_safe
+        dDNA      = torch.zeros_like(DNA)
+        dtube     = torch.zeros_like(tube_opened)
+
+        return torch.stack(
+            (dR, dm, dmm, dp, dPdark, dPfluor, dDNA, dtube),
+            dim=-1,
+        )
+
+
 class MethaneGlobal4Step_NO_Scaffold(MechanisticScaffold):
     """
     A physically grounded 4-step macroscopic scaffold for Methane oxidation.
@@ -3378,6 +3483,7 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     "txtl_model9_dark_stable":      TXTLModel9_DarkStable(),           # ← v4 canonical candidate: tex-faithful 9-state + soft-saturated stiff rate (RK4 stable)
     "txtl_model9_dark_stable_dual": TXTLModel9_DarkStableDual(),       # ← v5: dark_stable + O2-independent background maturation (closes the old-sample pm gap)
     "txtl_model9_dark_m4":          TXTLModel9_DarkM4(),               # ← dark_stable mechanism on the simpler, better-generalizing M4 backbone
+    "txtl_model9_event_dark":       TXTLModel9_EventDark(),            # ← bug-fix: event-GATED dark->fluor conversion (baseline + opening boost); reproduces the post-opening pm jump dark_stable misses
     # Glycolysis scaffolds (oracle + 3 reduced models)
     "glycolysis_oracle22":  GlycolysisOracle22Scaffold(),
     "glycolysis_reduced12": GlycolysisReduced12Scaffold(),

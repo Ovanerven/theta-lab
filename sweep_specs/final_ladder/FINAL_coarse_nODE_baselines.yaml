@@ -1,0 +1,84 @@
+# NEURAL-ODE BASELINES on coarse — the black-box / UDE rungs to compare against the mechanistic ladder.
+# Three models, all capacity-matched to the M4 flagship (hidden=300, num_layers=2, n_substeps=3) and
+# trained on the SAME coarse data / PLAIN loss / stratified split, so R² is apples-to-apples with M4.
+#
+#   neural_ode_mlp         NODE-MLP : ẋ = MLP(x,u)            black-box ODE, no mechanism (Model 1C-ish)
+#   neural_ode_gru         NODE-GRU : ODE-RNN with GRU encoder, black-box dynamics
+#   neural_ode_correction  NODE-corr: ẋ = f_mech(x,θ) + f_NN(x), GLOBAL learned θ + neural residual
+#                                     == the Rackauckas universal-ODE (UDE) correction on the M4 mechanism
+#
+# Feature note: NODE-MLP/GRU support u_transform only up to cumsum_sqrt (no pulse — same limit as the
+# transformer/mamba arms), so they use cumsum_sqrt. M4 itself uses pulse_cumsum_sqrt; this is the same
+# fair-feature caveat as the encoder swap. NODE-corr has no encoder (global θ) so u_transform is moot.
+# All use scaffold=txtl_model4_three_state: shape-only for MLP/GRU, the mechanism for the correction.
+#
+# ORDER = breadth-first over seeds: all 3 models at seed 0, then seed 1, then seed 2. 3×3 = 9 runs.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_nODE_baselines.yaml \
+#     --local --max-parallel 3 --out-root experiments_final/experiments
+
+study: FINAL_coarse_nODE_baselines
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state   # MLP/GRU: shape only | correction: the mechanism it augments
+  # capacity matched to M4 flagship
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  nn_hidden: 300                       # correction MLP width (neural_ode_correction)
+  nn_layers: 2                         # correction MLP depth
+  encoder_use_log_dt: true
+  u_transform: cumsum_sqrt             # NODE-MLP/GRU don't support pulse; corr ignores u_transform
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked)
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ---- seed 0 ----
+  - {exp_name: NODE_mlp_s0,  seed: 0, model_class: neural_ode_mlp}
+  - {exp_name: NODE_gru_s0,  seed: 0, model_class: neural_ode_gru}
+  - {exp_name: NODE_corr_s0, seed: 0, model_class: neural_ode_correction}
+  # ---- seed 1 ----
+  - {exp_name: NODE_mlp_s1,  seed: 1, model_class: neural_ode_mlp}
+  - {exp_name: NODE_gru_s1,  seed: 1, model_class: neural_ode_gru}
+  - {exp_name: NODE_corr_s1, seed: 1, model_class: neural_ode_correction}
+  # ---- seed 2 ----
+  - {exp_name: NODE_mlp_s2,  seed: 2, model_class: neural_ode_mlp}
+  - {exp_name: NODE_gru_s2,  seed: 2, model_class: neural_ode_gru}
+  - {exp_name: NODE_corr_s2, seed: 2, model_class: neural_ode_correction}

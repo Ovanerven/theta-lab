@@ -1,0 +1,78 @@
+# NEURAL-ODE BASELINES v2 — STABILIZED. v1 (FINAL_coarse_nODE_baselines) was numerically unstable:
+#   NODE-corr -> NaN by ep2 | NODE-MLP -> diverged (train 0.0, val frozen) | NODE-GRU -> mean-collapse.
+# Root cause: unbounded neural RHS integrated over a long (~283-step), stiff, large-magnitude (protein
+# ~1e3 nM) trajectory, with none of the mechanistic structure (bounded θ, degradation feedback) that
+# keeps M3-M9 stable. grad_clip(=1) and the correction's zero-init are already on; the FORWARD diverges.
+#
+# Stabilization (config-only, addresses stiffness directly):
+#   lr 0.002 -> 5e-4   (free neural dynamics need a gentler step; v1 NaN'd on the FIRST update)
+#   n_substeps 3 -> 8  (finer RK4 integration of the stiff neural RHS over the 600s coarse tail)
+#   warmup 5 -> 15     (slow lr ramp so θ/correction don't lurch into a stiff region early)
+# Everything else identical to v1 (capacity-matched to M4, coarse/plain, same stratified split).
+# If NODE-corr/MLP STILL NaN, the next step is a CODE fix: bound the neural RHS output (tanh*scale)
+# so the derivative can't explode — tell me and I'll add it.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_nODE_baselines_v2.yaml \
+#     --local --max-parallel 3 --out-root experiments_final/experiments
+
+study: FINAL_coarse_nODE_baselines_v2
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 15        # was 5 — slow ramp
+  lr: 0.0005               # was 0.002 — gentler step for free neural dynamics
+  grad_clip: 0.5           # was 1.0 — tighter (helps once forward is finite)
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 8            # was 3 — finer integration of the stiff neural RHS
+  nn_hidden: 300
+  nn_layers: 2
+  encoder_use_log_dt: true
+  u_transform: cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: NODE2_mlp_s0,  seed: 0, model_class: neural_ode_mlp}
+  - {exp_name: NODE2_gru_s0,  seed: 0, model_class: neural_ode_gru}
+  - {exp_name: NODE2_corr_s0, seed: 0, model_class: neural_ode_correction}
+  - {exp_name: NODE2_mlp_s1,  seed: 1, model_class: neural_ode_mlp}
+  - {exp_name: NODE2_gru_s1,  seed: 1, model_class: neural_ode_gru}
+  - {exp_name: NODE2_corr_s1, seed: 1, model_class: neural_ode_correction}
+  - {exp_name: NODE2_mlp_s2,  seed: 2, model_class: neural_ode_mlp}
+  - {exp_name: NODE2_gru_s2,  seed: 2, model_class: neural_ode_gru}
+  - {exp_name: NODE2_corr_s2, seed: 2, model_class: neural_ode_correction}

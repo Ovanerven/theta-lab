@@ -1,0 +1,92 @@
+# Extra arms for the transformer u_transform A/B (companion to
+# FINAL_coarse_transformer_timesince.yaml). SAME study / base_config / fixed:
+# block, so these slot directly alongside the existing
+#   TS_timesince_full_*   (cumsum_timesince_sqrt)
+#   TS_cumsumsqrt_full_*  (cumsum_sqrt)
+# runs and aggregate into the same comparison — without re-running them.
+#
+# Two new arms (3 seeds each):
+#   TS_pulse_full_*         pulse_cumsum_sqrt  — timing as a locate-the-spike task.
+#       timesince ~= pulse > cumsum  => "any timing signal" wins.
+#       timesince  >  pulse          => explicit recency is what helps (attention-hop was the problem).
+#   TS_cumsumsqrt_atf_*     cumsum_sqrt + append_time_feature  — one normalized-time
+#       channel instead of doubling every u-col. If this ~= timesince, you get the
+#       timing benefit at a fraction of the overfit cost.
+#
+# NOTE on comparability: run these on the SAME hardware as the timesince/cumsum_sqrt
+# arms (the fixed block keeps autocast_bf16/grad_checkpoint identical; autocast only
+# engages on CUDA, so on Mac/MPS it is a no-op). For a clean A/B keep all four arms
+# on one device.
+#
+# Launch (mac mini, local):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_transformer_timesince_arms.yaml --local --max-parallel 1
+
+study: FINAL_coarse_transformer_timesince
+runs_per_job: 1
+time: "01:20:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 300
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  y_transform: sqrt_clamp1
+  model_class: ode_transformer
+  context_len: 384
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: true               # flash attention (CUDA only; no-op on MPS)
+  grad_checkpoint: true             # full-window 324-step graph is memory-heavy; recompute in backward
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # pulse_cumsum_sqrt — event-spike + cumsum (timing as locate-the-spike)
+  - {exp_name: TS_pulse_full_s0, seed: 0, u_transform: pulse_cumsum_sqrt}
+  - {exp_name: TS_pulse_full_s1, seed: 1, u_transform: pulse_cumsum_sqrt}
+  - {exp_name: TS_pulse_full_s2, seed: 2, u_transform: pulse_cumsum_sqrt}
+
+  # cumsum_sqrt + append_time_feature — single normalized-time channel (cheap timing)
+  - {exp_name: TS_cumsumsqrt_atf_s0, seed: 0, u_transform: cumsum_sqrt, append_time_feature: true}
+  - {exp_name: TS_cumsumsqrt_atf_s1, seed: 1, u_transform: cumsum_sqrt, append_time_feature: true}
+  - {exp_name: TS_cumsumsqrt_atf_s2, seed: 2, u_transform: cumsum_sqrt, append_time_feature: true}
