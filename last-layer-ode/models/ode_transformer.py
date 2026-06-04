@@ -55,6 +55,11 @@ class OdeTransformer(nn.Module):
         max_seq_len: int = 512,
         grad_checkpoint: bool = False,
         append_time_feature: bool = False,
+        u_transform: str = "none",           # known at init to size the lift layer for
+                                             # channel-EXPANDING transforms (must match the
+                                             # forward-time u_transform arg; both come from cfg).
+                                             #   "cumsum_timesince_sqrt" → [sqrt(cumsum), log1p(t_since)] (2x cols)
+                                             #   "pulse_cumsum_sqrt"     → [sqrt(pulse),  sqrt(cumsum)]    (2x cols)
         **kwargs,
     ):
         super().__init__()
@@ -97,11 +102,21 @@ class OdeTransformer(nn.Module):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.append_time_feature = bool(append_time_feature)
 
+        # Channel-expanding u_transforms stack magnitude + recency channels per u col,
+        # so the lift layer's input width must be multiplied accordingly. Mirrors
+        # ode_rnn's self.u_transform / self._u_preselected sizing.
+        self.u_transform = str(u_transform)
+        self._u_expanding = (
+            self.u_transform == "cumsum_timesince_sqrt"
+            or self.u_transform == "pulse_cumsum_sqrt"
+        )
+        u_channel_mult = 2 if self._u_expanding else 1
+
         # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
         # the analogue of GRU/LSTM's intrinsic W_ih projection. The Transformer
         # requires d_model=hidden so the projection cannot be skipped entirely.
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim + (1 if self.append_time_feature else 0)
+        feat_in = u_cols_dim * u_channel_mult + y_cols_dim + (1 if self.append_time_feature else 0)
         if self.lift_skip:
             self.lift = nn.Linear(feat_in, hidden)
         else:
@@ -189,12 +204,31 @@ class OdeTransformer(nn.Module):
 
         # Pre-compute the encoder's view of u (cumsum/sqrt/etc.); ODE jump always
         # uses the raw delta in u_seq. Mirrors OdeRNN's u_transform pipeline.
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_enc = u_seq.cumsum(dim=1)
+        #
+        # Channel-EXPANDING modes select gru_u_cols FIRST (like ode_rnn), then stack
+        # magnitude + recency channels, so u_enc already carries (B,K, C*mult) and the
+        # per-step loop must NOT re-select gru_u_cols (flagged by `u_preselected`).
+        u_preselected = (
+            u_transform == "cumsum_timesince_sqrt"
+            or u_transform == "pulse_cumsum_sqrt"
+        )
+        if u_preselected:
+            u_base = u_seq[:, :, self.gru_u_cols] if self.gru_u_cols is not None else u_seq
+            if u_transform == "cumsum_timesince_sqrt":
+                cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # magnitude
+                tsince = self._time_since(u_base, dt_seq)                   # recency
+                u_enc  = torch.cat([cum, tsince], dim=2)
+            else:  # pulse_cumsum_sqrt
+                pulse = u_base.clamp_min(1e-6).sqrt()                       # exact event timing+magnitude
+                cum   = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()         # persistent running recipe
+                u_enc = torch.cat([pulse, cum], dim=2)
         else:
-            u_enc = u_seq
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(0.0).sqrt()
+            if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
+                u_enc = u_seq.cumsum(dim=1)
+            else:
+                u_enc = u_seq
+            if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
+                u_enc = u_enc.clamp_min(0.0).sqrt()
 
         if self.append_time_feature:
             t_cum = dt_seq.cumsum(dim=1)                                  # (B, K)
@@ -220,7 +254,11 @@ class OdeTransformer(nn.Module):
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
             # Encoder feature: optionally subset u/y columns and apply y_transform.
-            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
+            # Channel-expanding modes already selected gru_u_cols before expanding.
+            if u_preselected or self.gru_u_cols is None:
+                u_feat = u_enc_k
+            else:
+                u_feat = u_enc_k[:, self.gru_u_cols]
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_feat = y_feat.clamp_min(0.0).sqrt()
@@ -291,6 +329,27 @@ class OdeTransformer(nn.Module):
 
     def _transformer_call(self, seq: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         return self.transformer(seq, mask=mask, is_causal=True)
+
+    def _time_since(self, u: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+        """Per-channel elapsed time since the last nonzero dose in that channel.
+
+        Resets to 0 at each event step, grows by dt otherwise → "how long ago did
+        this bolus last arrive." log1p-compressed (times reach ~1e4 s). Paired with
+        cumsum (magnitude) this gives the transformer the per-bolus recency signal a
+        plain cumsum staircase hides — the GRU gets recency implicitly via its
+        recurrent decay, the transformer does not. Mirrors ode_rnn._time_since.
+
+        u: (B,K,C), dt: (B,K)  →  (B,K,C).
+        """
+        B = u.shape[0]; K = u.shape[1]; C = u.shape[2]
+        out = torch.zeros(B, K, C, device=u.device, dtype=u.dtype)
+        tsince = torch.zeros(B, C, device=u.device, dtype=u.dtype)
+        event = u.abs() > 1e-8                            # (B,K,C)
+        for k in range(K):
+            tsince = tsince + dt[:, k].unsqueeze(1)
+            tsince = torch.where(event[:, k, :], torch.zeros_like(tsince), tsince)
+            out[:, k, :] = tsince
+        return torch.log1p(out)
 
     def _rk4_substeps(
         self, y: torch.Tensor, dt: torch.Tensor, theta: torch.Tensor
