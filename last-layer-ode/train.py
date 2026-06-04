@@ -1246,6 +1246,10 @@ class TrainConfig:
     save_model_name: str = "model.pt"  # saved in exp_dir/
     save_last_name: str = "model_last.pt"  # saved in exp_dir/
     save_curves_name: str = "loss_curves.npz"  # saved in exp_dir/logs/
+    # Path to a checkpoint (e.g. an interrupted run's model_last.pt) to resume
+    # training from. Restores model/optimizer/scheduler state, best_val, epoch
+    # counter and loss-curve history, then continues to cfg.epochs. None = fresh.
+    resume_from: str | None = None
 
     epochs: int = 200
     batch_size: int = 256
@@ -2088,6 +2092,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 "tag": str(tag),
                 "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
                 "opt_state": opt.state_dict(),
+                "sched_state": scheduler.state_dict() if scheduler is not None else None,
                 "best_val": float(best_val),
                 "cfg": cfg.__dict__,
             },
@@ -2190,7 +2195,49 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             mk["y_transform"] = cfg.y_transform
         return mk
 
-    for ep in range(1, cfg.epochs + 1):
+    # ---- resume from an interrupted run's checkpoint, if requested ----
+    # Restores model/optimizer/scheduler/best_val and the epoch counter so we
+    # continue from where the run died rather than restarting from scratch.
+    # Note: the per-epoch "best" weights were only kept in RAM (model.pt is
+    # written at the very end), so a resumed run starts with best_state=None and
+    # only re-saves model.pt once a post-resume epoch beats the loaded best_val.
+    start_epoch = 1
+    if cfg.resume_from:
+        ckpt_path = Path(cfg.resume_from)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"resume_from checkpoint not found: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
+        if ckpt.get("opt_state") is not None:
+            opt.load_state_dict(ckpt["opt_state"])
+        if scheduler is not None:
+            if ckpt.get("sched_state") is not None:
+                scheduler.load_state_dict(ckpt["sched_state"])
+            else:
+                # Older checkpoint without scheduler state: fast-forward the LR
+                # schedule by replaying the steps already taken (one per epoch).
+                for _ in range(int(ckpt["epoch"])):
+                    scheduler.step()
+        best_val = float(ckpt.get("best_val", best_val))
+        start_epoch = int(ckpt["epoch"]) + 1
+        # Restore loss-curve history so the curves npz isn't truncated to only
+        # the post-resume epochs. Resuming starts a fresh (new-timestamp) exp_dir,
+        # so the prior history lives next to the checkpoint, not in this run's logs.
+        prev_curves = ckpt_path.parent / "logs" / cfg.save_curves_name
+        if prev_curves.exists():
+            with np.load(prev_curves, allow_pickle=True) as cz:
+                train_losses = list(cz["train_losses"]) if "train_losses" in cz else []
+                if "val_losses" in cz and cz["val_losses"].ndim > 0:
+                    val_losses = list(cz["val_losses"])
+                if "val_species_losses" in cz and cz["val_species_losses"].ndim > 0:
+                    val_species_losses = list(cz["val_species_losses"])
+        print(f"Resumed from {ckpt_path} @ epoch {ckpt['epoch']} "
+              f"(best_val={best_val:.6f}) → continuing at epoch {start_epoch}/{cfg.epochs}")
+        if start_epoch > cfg.epochs:
+            print(f"  checkpoint epoch {ckpt['epoch']} >= cfg.epochs {cfg.epochs}; "
+                  f"nothing to train. Raise --set epochs=N to extend.")
+
+    for ep in range(start_epoch, cfg.epochs + 1):
         ep_t0 = time.time()
         teacher_forcing = bool(cfg.teacher_forcing) and (ep < int(cfg.tf_drop_epoch))
 
