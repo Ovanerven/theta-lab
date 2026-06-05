@@ -1,0 +1,105 @@
+# M9 EVENT_DARK — COARSE K-anchor sweep, all seeds. Bug-fixed M9 (scaffold
+# txtl_model9_event_dark) across K=1,2,3 θ-anchors × seeds 0,1,2, head-to-head
+# vs the cached K_M9_k{1,2,3}_s{0,1,2} dark_stable runs in FINAL_coarse_K_sweep.
+#
+# Recipe = EXACTLY the FINAL_coarse_K_sweep M9 recipe, with two changes only:
+#   (1) scaffold txtl_model9_dark_stable -> txtl_model9_event_dark   (the fix:
+#       gate the dark→fluor conversion on the opening event, not the O2 sink)
+#   (2) gru_u_cols += col 12 (u_open) so the encoder SEES the opening signal.
+#       The broken K-sweep M9 omitted it (inherited fixed's [0,1,3..11]); the tex
+#       puts u_open in u(t) and feeds u to the encoder, so this restores it.
+#       (DNA-c routing unchanged; col 2 still excluded, matching the other K
+#       scaffolds — this isolates u_open as the single encoder-input change.)
+# Everything else identical to FINAL_coarse_K_sweep: coarse real_only, sparse-θ
+# piecewise (Model B2), nn_gru / nsub3 / pulse_cumsum_sqrt, PLAIN loss, hidden
+# 400, lr 0.0015, lambda_oxygen 0.1, 200ep. Same split_seed/seeds => same splits
+# => direct cell-for-cell A/B against the broken K_M9 grid.
+#
+# ORDER = breadth-first over seeds (all K at s0, then s1, then s2).
+# 3 K × 3 seeds = 9 runs.
+#
+# Launch (box):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_K_M9_event_dark.yaml \
+#     --local --max-parallel 6 --out-root experiments_final/experiments
+# Outputs: experiments_final/experiments/FINAL_coarse_K_M9_event_dark/
+
+study: FINAL_coarse_K_M9_event_dark
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn_sparse_theta     # K-anchor sparse-θ readout
+  anchor_interp: piecewise              # Model B2 (constant between anchors)
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked) for everyone
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# real-only coarse (same dataset as the broken K_M9 runs)
+_real: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# M9 event_dark extras: oxygen wiring + lr + ENCODER SEES u_open (col 12 added).
+_m9ed: &m9ed
+  lr: 0.0015
+  lambda_oxygen: 0.1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+_M9ed: &M9ed {scaffold: txtl_model9_event_dark, hidden: 400, <<: [*real, *m9ed]}
+
+runs:
+  # ---------- SEED 0 ----------
+  - {exp_name: K_M9ed_k1_s0, seed: 0, n_theta_anchors: 1, <<: *M9ed}
+  - {exp_name: K_M9ed_k2_s0, seed: 0, n_theta_anchors: 2, <<: *M9ed}
+  - {exp_name: K_M9ed_k3_s0, seed: 0, n_theta_anchors: 3, <<: *M9ed}
+  # ---------- SEED 1 ----------
+  - {exp_name: K_M9ed_k1_s1, seed: 1, n_theta_anchors: 1, <<: *M9ed}
+  - {exp_name: K_M9ed_k2_s1, seed: 1, n_theta_anchors: 2, <<: *M9ed}
+  - {exp_name: K_M9ed_k3_s1, seed: 1, n_theta_anchors: 3, <<: *M9ed}
+  # ---------- SEED 2 ----------
+  - {exp_name: K_M9ed_k1_s2, seed: 2, n_theta_anchors: 1, <<: *M9ed}
+  - {exp_name: K_M9ed_k2_s2, seed: 2, n_theta_anchors: 2, <<: *M9ed}
+  - {exp_name: K_M9ed_k3_s2, seed: 2, n_theta_anchors: 3, <<: *M9ed}

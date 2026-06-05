@@ -1,0 +1,97 @@
+# M9 EVENT_DARK — DENSE-θ (coarse scaffold ladder), all seeds. Bug-fixed M9
+# (scaffold txtl_model9_event_dark) in the DENSE per-timestep-θ regime, to drop
+# in alongside the FINAL dense M9 runs experiments_final/FINAL/scaffold_ladder/
+# HSa_M9_h{400,600}_s{0,1,2} (dark_stable). Head-to-head vs those cached runs.
+#
+# Recipe = EXACTLY the FINAL scaffold_ladder HSa_M9 recipe (= the locked coarse
+# recipe, identical to FINAL_coarse_K_sweep M9 except dense readout), with two
+# changes only:
+#   (1) scaffold txtl_model9_dark_stable -> txtl_model9_event_dark   (the fix)
+#   (2) gru_u_cols += col 12 (u_open) so the encoder sees the opening signal.
+# i.e. coarse real_only, model_class ode_rnn (dense θ, NO n_theta_anchors),
+# nn_gru / nsub3 / pulse_cumsum_sqrt / sqrt_clamp1, PLAIN loss, lr 0.0015,
+# lambda_oxygen 0.1, source 1:1, 200ep. Same split_seed/seeds => same splits =>
+# direct A/B against the cached HSa_M9 dense runs. Covers hidden 400 AND 600
+# (both present in scaffold_ladder), 3 seeds each = 6 runs.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_dense_M9_event_dark.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+# Outputs: experiments_final/experiments/FINAL_dense_M9_event_dark/
+
+study: FINAL_dense_M9_event_dark
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn                  # dense per-timestep θ (the K=∞ reference)
+  anchor_interp: piecewise
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked) — matches the dense scaffold ladder
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+# real-only coarse (same dataset as the cached HSa_M9 dense runs)
+_real: &real
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# M9 event_dark extras: oxygen wiring + lr + ENCODER SEES u_open (col 12 added).
+_m9ed: &m9ed
+  lr: 0.0015
+  lambda_oxygen: 0.1
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+_M9ed: &M9ed {scaffold: txtl_model9_event_dark, <<: [*real, *m9ed]}
+
+runs:
+  # hidden 400 (ladder-best for M9)
+  - {exp_name: HSa_M9ed_h400_s0, seed: 0, hidden: 400, <<: *M9ed}
+  - {exp_name: HSa_M9ed_h400_s1, seed: 1, hidden: 400, <<: *M9ed}
+  - {exp_name: HSa_M9ed_h400_s2, seed: 2, hidden: 400, <<: *M9ed}
+  # hidden 600
+  - {exp_name: HSa_M9ed_h600_s0, seed: 0, hidden: 600, <<: *M9ed}
+  - {exp_name: HSa_M9ed_h600_s1, seed: 1, hidden: 600, <<: *M9ed}
+  - {exp_name: HSa_M9ed_h600_s2, seed: 2, hidden: 600, <<: *M9ed}
