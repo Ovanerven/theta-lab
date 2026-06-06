@@ -45,6 +45,12 @@ class NeuralODE(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden, self.P),
         )
+        # Zero-init the output layer so the vector field starts at dy/dt≈0. On
+        # coarse data (large dt) a default-init MLP emits O(1) derivatives that a
+        # single RK4 step amplifies into a blow-up at step 0; starting from no
+        # dynamics lets the model ramp up stably.
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
 
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
@@ -59,9 +65,12 @@ class NeuralODE(nn.Module):
 
     def _y_feat(self, y: torch.Tensor, y_transform: str) -> torch.Tensor:
         if y_transform == "sqrt":
-            return y.clamp_min(0.0).sqrt()
+            # clamp_min(1e-6) BEFORE sqrt: sqrt'(0)=inf NaN-s the backward pass.
+            return y.clamp_min(1e-6).sqrt()
         if y_transform == "sqrt_clamp1":
-            return y.clamp_min(0.0).sqrt().clamp_min(1.0)
+            # clamp to 1.0 BEFORE sqrt (matches OdeRNN): the old order
+            # clamp_min(0).sqrt().clamp_min(1) gives 0*inf=NaN grads at y=0.
+            return y.clamp_min(1.0).sqrt()
         if y_transform == "log1p":
             return torch.log1p(y.clamp_min(0.0))
         return y
@@ -81,7 +90,10 @@ class NeuralODE(nn.Module):
             k3 = self.mlp(torch.cat([self._y_feat(y + 0.5 * hdt * k2, y_transform), u_k], dim=-1))
             k4 = self.mlp(torch.cat([self._y_feat(y +       hdt * k3, y_transform), u_k], dim=-1))
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            # Clamp INSIDE the loop (matches OdeRNN): bounds the state every
+            # substep so coarse-dt stages can't blow up to inf/NaN mid-integration.
+            y  = y.clamp(0.0, 1e5)
+        return y
 
     def forward(
         self,

@@ -53,6 +53,10 @@ class NeuralOdeGRU(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
         self.head = nn.Linear(hidden, self.P)
+        # Zero-init so dy/dt≈0 at start: on coarse data a default-init head emits
+        # O(1) derivatives that a single large-dt Euler step blows up at step 0.
+        nn.init.zeros_(self.head.weight)
+        nn.init.zeros_(self.head.bias)
 
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
@@ -124,9 +128,12 @@ class NeuralOdeGRU(nn.Module):
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
             if y_transform == "sqrt":
-                y_in_feat = y_in.clamp_min(0.0).sqrt()
+                # clamp_min(1e-6) BEFORE sqrt: sqrt'(0)=inf NaN-s the backward pass.
+                y_in_feat = y_in.clamp_min(1e-6).sqrt()
             elif y_transform == "sqrt_clamp1":
-                y_in_feat = y_in.clamp_min(0.0).sqrt().clamp_min(1.0)
+                # clamp to 1.0 BEFORE sqrt (matches OdeRNN): the old order
+                # clamp_min(0).sqrt().clamp_min(1) gives 0*inf=NaN grads at y=0.
+                y_in_feat = y_in.clamp_min(1.0).sqrt()
             elif y_transform == "log1p":
                 y_in_feat = torch.log1p(y_in.clamp_min(0.0))
             else:
@@ -139,7 +146,9 @@ class NeuralOdeGRU(nn.Module):
 
             # Euler integration — Euler only; GRU state cannot be rolled back for RK4
             y = y_in + (u_k @ self.u_to_y_jump) + dt_k.unsqueeze(1) * dydt
-            y = torch.clamp_min(y, 0.0)
+            # Upper bound too (matches OdeRNN): on coarse dt the single Euler step
+            # dt*dydt can overshoot to inf/NaN; clamp_min(0) alone doesn't catch it.
+            y = y.clamp(0.0, 1e5)
 
             y_out[:, k, :] = y
             y_prev = y

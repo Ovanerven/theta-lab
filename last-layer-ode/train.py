@@ -1994,6 +1994,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         rk4_residual=cfg.rk4_residual,
         rk4_residual_hidden=cfg.rk4_residual_hidden,
         rk4_residual_layers=cfg.rk4_residual_layers,
+        # Correction-MLP width for the NeuralOdeCorrection baseline (other models
+        # absorb these via **kwargs). Lets the baseline's capacity be set from cfg
+        # instead of the hardcoded 256/2 defaults.
+        nn_hidden=cfg.nn_hidden,
+        nn_layers=cfg.nn_layers,
         **sparse_theta_kwargs,
     ).to(device)
 

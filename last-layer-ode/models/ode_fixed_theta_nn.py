@@ -140,7 +140,10 @@ class NeuralOdeCorrection(nn.Module):
             k3 = rhs(y + 0.5 * hdt * k2, theta) + nn_f(y + 0.5 * hdt * k2)
             k4 = rhs(y +       hdt * k3,  theta) + nn_f(y +       hdt * k3)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            # Clamp INSIDE the loop (matches OdeRNN): bounds the state every
+            # substep so coarse-dt stages can't blow up to inf/NaN mid-integration.
+            y  = y.clamp(0.0, 1e5)
+        return y
 
     def _rk4_correction_only(
         self, y: torch.Tensor, dt: torch.Tensor,
@@ -157,4 +160,5 @@ class NeuralOdeCorrection(nn.Module):
             k3 = nn_f(y + 0.5 * hdt * k2)
             k4 = nn_f(y +       hdt * k3)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            y  = y.clamp(0.0, 1e5)
+        return y
