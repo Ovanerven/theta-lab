@@ -23,6 +23,7 @@ from mamba_ssm import Mamba
 from mamba_ssm.utils.generation import InferenceParams
 
 from scaffolds import MechanisticScaffold
+from models.u_features import u_feature_mult, build_u_enc
 
 
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
@@ -61,6 +62,7 @@ class OdeMambaSSM(nn.Module):
         gru_y_cols: Optional[list] = None,
         lift_skip: bool = False,
         head_init: str = "default",  # "default" (normal_(std=0.01) + zeros) | "supervisor" (xavier_ + zeros)
+        u_transform: str = "none",   # encoder u-feature transform (sizes the lift)
         **kwargs,
     ):
         super().__init__()
@@ -84,6 +86,15 @@ class OdeMambaSSM(nn.Module):
         u_cols_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         y_cols_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
+        self._u_transform = str(u_transform)
+        self._u_mult = u_feature_mult(self._u_transform)
+        self._has_u_cols = self.gru_u_cols is not None
+        self.register_buffer(
+            "gru_u_idx",
+            torch.tensor(self.gru_u_cols if self.gru_u_cols is not None else [], dtype=torch.long),
+            persistent=False,
+        )
+
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
             lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
             hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
@@ -97,7 +108,7 @@ class OdeMambaSSM(nn.Module):
         # the analogue of GRU/LSTM's intrinsic W_ih projection. Mamba blocks require
         # d_model=hidden so the projection cannot be skipped entirely.
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim
+        feat_in = u_cols_dim * self._u_mult + y_cols_dim
         if self.lift_skip:
             self.lift = nn.Linear(feat_in, hidden)
         else:
@@ -163,19 +174,13 @@ class OdeMambaSSM(nn.Module):
         else:
             y_prev = y0
 
-        # u_transform applied once on the full sequence (encoder view); ODE jump
-        # always uses raw u_seq.
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_enc = u_seq.cumsum(dim=1)
-        else:
-            u_enc = u_seq
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(0.0).sqrt()
+        # Encoder's view of u (gru_u_cols already applied); ODE jump uses raw u_seq.
+        u_enc = build_u_enc(u_seq, dt_seq, self._u_transform, self.gru_u_idx, self._has_u_cols)
 
         for k in range(K):
-            u_k     = u_seq[:, k, :]
-            u_enc_k = u_enc[:, k, :]
-            dt_k    = dt_seq[:, k]
+            u_k    = u_seq[:, k, :]
+            u_feat = u_enc[:, k, :]   # cols + transform already applied
+            dt_k   = dt_seq[:, k]
 
             y_in = y_prev.detach()
             tf_fires = (k % tf_every == 0) if self._tf_at_k_zero else (k > 0 and k % tf_every == 0)
@@ -187,7 +192,6 @@ class OdeMambaSSM(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_feat = y_feat.clamp_min(0.0).sqrt()

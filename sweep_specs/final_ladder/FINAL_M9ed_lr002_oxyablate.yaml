@@ -1,0 +1,91 @@
+# M9 EVENT_DARK — lr 0.002 "best recipe" + lambda_oxygen ablation (0.1 vs 0).
+#
+# Two questions in one 6-run sweep:
+#   (1) Is the bug-fixed M9 (txtl_model9_event_dark; soft-sat RK4-stable conversion)
+#       now STABLE at the shared ladder lr 0.002? The old dark M9 was lr-fragile
+#       and had to drop to 0.0015. If event_dark trains clean (no NaN) at 0.002 it
+#       can use the SAME lr as every other scaffold in the ladder.
+#   (2) Does the L_oxygen post-opening loss help? Ablate lambda_oxygen 0.1 vs 0.
+#
+# Recipe = the shared coarse dense scaffold-ladder recipe (= HSa_M*), so M9ed
+# matches the other scaffolds: real-only coarse, NO synth, dense ode_rnn,
+# PLAIN loss, pulse_cumsum_sqrt / sqrt_clamp1, n_substeps 3, 200ep, hidden 400.
+# The only M9-specific additions: gru_u_cols includes u_open (col 12) and the
+# L_oxygen loss (the ablated knob). lr 0.002 = the ladder default (NOT M9's 0.0015).
+#
+# 2 lambda_oxygen × 3 seeds = 6 runs.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_M9ed_lr002_oxyablate.yaml \
+#     --local --max-parallel 2 --out-root experiments_final/experiments
+# Outputs: experiments_final/experiments/FINAL_M9ed_lr002_oxyablate/
+
+study: FINAL_M9ed_lr002_oxyablate
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002                              # ladder default (testing event_dark stability here)
+  hidden: 400
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]   # incl u_open (col 12)
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn                   # dense per-timestep θ (scaffold-ladder regime)
+  anchor_interp: piecewise
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked) — matches the rest of the ladder
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  # real-only coarse, NO synth (same dataset family as M3/M4/M5/M9)
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {new: 1.0, old: 1.0}
+  # M9 scaffold + oxygen wiring (lambda_oxygen set per-run below)
+  scaffold: txtl_model9_event_dark
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+
+runs:
+  # ── lambda_oxygen = 0.1 ──
+  - {exp_name: M9ed_lr002_oxy01_s0, seed: 0, lambda_oxygen: 0.1}
+  - {exp_name: M9ed_lr002_oxy01_s1, seed: 1, lambda_oxygen: 0.1}
+  - {exp_name: M9ed_lr002_oxy01_s2, seed: 2, lambda_oxygen: 0.1}
+  # ── lambda_oxygen = 0.0 ──
+  - {exp_name: M9ed_lr002_oxy00_s0, seed: 0, lambda_oxygen: 0.0}
+  - {exp_name: M9ed_lr002_oxy00_s1, seed: 1, lambda_oxygen: 0.0}
+  - {exp_name: M9ed_lr002_oxy00_s2, seed: 2, lambda_oxygen: 0.0}

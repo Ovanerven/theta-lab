@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scaffolds import MechanisticScaffold
+from models.u_features import u_feature_mult, build_u_enc
 
 
 def gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
@@ -165,6 +166,7 @@ class OdesLSTM(nn.Module):
         y0_theta_init: bool = False,    # MLP(y0) → per-sample bias on theta-head logits (mirrors ode_rnn.py)
         encoder_use_time: bool = False,    # concat τ_k = k/(K-1) ∈ [0,1] to the encoder feature (mirrors ode_rnn.py)
         encoder_use_log_dt: bool = False,  # concat log(dt_k) to the encoder feature (dt-awareness for variable grids)
+        u_transform: str = "none",   # encoder u-feature transform (sizes the lift)
         **kwargs,
     ):
         super().__init__()
@@ -190,6 +192,15 @@ class OdesLSTM(nn.Module):
         u_cols_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         y_cols_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
+        self._u_transform = str(u_transform)
+        self._u_mult = u_feature_mult(self._u_transform)
+        self._has_u_cols = self.gru_u_cols is not None
+        self.register_buffer(
+            "gru_u_idx",
+            torch.tensor(self.gru_u_cols if self.gru_u_cols is not None else [], dtype=torch.long),
+            persistent=False,
+        )
+
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
             lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
             hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
@@ -202,7 +213,7 @@ class OdesLSTM(nn.Module):
         self.encoder_use_time = bool(encoder_use_time)
         self.encoder_use_log_dt = bool(encoder_use_log_dt)
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim
+        feat_in = u_cols_dim * self._u_mult + y_cols_dim
         if self.encoder_use_time:
             feat_in += 1
         if self.encoder_use_log_dt:
@@ -285,12 +296,7 @@ class OdesLSTM(nn.Module):
         else:
             y_prev = y0
 
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_enc = u_seq.cumsum(dim=1)
-        else:
-            u_enc = u_seq
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(1e-6).sqrt()
+        u_enc = build_u_enc(u_seq, dt_seq, self._u_transform, self.gru_u_idx, self._has_u_cols)
 
         # Per-sample head bias from y0 MLP — computed once before the K-loop
         # since y0 is the same at every step. None when y0_theta_init=False.
@@ -307,7 +313,7 @@ class OdesLSTM(nn.Module):
 
         for k in range(K):
             u_k = u_seq[:, k, :]
-            u_enc_k = u_enc[:, k, :]
+            u_feat = u_enc[:, k, :]   # cols + transform already applied
             dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
@@ -320,7 +326,6 @@ class OdesLSTM(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_feat = y_feat.clamp_min(1e-6).sqrt()

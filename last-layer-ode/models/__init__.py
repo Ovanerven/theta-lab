@@ -19,7 +19,8 @@ from models.ode_mamba import OdeMamba
 from models.ode_lstm import OdeLSTM
 # from models.ode_mlstm import OdemLSTM
 from models.ode_slstm import OdesLSTM
-from models.ode_mingru import OdeMinGRU 
+from models.ode_mingru import OdeMinGRU
+from models.ode_lmu import OdeLMU
 
 
 try:
@@ -58,7 +59,8 @@ MODELS: dict = {
     # "ode_mlstm": Ode mLSTM,
     "ode_slstm": OdesLSTM,
     "ode_mingru": OdeMinGRU,
-    # "ode_mamba":          OdeMamba,
+    "ode_lmu":            OdeLMU,     # Legendre Memory Unit (long input-free retention)
+    "ode_mamba":          OdeMamba,   # from-scratch pure-PyTorch selective SSM (full BPTT, jit-able)
     # "ode_transformer_kvcache": OdeTransformer_transformer,
     **({"ode_mamba_ssm": OdeMambaSSM} if _mamba_ssm_available else {}),
     **({"ode_mambapy": OdeMambapySSM} if _mambapy_available else {}),

@@ -262,6 +262,11 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         theta_lo=float(cfg.get("theta_lo", 1e-3)),
         theta_hi=float(cfg.get("theta_hi", 2.0)),
         n_substeps=int(cfg.get("n_substeps", 1)),
+        # neural_ode_correction's MLP width/depth — without these it rebuilds at the
+        # default (256) and load_state_dict fails when trained with a different size.
+        # Other models absorb these via **kwargs.
+        nn_hidden=int(cfg.get("nn_hidden", 256)),
+        nn_layers=int(cfg.get("nn_layers", 2)),
         use_basal=bool(cfg.get("use_basal", False)),
         theta_bounded=bool(cfg.get("theta_bounded", True)),
         context_len=int(cfg.get("context_len", 64)),

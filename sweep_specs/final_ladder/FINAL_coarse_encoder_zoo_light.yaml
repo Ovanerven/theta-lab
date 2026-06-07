@@ -1,0 +1,93 @@
+# Encoder ZOO — LIGHT arms (fast, low-memory RNN-like encoders). Pairs with
+# FINAL_coarse_encoder_zoo_heavy.yaml (mamba + transformer). Same fixed recipe =
+# scaffold-ladder GRU recipe (M4 / h400 / nsub3 / coarse / pulse_cumsum_sqrt / 200 ep);
+# pulse now implemented for every encoder via models/u_features.py.
+#
+#   gru     ode_rnn      lstm  lstm_rnn (drop_last=false)
+#   slstm   ode_slstm (drop_last=false)    mingru  ode_mingru
+#   lmu     ode_lmu      (Legendre Memory Unit — long input-free retention)
+# 5 arms x 3 seeds = 15 runs. ~10-25 s/epoch each — safe to run several in parallel.
+#
+# Launch (can parallelize; these are light):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_encoder_zoo_light.yaml --local --max-parallel 3
+
+study: FINAL_coarse_encoder_zoo_light
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: EZ_gru_s0, seed: 0, model_class: ode_rnn}
+  - {exp_name: EZ_gru_s1, seed: 1, model_class: ode_rnn}
+  - {exp_name: EZ_gru_s2, seed: 2, model_class: ode_rnn}
+  - {exp_name: EZ_lstm_s0, seed: 0, model_class: lstm_rnn, slstm_drop_last_layer: false}
+  - {exp_name: EZ_lstm_s1, seed: 1, model_class: lstm_rnn, slstm_drop_last_layer: false}
+  - {exp_name: EZ_lstm_s2, seed: 2, model_class: lstm_rnn, slstm_drop_last_layer: false}
+  - {exp_name: EZ_slstm_s0, seed: 0, model_class: ode_slstm, slstm_drop_last_layer: false}
+  - {exp_name: EZ_slstm_s1, seed: 1, model_class: ode_slstm, slstm_drop_last_layer: false}
+  - {exp_name: EZ_slstm_s2, seed: 2, model_class: ode_slstm, slstm_drop_last_layer: false}
+  - {exp_name: EZ_mingru_s0, seed: 0, model_class: ode_mingru, jit_scripting: false}
+  - {exp_name: EZ_mingru_s1, seed: 1, model_class: ode_mingru, jit_scripting: false}
+  - {exp_name: EZ_mingru_s2, seed: 2, model_class: ode_mingru, jit_scripting: false}
+  - {exp_name: EZ_lmu_s0, seed: 0, model_class: ode_lmu, jit_scripting: false}
+  - {exp_name: EZ_lmu_s1, seed: 1, model_class: ode_lmu, jit_scripting: false}
+  - {exp_name: EZ_lmu_s2, seed: 2, model_class: ode_lmu, jit_scripting: false}

@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scaffolds import MechanisticScaffold
+from models.u_features import u_feature_mult, build_u_enc
 
 
 def gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
@@ -104,8 +105,10 @@ class OdeMinGRU(nn.Module):
         gru_y_cols: Optional[list] = None,
         lift_skip: bool = False,
         head_init: str = "default",
+        gru_init: str = "default",   # "supervisor" -> xavier_(lin.weight)+zeros, on equal footing with GRU/LSTM/sLSTM
         theta_head_transform: str = "log_gamma",
         theta_head_tau: float = 1.0,
+        u_transform: str = "none",   # encoder u-feature transform (sizes the lift)
         **kwargs,
     ):
         super().__init__()
@@ -131,6 +134,15 @@ class OdeMinGRU(nn.Module):
         u_cols_dim = len(self.gru_u_cols) if self.gru_u_cols is not None else self.U
         y_cols_dim = len(self.gru_y_cols) if self.gru_y_cols is not None else self.P
 
+        self._u_transform = str(u_transform)
+        self._u_mult = u_feature_mult(self._u_transform)
+        self._has_u_cols = self.gru_u_cols is not None
+        self.register_buffer(
+            "gru_u_idx",
+            torch.tensor(self.gru_u_cols if self.gru_u_cols is not None else [], dtype=torch.long),
+            persistent=False,
+        )
+
         if rhs.theta_lo_vec is not None and rhs.theta_hi_vec is not None:
             lo = torch.tensor(rhs.theta_lo_vec, dtype=torch.float32)
             hi = torch.tensor(rhs.theta_hi_vec, dtype=torch.float32)
@@ -141,7 +153,7 @@ class OdeMinGRU(nn.Module):
         self.register_buffer("theta_hi_vec", hi)
 
         self.lift_skip = bool(lift_skip)
-        feat_in = u_cols_dim + y_cols_dim
+        feat_in = u_cols_dim * self._u_mult + y_cols_dim
         if self.lift_skip:
             self.lift = nn.Identity()
             enc_in = feat_in
@@ -168,6 +180,18 @@ class OdeMinGRU(nn.Module):
         if str(head_init) == "supervisor":
             nn.init.xavier_uniform_(self.head.weight, gain=1.0)
             nn.init.zeros_(self.head.bias)
+
+        # Recurrent init: supervisor -> xavier on each minGRU cell's input projection
+        # + zero bias, keeping early activations small/well-conditioned like the
+        # GRU/LSTM/sLSTM. minGRU has no W_hh (gates don't depend on h), so the
+        # input linear is the only recurrent weight to condition.
+        if gru_init not in ("default", "supervisor"):
+            raise ValueError(f"gru_init must be 'default' or 'supervisor', got {gru_init}")
+        if str(gru_init) == "supervisor":
+            for cell in self.mingru.cells:
+                nn.init.xavier_uniform_(cell.lin.weight)
+                if cell.lin.bias is not None:
+                    nn.init.zeros_(cell.lin.bias)
 
         if u_to_y_jump.shape != (self.U, self.P):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
@@ -200,16 +224,11 @@ class OdeMinGRU(nn.Module):
         else:
             y_prev = y0
 
-        if u_transform == "cumsum" or u_transform == "cumsum_sqrt":
-            u_enc = u_seq.cumsum(dim=1)
-        else:
-            u_enc = u_seq
-        if u_transform == "sqrt" or u_transform == "cumsum_sqrt":
-            u_enc = u_enc.clamp_min(0.0).sqrt()
+        u_enc = build_u_enc(u_seq, dt_seq, self._u_transform, self.gru_u_idx, self._has_u_cols)
 
         for k in range(K):
             u_k = u_seq[:, k, :]
-            u_enc_k = u_enc[:, k, :]
+            u_feat = u_enc[:, k, :]   # cols + transform already applied
             dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
@@ -222,7 +241,6 @@ class OdeMinGRU(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            u_feat = u_enc_k[:, self.gru_u_cols] if self.gru_u_cols is not None else u_enc_k
             y_feat = y_in[:, self.gru_y_cols] if self.gru_y_cols is not None else y_in
             if y_transform == "sqrt":
                 y_feat = y_feat.clamp_min(0.0).sqrt()

@@ -1,0 +1,105 @@
+# Encoder ZOO — HEAVY arms (memory/compute-heavy: Mamba + transformer). Pairs
+# with FINAL_coarse_encoder_zoo_light.yaml. Same fixed recipe = scaffold-ladder GRU
+# recipe (M4 / h400 / nsub3 / coarse / pulse_cumsum_sqrt / 200 ep).
+#
+#   mamba_ssm  ode_mamba_ssm  CUDA-only (mamba_ssm pkg); TBPTT-1
+#   mambapy    ode_mambapy    pure-PyTorch, FULL BPTT (slow eager)
+#   mamba      ode_mamba      from-scratch pure-PyTorch, FULL BPTT
+#   trans_*    ode_transformer × {cumsum, timesince, pulse, cumsum+append_time}, window-64
+# 7 arms x 3 seeds = 21 runs.
+#
+# RUN SERIALIZED: --max-parallel 1. Running these concurrently on one GPU caused
+# the NVML/CUDA-allocator crash (OOM -> driver fault) in the first zoo attempt.
+# mamba_ssm needs CUDA; the pure-PyTorch mambas are slow in eager — prefer the box.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_encoder_zoo_heavy.yaml --local --max-parallel 1
+
+study: FINAL_coarse_encoder_zoo_heavy
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── Mamba (3 backends) ───────────────────────────────────────────────────
+  - {exp_name: EZ_mambassm_s0, seed: 0, model_class: ode_mamba_ssm, jit_scripting: false}
+  - {exp_name: EZ_mambassm_s1, seed: 1, model_class: ode_mamba_ssm, jit_scripting: false}
+  - {exp_name: EZ_mambassm_s2, seed: 2, model_class: ode_mamba_ssm, jit_scripting: false}
+  - {exp_name: EZ_mambapy_s0, seed: 0, model_class: ode_mambapy, jit_scripting: false}
+  - {exp_name: EZ_mambapy_s1, seed: 1, model_class: ode_mambapy, jit_scripting: false}
+  - {exp_name: EZ_mambapy_s2, seed: 2, model_class: ode_mambapy, jit_scripting: false}
+  - {exp_name: EZ_mamba_s0, seed: 0, model_class: ode_mamba, jit_scripting: false}
+  - {exp_name: EZ_mamba_s1, seed: 1, model_class: ode_mamba, jit_scripting: false}
+  - {exp_name: EZ_mamba_s2, seed: 2, model_class: ode_mamba, jit_scripting: false}
+  # ── Transformer × u-feature variants (window 64) ─────────────────────────
+  - {exp_name: EZ_trans_cumsum_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_cumsum_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_cumsum_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_timesince_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_timesince_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_timesince_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_pulse_s0, seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_pulse_s1, seed: 1, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_pulse_s2, seed: 2, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
+  - {exp_name: EZ_trans_atf_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}
+  - {exp_name: EZ_trans_atf_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}
+  - {exp_name: EZ_trans_atf_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}

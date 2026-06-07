@@ -1323,6 +1323,10 @@ class TrainConfig:
     nn_hidden: int = 256
     nn_layers: int = 2
 
+    # LMU encoder (model_class=ode_lmu): Legendre memory order + sliding-window length.
+    lmu_memory: int = 64
+    lmu_theta: float = 300.0
+
     forget_bias_init: Optional[float] = None  # None = PyTorch default; 1.0 = Gers/Jozefowicz positive shift
     slstm_drop_last_layer: bool = True         # ode_slstm: True = dropout every layer (match GRU); False = original (between layers)
     legacy_forget_bias_bug: bool = False      # reproduce pre-fix fill_(0.0) on both bias_ih and bias_hh
@@ -1999,6 +2003,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         # instead of the hardcoded 256/2 defaults.
         nn_hidden=cfg.nn_hidden,
         nn_layers=cfg.nn_layers,
+        lmu_memory=cfg.lmu_memory,
+        lmu_theta=cfg.lmu_theta,
         **sparse_theta_kwargs,
     ).to(device)
 

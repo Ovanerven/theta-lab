@@ -30,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scaffolds import MechanisticScaffold
+from models.u_features import u_feature_mult, build_u_enc
 
 
 def log_gamma(x: torch.Tensor, lo: torch.Tensor, hi: torch.Tensor) -> torch.Tensor:
@@ -342,6 +343,7 @@ class OdeMamba(nn.Module):
         d_state: int = 16,
         expand: int = 2,
         d_conv: int = 4,
+        u_transform: str = "none",   # encoder u-feature transform (sizes the lift)
         **kwargs,
     ):
         super().__init__()
@@ -366,9 +368,15 @@ class OdeMamba(nn.Module):
         self.register_buffer("theta_lo_vec", lo)
         self.register_buffer("theta_hi_vec", hi)
 
+        # Shared u-feature transform (full U; mamba doesn't subset gru_u_cols).
+        self._u_transform = str(u_transform)
+        self._u_mult = u_feature_mult(self._u_transform)
+        self._has_u_cols = False
+        self.register_buffer("gru_u_idx", torch.zeros(0, dtype=torch.long), persistent=False)
+
         # Lift: same as OdeRNN but project up to hidden dim
         self.lift = nn.Sequential(
-            nn.Linear(self.U + self.P, lift_dim),
+            nn.Linear(self.U * self._u_mult + self.P, lift_dim),
             nn.SiLU(),
             nn.Linear(lift_dim, hidden),
         )
@@ -405,9 +413,15 @@ class OdeMamba(nn.Module):
         y_seq: Optional[torch.Tensor] = None,   # (B, K, P)
         teacher_forcing: bool = True,
         tf_every: int = 50,
+        u_transform: str = "none",
+        y_transform: str = "none",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, K, _ = u_seq.shape
         device, dtype = y0.device, y0.dtype
+
+        # Encoder u-feature transform (raw u_seq still used for the ODE bolus jump).
+        # Non-expanding modes only (pulse/timesince are GRU/transformer-specific).
+        u_feat_seq = build_u_enc(u_seq, dt_seq, self._u_transform, self.gru_u_idx, self._has_u_cols)
 
         y_out = torch.empty(B, K, self.P, device=device, dtype=dtype)
         th_out = torch.empty(B, K, self.theta_dim, device=device, dtype=dtype)
@@ -421,6 +435,7 @@ class OdeMamba(nn.Module):
 
         for k in range(K):
             u_k = u_seq[:, k, :]
+            u_feat_k = u_feat_seq[:, k, :]   # transformed — encoder feature only
             dt_k = dt_seq[:, k]
 
             y_in = y_prev.detach()
@@ -433,12 +448,19 @@ class OdeMamba(nn.Module):
                 else:
                     y_in = y_seq[:, k - 1, :].to(dtype=y_prev.dtype).detach()
 
-            # Lift to hidden dim
-            feat = self.lift(torch.cat([u_k, y_in], dim=-1))  # (B, hidden)
+            y_in_feat = y_in
+            if y_transform == "sqrt":
+                y_in_feat = y_in.clamp_min(1e-6).sqrt()
+            elif y_transform == "sqrt_clamp1":
+                y_in_feat = y_in.clamp_min(1.0).sqrt()   # clamp BEFORE sqrt (finite grad at 0)
+            elif y_transform == "log1p":
+                y_in_feat = torch.log1p(y_in.clamp_min(0.0))
 
-            # Mamba encoder step (detach states to prevent graph accumulation over K steps)
-            ssm_states = [s.detach() for s in ssm_states]
-            conv_bufs = [c.detach() for c in conv_bufs]
+            # Lift to hidden dim
+            feat = self.lift(torch.cat([u_feat_k, y_in_feat], dim=-1))  # (B, hidden)
+
+            # Mamba encoder step. State is threaded WITHOUT detach → full BPTT through
+            # the SSM state (same as the GRU), unlike ode_mamba_ssm's TBPTT-1 cache.
             z, ssm_states, conv_bufs = self.encoder.step(feat, ssm_states, conv_bufs)
 
             # Decode theta
@@ -481,7 +503,8 @@ class OdeMamba(nn.Module):
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y +       hdt * k3,  theta)
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            y  = y.clamp(0.0, 1e5)   # per-substep clamp: coarse-dt stability
+        return y
 
     def _rk4_substeps_basal(
         self, y: torch.Tensor, dt: torch.Tensor,
@@ -497,4 +520,5 @@ class OdeMamba(nn.Module):
             k3 = rhs(y + 0.5 * hdt * k2, theta) + beta
             k4 = rhs(y +       hdt * k3,  theta) + beta
             y  = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-        return torch.clamp_min(y, 0.0)
+            y  = y.clamp(0.0, 1e5)   # per-substep clamp: coarse-dt stability
+        return y
