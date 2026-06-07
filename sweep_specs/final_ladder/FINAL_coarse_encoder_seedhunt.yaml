@@ -1,0 +1,86 @@
+# ENCODER SEED-HUNT: more seeds for the two promising encoders (GRU + sLSTM) at the two best
+# scaffolds (M4, M5), each at that scaffold's best hidden — to expose seed variance and possibly
+# catch a standout seed (cf. the M3+sLSTM best-ever-R² outlier). +3 fresh seeds per (encoder×scaffold),
+# chosen to NOT collide with existing runs:
+#   GRU   M4 h300  -> seeds 4,5,6   (have 0-3 in scaffold_ladder NG_plain)
+#   GRU   M5 h400  -> seeds 3,4,5   (have 0-2 in scaffold_ladder)
+#   sLSTM M4 h400  -> seeds 3,4,5   (have 0-2 in encoder_zoo_light)
+#   sLSTM M5 h400  -> seeds 0,1,2   (none yet — sLSTM never run on M5)
+# Identical locked recipe; only model_class / scaffold / hidden / seed vary. 12 runs.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_encoder_seedhunt.yaml \
+#     --local --max-parallel 3 --out-root experiments_final/experiments
+
+study: FINAL_coarse_encoder_seedhunt
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# anchors
+_M4: &M4 {scaffold: txtl_model4_three_state, hidden: 300}
+_M5: &M5 {scaffold: txtl_resource_and_maturation_dna, hidden: 400}
+
+runs:
+  # GRU @ M4 h300 (+3)
+  - {exp_name: SH_gru_M4_s4, model_class: ode_rnn, seed: 4, <<: *M4}
+  - {exp_name: SH_gru_M4_s5, model_class: ode_rnn, seed: 5, <<: *M4}
+  - {exp_name: SH_gru_M4_s6, model_class: ode_rnn, seed: 6, <<: *M4}
+  # GRU @ M5 h400 (+3)
+  - {exp_name: SH_gru_M5_s3, model_class: ode_rnn, seed: 3, <<: *M5}
+  - {exp_name: SH_gru_M5_s4, model_class: ode_rnn, seed: 4, <<: *M5}
+  - {exp_name: SH_gru_M5_s5, model_class: ode_rnn, seed: 5, <<: *M5}
+  # sLSTM @ M4 h400 (+3)  — note hidden 400 (its tested capacity), overrides M4 anchor
+  - {exp_name: SH_slstm_M4_s3, model_class: ode_slstm, seed: 3, scaffold: txtl_model4_three_state, hidden: 400}
+  - {exp_name: SH_slstm_M4_s4, model_class: ode_slstm, seed: 4, scaffold: txtl_model4_three_state, hidden: 400}
+  - {exp_name: SH_slstm_M4_s5, model_class: ode_slstm, seed: 5, scaffold: txtl_model4_three_state, hidden: 400}
+  # sLSTM @ M5 h400 (fresh 0-2)
+  - {exp_name: SH_slstm_M5_s0, model_class: ode_slstm, seed: 0, <<: *M5}
+  - {exp_name: SH_slstm_M5_s1, model_class: ode_slstm, seed: 1, <<: *M5}
+  - {exp_name: SH_slstm_M5_s2, model_class: ode_slstm, seed: 2, <<: *M5}

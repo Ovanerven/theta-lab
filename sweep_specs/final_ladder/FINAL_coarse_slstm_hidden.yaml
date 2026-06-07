@@ -1,0 +1,73 @@
+# sLSTM CAPACITY sweep on M4 — does the sLSTM encoder have headroom above the GRU's best (0.641 @ h300)?
+# sLSTM tied/edged the GRU at h400 (0.635 vs 0.602) in the encoder zoo; this sweeps its hidden dim to
+# find its own best capacity. h400 already done (encoder_zoo_light) -> only h200/h300/h600 here.
+# Identical locked recipe to the GRU ladder; ONLY model_class=ode_slstm differs.
+# 3 hidden x 3 seeds = 9 runs.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_slstm_hidden.yaml \
+#     --local --max-parallel 3 --out-root experiments_final/experiments
+
+study: FINAL_coarse_slstm_hidden
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_slstm
+  scaffold: txtl_model4_three_state
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: SL_M4_h200_s0, seed: 0, hidden: 200}
+  - {exp_name: SL_M4_h200_s1, seed: 1, hidden: 200}
+  - {exp_name: SL_M4_h200_s2, seed: 2, hidden: 200}
+  - {exp_name: SL_M4_h300_s0, seed: 0, hidden: 300}
+  - {exp_name: SL_M4_h300_s1, seed: 1, hidden: 300}
+  - {exp_name: SL_M4_h300_s2, seed: 2, hidden: 300}
+  - {exp_name: SL_M4_h600_s0, seed: 0, hidden: 600}
+  - {exp_name: SL_M4_h600_s1, seed: 1, hidden: 600}
+  - {exp_name: SL_M4_h600_s2, seed: 2, hidden: 600}

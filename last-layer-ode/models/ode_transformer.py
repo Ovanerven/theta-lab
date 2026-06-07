@@ -60,6 +60,8 @@ class OdeTransformer(nn.Module):
                                              # forward-time u_transform arg; both come from cfg).
                                              #   "cumsum_timesince_sqrt" → [sqrt(cumsum), log1p(t_since)] (2x cols)
                                              #   "pulse_cumsum_sqrt"     → [sqrt(pulse),  sqrt(cumsum)]    (2x cols)
+                                             #   "decay_trace"           → 3 dt-aware leaky integrators  (3x cols)
+        u_decay_taus: Optional[list] = None, # leaky-integrator τ's (s) for "decay_trace"; default fast/med/slow
         **kwargs,
     ):
         super().__init__()
@@ -106,11 +108,16 @@ class OdeTransformer(nn.Module):
         # so the lift layer's input width must be multiplied accordingly. Mirrors
         # ode_rnn's self.u_transform / self._u_preselected sizing.
         self.u_transform = str(u_transform)
-        self._u_expanding = (
-            self.u_transform == "cumsum_timesince_sqrt"
-            or self.u_transform == "pulse_cumsum_sqrt"
-        )
-        u_channel_mult = 2 if self._u_expanding else 1
+        if self.u_transform in ("cumsum_timesince_sqrt", "pulse_cumsum_sqrt"):
+            u_channel_mult = 2
+        elif self.u_transform == "decay_trace":
+            u_channel_mult = 3   # one channel per leaky-integrator τ
+        else:
+            u_channel_mult = 1
+        self._u_expanding = u_channel_mult > 1
+        # leaky-integrator time constants for "decay_trace" (sequential scan in forward)
+        _taus = list(u_decay_taus) if u_decay_taus is not None else [300.0, 3600.0, 36000.0]
+        self.register_buffer("u_decay_taus", torch.tensor(_taus, dtype=torch.float32), persistent=False)
 
         # lift_skip: collapse the 2-layer SiLU MLP to a single Linear(feat_in, hidden),
         # the analogue of GRU/LSTM's intrinsic W_ih projection. The Transformer
@@ -211,6 +218,7 @@ class OdeTransformer(nn.Module):
         u_preselected = (
             u_transform == "cumsum_timesince_sqrt"
             or u_transform == "pulse_cumsum_sqrt"
+            or u_transform == "decay_trace"
         )
         if u_preselected:
             u_base = u_seq[:, :, self.gru_u_cols] if self.gru_u_cols is not None else u_seq
@@ -218,6 +226,8 @@ class OdeTransformer(nn.Module):
                 cum    = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()        # magnitude
                 tsince = self._time_since(u_base, dt_seq)                   # recency
                 u_enc  = torch.cat([cum, tsince], dim=2)
+            elif u_transform == "decay_trace":
+                u_enc = self._decay_trace(u_base, dt_seq)                   # smooth leaky integrators (C*n_tau)
             else:  # pulse_cumsum_sqrt
                 pulse = u_base.clamp_min(1e-6).sqrt()                       # exact event timing+magnitude
                 cum   = u_base.cumsum(dim=1).clamp_min(1e-6).sqrt()         # persistent running recipe
@@ -350,6 +360,29 @@ class OdeTransformer(nn.Module):
             tsince = torch.where(event[:, k, :], torch.zeros_like(tsince), tsince)
             out[:, k, :] = tsince
         return torch.log1p(out)
+
+    def _decay_trace(self, u: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+        """dt-aware multi-timescale leaky integrators (mirrors ode_rnn._decay_trace).
+
+        For each τ: tr_k = exp(-dt_k/τ)·tr_{k-1} + u_k. The value encodes how much
+        was dosed AND how recently (decays over τ). Stacking fast→slow τ's gives a
+        smooth, bounded view: the fast trace tracks recency, the slow trace ≈ the
+        cumulative recipe. Smoother than the raw pulse (no spikes) → lower magnitude
+        instability while keeping bolus recency attendable.
+
+        u: (B,K,C), dt: (B,K)  →  (B,K, C*n_tau).  sqrt-compressed for scale.
+        """
+        B = u.shape[0]; K = u.shape[1]; C = u.shape[2]
+        n_tau = self.u_decay_taus.shape[0]
+        out = torch.zeros(B, K, C * n_tau, device=u.device, dtype=u.dtype)
+        for ti in range(n_tau):
+            tau = self.u_decay_taus[ti]
+            decay = torch.exp(-dt / tau)                  # (B,K)
+            tr = torch.zeros(B, C, device=u.device, dtype=u.dtype)
+            for k in range(K):
+                tr = decay[:, k].unsqueeze(1) * tr + u[:, k, :]
+                out[:, k, ti * C:(ti + 1) * C] = tr
+        return out.clamp_min(1e-6).sqrt()
 
     def _rk4_substeps(
         self, y: torch.Tensor, dt: torch.Tensor, theta: torch.Tensor

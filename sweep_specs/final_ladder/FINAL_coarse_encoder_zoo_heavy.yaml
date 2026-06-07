@@ -5,8 +5,14 @@
 #   mamba_ssm  ode_mamba_ssm  CUDA-only (mamba_ssm pkg); TBPTT-1
 #   mambapy    ode_mambapy    pure-PyTorch, FULL BPTT (slow eager)
 #   mamba      ode_mamba      from-scratch pure-PyTorch, FULL BPTT
-#   trans_*    ode_transformer × {cumsum, timesince, pulse, cumsum+append_time}, window-64
-# 7 arms x 3 seeds = 21 runs.
+#   trans_*    ode_transformer ATTENTION-RANGE test: pulse_cumsum_sqrt persists every bolus via its
+#              cumsum channel, so a 64-window already sees all boluses. Does full attention / abs
+#              position / time help over the window? Arms: win64 (ablation) | full | full+time |
+#              full+abspos | full+cumsum_sqrt (drops the unstable pulse channel).
+#              + fulltimesince/fulldecay (smooth recency features) + fulllr (gentler optim) directly
+#              attack the pulse magnitude-instability. Transformer arms run 1 SEED each (exploratory)
+#              — seed the winners afterward.
+# Mamba: 3 arms x 3 seeds = 9. Transformer: 8 arms x 1 seed = 8. Total = 17 runs.
 #
 # RUN SERIALIZED: --max-parallel 1. Running these concurrently on one GPU caused
 # the NVML/CUDA-allocator crash (OOM -> driver fault) in the first zoo attempt.
@@ -90,16 +96,14 @@ runs:
   - {exp_name: EZ_mamba_s0, seed: 0, model_class: ode_mamba, jit_scripting: false}
   - {exp_name: EZ_mamba_s1, seed: 1, model_class: ode_mamba, jit_scripting: false}
   - {exp_name: EZ_mamba_s2, seed: 2, model_class: ode_mamba, jit_scripting: false}
-  # ── Transformer × u-feature variants (window 64) ─────────────────────────
-  - {exp_name: EZ_trans_cumsum_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_cumsum_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_cumsum_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_timesince_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_timesince_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_timesince_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_pulse_s0, seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_pulse_s1, seed: 1, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_pulse_s2, seed: 2, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, autocast_bf16: true}
-  - {exp_name: EZ_trans_atf_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}
-  - {exp_name: EZ_trans_atf_s1, seed: 1, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}
-  - {exp_name: EZ_trans_atf_s2, seed: 2, model_class: ode_transformer, u_transform: cumsum_sqrt, append_time_feature: true, autocast_bf16: true}
+  # ── Transformer ATTENTION-RANGE test — 1 SEED EACH (exploratory; seed the winners later) ──
+  # all pulse_cumsum_sqrt unless noted; full = context_len 384 > coarse traj ~324 (grad_checkpoint)
+  - {exp_name: EZ_trans_win64_s0,    seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 64,  autocast_bf16: true}                                   # windowed ablation
+  - {exp_name: EZ_trans_full_s0,     seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 384, grad_checkpoint: true, autocast_bf16: true}            # full attention
+  - {exp_name: EZ_trans_fulltime_s0, seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 384, grad_checkpoint: true, append_time_feature: true, autocast_bf16: true}  # + abs time
+  - {exp_name: EZ_trans_fullpos_s0,  seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 384, grad_checkpoint: true, use_absolute_pos: true, autocast_bf16: true}     # + abs pos
+  - {exp_name: EZ_trans_fullcum_s0,  seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt,       context_len: 384, grad_checkpoint: true, autocast_bf16: true}            # drop unstable pulse channel
+  # ── target the magnitude-instability directly (smooth recency features + gentler optim) ──
+  - {exp_name: EZ_trans_fulltimesince_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_timesince_sqrt, context_len: 384, grad_checkpoint: true, autocast_bf16: true}    # cumsum + SMOOTH log1p(t_since): recency w/o pulse spike
+  - {exp_name: EZ_trans_fulldecay_s0,     seed: 0, model_class: ode_transformer, u_transform: decay_trace,           context_len: 384, grad_checkpoint: true, autocast_bf16: true}    # 3 leaky integrators (smoothest persistent feature)
+  - {exp_name: EZ_trans_fulllr_s0,        seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt,     context_len: 384, grad_checkpoint: true, lr: 0.0005, warmup_epochs: 15, autocast_bf16: true}  # gentler optim (transformers are LR-sensitive)

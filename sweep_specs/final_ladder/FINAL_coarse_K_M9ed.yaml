@@ -1,0 +1,92 @@
+# K-SWEEP for M9 event_dark (the NEW canonical M9: lr0.002, oxy00 / no O2 penalty).
+# Completes the sparse-θ anchor ladder for M9 — the old K-sweep used txtl_model9_dark_stable
+# (broken, lr0.0015, λ_oxy0.1); this redoes it on event_dark with the ladder-best recipe.
+#   K=1 -> one constant θ | K=2/3 -> few regimes | K=6 -> the K6 point | dense = ladder reference.
+# model_class = ode_rnn_sparse_theta, anchor_interp = piecewise (Model B2), uniform placement.
+# Held at the ladder-best M9 config: event_dark / h400 / lr0.002 / λ_oxy0 / pulse_cumsum_sqrt /
+# u_open in the encoder (col 12) / real coarse data / PLAIN loss / 200ep.
+#
+# ORDER = breadth-first over seeds: all K at seed 0, then seed 1, then seed 2.
+# 4 K × 3 seeds = 12 runs.
+#
+# Launch (mac mini):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_K_M9ed.yaml \
+#     --local --max-parallel 3 --out-root experiments_final/experiments
+
+study: FINAL_coarse_K_M9ed
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]   # M9 needs u_open (col 12)
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  model_class: ode_rnn_sparse_theta     # K-anchor sparse-θ readout
+  anchor_interp: piecewise              # Model B2 (constant between anchors)
+  scaffold: txtl_model9_event_dark
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  # M9 event_dark extras (oxy00 = no oxygen penalty, the keeper)
+  lambda_oxygen: 0.0
+  oxygen_protein_channel: 5
+  oxygen_u_open_name: u_open
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  # PLAIN loss (locked)
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  # real-only coarse
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ---------- SEED 0: full K grid ----------
+  - {exp_name: K_M9ed_k1_s0, seed: 0, n_theta_anchors: 1}
+  - {exp_name: K_M9ed_k2_s0, seed: 0, n_theta_anchors: 2}
+  - {exp_name: K_M9ed_k3_s0, seed: 0, n_theta_anchors: 3}
+  - {exp_name: K_M9ed_k6_s0, seed: 0, n_theta_anchors: 6}
+  # ---------- SEED 1 ----------
+  - {exp_name: K_M9ed_k1_s1, seed: 1, n_theta_anchors: 1}
+  - {exp_name: K_M9ed_k2_s1, seed: 1, n_theta_anchors: 2}
+  - {exp_name: K_M9ed_k3_s1, seed: 1, n_theta_anchors: 3}
+  - {exp_name: K_M9ed_k6_s1, seed: 1, n_theta_anchors: 6}
+  # ---------- SEED 2 ----------
+  - {exp_name: K_M9ed_k1_s2, seed: 2, n_theta_anchors: 1}
+  - {exp_name: K_M9ed_k2_s2, seed: 2, n_theta_anchors: 2}
+  - {exp_name: K_M9ed_k3_s2, seed: 2, n_theta_anchors: 3}
+  - {exp_name: K_M9ed_k6_s2, seed: 2, n_theta_anchors: 6}
