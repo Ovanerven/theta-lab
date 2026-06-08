@@ -84,3 +84,13 @@ runs:
   - {exp_name: SH_slstm_M5_s0, model_class: ode_slstm, seed: 0, <<: *M5}
   - {exp_name: SH_slstm_M5_s1, model_class: ode_slstm, seed: 1, <<: *M5}
   - {exp_name: SH_slstm_M5_s2, model_class: ode_slstm, seed: 2, <<: *M5}
+  # slstm seed hunt extras (same seeds as GRU+M4 for direct comparison)
+  - {exp_name: SL_M4_h200_s0, model_class: ode_slstm, seed: 0, hidden: 200}
+  - {exp_name: SL_M4_h200_s1, model_class: ode_slstm, seed: 1, hidden: 200}
+  - {exp_name: SL_M4_h200_s2, model_class: ode_slstm, seed: 2, hidden: 200}
+  - {exp_name: SL_M4_h300_s0, model_class: ode_slstm, seed: 0, hidden: 300}
+  - {exp_name: SL_M4_h300_s1, model_class: ode_slstm, seed: 1, hidden: 300}
+  - {exp_name: SL_M4_h300_s2, model_class: ode_slstm, seed: 2, hidden: 300}
+  - {exp_name: SL_M4_h600_s0, model_class: ode_slstm, seed: 0, hidden: 600}
+  - {exp_name: SL_M4_h600_s1, model_class: ode_slstm, seed: 1, hidden: 600}
+  - {exp_name: SL_M4_h600_s2, model_class: ode_slstm, seed: 2, hidden: 600}
