@@ -55,6 +55,14 @@ class OdeTransformer(nn.Module):
         max_seq_len: int = 512,
         grad_checkpoint: bool = False,
         append_time_feature: bool = False,
+        transformer_final_norm: bool = True, # final LayerNorm on the encoder output before
+                                             # the theta head. REQUIRED for Pre-LN (norm_first):
+                                             # the residual stream accumulates across layers and
+                                             # is otherwise unnormalized, so z reaches the head at
+                                             # ~25x unit scale -> head logits saturate (|raw|>>4)
+                                             # -> log_gamma pins theta at its bounds, constant
+                                             # across recipes, with dead gradients. The GRU avoids
+                                             # this only because its tanh hidden state is bounded.
         u_transform: str = "none",           # known at init to size the lift layer for
                                              # channel-EXPANDING transforms (must match the
                                              # forward-time u_transform arg; both come from cfg).
@@ -147,10 +155,14 @@ class OdeTransformer(nn.Module):
             batch_first=True,
             norm_first=True,   # Pre-LN: more stable at small batch sizes
         )
+        # Pre-LN stacks need a final LayerNorm before the head (GPT-2's ln_f, etc.);
+        # without it the unnormalized residual stream saturates the theta head.
+        final_norm = nn.LayerNorm(hidden) if bool(transformer_final_norm) else None
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
             num_layers=max(1, num_layers),
             enable_nested_tensor=False,
+            norm=final_norm,
         )
 
         head_out = self.theta_dim + self.P if use_basal else self.theta_dim

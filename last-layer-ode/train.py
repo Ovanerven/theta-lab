@@ -1313,6 +1313,11 @@ class TrainConfig:
     max_seq_len: int = 512             # embedding table size when use_absolute_pos=True
     grad_checkpoint: bool = False      # checkpoint the per-step transformer call to cut activation memory
     append_time_feature: bool = False  # append normalized cumulative time as an extra encoder input
+    transformer_final_norm: bool = True  # final LayerNorm on encoder output before the theta head.
+                                         # REQUIRED for Pre-LN: without it the residual stream is
+                                         # unnormalized (~25x scale) and saturates the theta head,
+                                         # pinning theta at its bounds. Set False only to reproduce
+                                         # the pre-fix (collapsed) transformer runs.
 
     # Mamba-specific (ignored by non-Mamba models via **kwargs)
     d_state: int = 16
@@ -1967,6 +1972,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         max_seq_len=cfg.max_seq_len,
         grad_checkpoint=cfg.grad_checkpoint,
         append_time_feature=cfg.append_time_feature,
+        transformer_final_norm=cfg.transformer_final_norm,
         theta_bounded=cfg.theta_bounded,
         d_state=cfg.d_state,
         expand=cfg.expand,

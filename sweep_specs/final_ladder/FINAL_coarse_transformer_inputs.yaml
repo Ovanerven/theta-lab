@@ -1,0 +1,103 @@
+# Transformer INPUT-TRANSFORM sweep — with the stability fix applied to EVERY arm.
+#
+# Why: the encoder-zoo-heavy transformer arms tested several input transforms
+# (pulse_cumsum_sqrt, cumsum_sqrt, cumsum_timesince_sqrt, decay_trace) but only the
+# FIRST TWO were ever run WITH transformer_final_norm=true. The smooth-recency arms
+# (timesince, decay) and the raw `none` arm collapsed because they had no final-norm
+# fix, so we cannot tell whether those features actually help the STABLE transformer.
+# This sweep holds the fix on and varies only the input transform (and lr), so the
+# comparison is clean. Best stable so far: cumsum_sqrt @ lr0.002 = 0.32, pulse @ 0.30.
+#
+# Fixed recipe = the encoder-zoo M4/h400 recipe (identical to FINAL_coarse_encoder_zoo_heavy)
+# so results sit directly next to GRU/LSTM/sLSTM/mamba. Transformer-specific: full
+# attention (context_len 384 > coarse traj ~324, grad_checkpoint), transformer_final_norm
+# on, jit off (TransformerEncoder is not scriptable).
+#
+# Single lr 0.002: the lr 5e-4 arm was only ever a PRE-fix crutch to dodge the collapse;
+# with transformer_final_norm on, lr 0.002 is stable (full_fix 0.30, fullcum_fix 0.32) and the
+# gentle 5e-4 gives no gain (0.31) while risking underfit, so it is dropped. We spend that
+# compute on a hidden-dim probe instead (the transformer underperforms at h400 — capacity?).
+#
+# 6 input transforms @ h400 + 2 capacity probes on the best-known transform = 8 arms, 1 SEED each.
+#
+# Launch (GPU box, serialized):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_transformer_inputs.yaml --local --max-parallel 1
+
+study: FINAL_coarse_transformer_inputs
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 384
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: true
+  jit_scripting: false
+  model_class: ode_transformer
+  transformer_final_norm: true
+  grad_checkpoint: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── input-transform sweep @ h400, lr 0.002, fix on (the main question) ─────
+  - {exp_name: TI_none_s0,      seed: 0, u_transform: none}
+  - {exp_name: TI_sqrt_s0,      seed: 0, u_transform: sqrt}                     # sqrt(pulse) only: compressed but still a SHARP spike (not persistent)
+  - {exp_name: TI_pulsecum_s0,  seed: 0, u_transform: pulse_cumsum_sqrt}        # known ~0.30
+  - {exp_name: TI_cum_s0,       seed: 0, u_transform: cumsum_sqrt}              # known ~0.32 (best)
+  - {exp_name: TI_timesince_s0, seed: 0, u_transform: cumsum_timesince_sqrt}    # NEW with fix
+  - {exp_name: TI_decay_s0,     seed: 0, u_transform: decay_trace}              # NEW with fix
+  # ── capacity probe on the best-known transform (cumsum_sqrt): smaller vs bigger ──
+  - {exp_name: TI_cum_h200_s0,  seed: 0, u_transform: cumsum_sqrt, hidden: 200}  # smaller: less overfit on ~700 real trajectories
+  - {exp_name: TI_cum_h600_s0,  seed: 0, u_transform: cumsum_sqrt, hidden: 600}  # bigger: does the "heavy" arch actually need more capacity?

@@ -1,0 +1,122 @@
+# M7/M8 REAL-ONLY (priority) + M4/M5 seed-hunt to 10 seeds (GRU & sLSTM).
+#
+# Fixed block = the EXACT real-only ladder recipe (verified identical across NG_plain[M4-GRU-h300],
+# EZ_slstm[M4-sLSTM-h400], HSa_M5[M5-GRU-h400]): real_only_coarsenold, no synth, no lambda_zero,
+# no source-balancing, n_substeps 3, pulse_cumsum_sqrt, h-set per run. Per-run overrides: only
+# scaffold / model_class / hidden / seed. New seeds are therefore directly comparable to the
+# existing ones.
+#
+# ── PRIORITY: M7/M8 on REAL (old+new) data ONLY, no synth, no lambda_zero_traj ──
+#   The ladder M7/M8 entries trained on the COMBINED set (use_synthetic_data + lambda_zero_traj
+#   0.005 + balance_source_sampler). This tests whether the synthetic no-go data actually helped,
+#   so the synth story can become its own section and the ladder table shows M7/M8 on real only.
+#   Run h400 AND h600 (3 seeds each) so the real-only best hidden can be re-selected, as the
+#   combined ladder did (it picked h600).
+#
+# ── THEN: seed-hunt to 10 (best setup we already have; "find a good init") ──
+#   M4-GRU h300 (have s0-3 -> +6) | M4-sLSTM h400 (have s0-2 -> +7) | M5-GRU h400 (have s0-2 -> +7)
+#   M5-sLSTM h400 (NONE yet -> +10). NOTE: M5-sLSTM was never swept for hidden; h400 is the
+#   consistent best across M4-sLSTM and M5-GRU, so we assume it. If h600 wins on M5-sLSTM later,
+#   re-seed there.
+#
+# Launch (priority first; bump --max-parallel on the box):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_m7m8_real_and_seedhunt.yaml --local --max-parallel 1
+
+study: FINAL_coarse_m7m8_real_and_seedhunt
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  nn_hidden: 256
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  lambda_zero_traj: 0.0
+  lambda_oxygen: 0.0
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+
+runs:
+  # ══ PRIORITY: M7 / M8 on REAL-only data (GRU), h400 + h600, 3 seeds each ══
+  - {exp_name: M7real_h600_s0, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 0}
+  - {exp_name: M7real_h600_s1, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 1}
+  - {exp_name: M7real_h600_s2, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 2}
+  - {exp_name: M8real_h600_s0, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 0}
+  - {exp_name: M8real_h600_s1, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 1}
+  - {exp_name: M8real_h600_s2, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 600, seed: 2}
+  - {exp_name: M7real_h400_s0, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 0}
+  - {exp_name: M7real_h400_s1, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 1}
+  - {exp_name: M7real_h400_s2, scaffold: txtl_model7_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 2}
+  - {exp_name: M8real_h400_s0, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 0}
+  - {exp_name: M8real_h400_s1, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 1}
+  - {exp_name: M8real_h400_s2, scaffold: txtl_model8_bg_fixed, model_class: ode_rnn, hidden: 400, seed: 2}
+
+  # ══ SEED-HUNT to 10: M4-GRU h300 (have s0-3, add s4-9) ══
+  - {exp_name: M4_gru_h300_s4, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 4}
+  - {exp_name: M4_gru_h300_s5, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 5}
+  - {exp_name: M4_gru_h300_s6, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 6}
+  - {exp_name: M4_gru_h300_s7, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 7}
+  - {exp_name: M4_gru_h300_s8, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 8}
+  - {exp_name: M4_gru_h300_s9, scaffold: txtl_model4_three_state, model_class: ode_rnn, hidden: 300, seed: 9}
+
+  # ══ SEED-HUNT to 10: M4-sLSTM h400 (have s0-2, add s3-9) ══
+  - {exp_name: M4_slstm_h400_s3, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 3}
+  - {exp_name: M4_slstm_h400_s4, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 4}
+  - {exp_name: M4_slstm_h400_s5, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 5}
+  - {exp_name: M4_slstm_h400_s6, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 6}
+  - {exp_name: M4_slstm_h400_s7, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 7}
+  - {exp_name: M4_slstm_h400_s8, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 8}
+  - {exp_name: M4_slstm_h400_s9, scaffold: txtl_model4_three_state, model_class: ode_slstm, hidden: 400, seed: 9}
+
+  # ══ SEED-HUNT to 10: M5-GRU h400 (have s0-2, add s3-9) ══
+  - {exp_name: M5_gru_h400_s3, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 3}
+  - {exp_name: M5_gru_h400_s4, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 4}
+  - {exp_name: M5_gru_h400_s5, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 5}
+  - {exp_name: M5_gru_h400_s6, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 6}
+  - {exp_name: M5_gru_h400_s7, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 7}
+  - {exp_name: M5_gru_h400_s8, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 8}
+  - {exp_name: M5_gru_h400_s9, scaffold: txtl_resource_and_maturation_dna, model_class: ode_rnn, hidden: 400, seed: 9}
+
+  # ══ SEED-HUNT to 10: M5-sLSTM h400 (NONE yet, add s0-9; hidden assumed = h400) ══
+  - {exp_name: M5_slstm_h400_s0, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 0}
+  - {exp_name: M5_slstm_h400_s1, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 1}
+  - {exp_name: M5_slstm_h400_s2, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 2}
+  - {exp_name: M5_slstm_h400_s3, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 3}
+  - {exp_name: M5_slstm_h400_s4, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 4}
+  - {exp_name: M5_slstm_h400_s5, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 5}
+  - {exp_name: M5_slstm_h400_s6, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 6}
+  - {exp_name: M5_slstm_h400_s7, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 7}
+  - {exp_name: M5_slstm_h400_s8, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 8}
+  - {exp_name: M5_slstm_h400_s9, scaffold: txtl_resource_and_maturation_dna, model_class: ode_slstm, hidden: 400, seed: 9}

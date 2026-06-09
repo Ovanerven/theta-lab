@@ -1,0 +1,97 @@
+# Transformer RE-RUN with the final-LayerNorm fix.
+#
+# Diagnosis of the broken zoo transformers (all R2<0): NOT an attention problem
+# (attention attends to boluses ~10x over chance). The encoder was a Pre-LN stack
+# (norm_first=True) with NO final LayerNorm, so the residual stream reached the theta
+# head at ~25x unit scale (L2~500). head logits saturated (98% with |raw|>4), so
+# log_gamma pinned 4/5 theta params at their bounds, constant across recipes, with
+# dead gradients -> train loss stuck at ~0.66 (GRU M4 reaches 0.069). The GRU avoids
+# this only because its tanh hidden state is bounded.
+#
+# Fix: transformer_final_norm: true (now the default) adds nn.LayerNorm on the encoder
+# output before the theta head (GPT-2's ln_f). This is the ONLY change vs the broken
+# arms below — same base_config + fixed block as FINAL_coarse_encoder_zoo_heavy.yaml.
+#
+# 3 arms (re-using the broken arms' names + "_fix" so before/after is direct):
+#   1. trans_full_fix     — flagship: full attention, pulse_cumsum_sqrt (vs EZ_trans_full_s0)
+#   2. trans_fullcum_fix  — cleanest feature: cumsum_sqrt, no pulse spike (vs EZ_trans_fullcum_s0)
+#   3. trans_full_lr_fix  — hedge: same as #1 but gentler optim (lr 5e-4, warmup 15),
+#                           in case high LR (0.002) is now the next bottleneck.
+#
+# Launch (serialized — concurrent transformers OOM'd the GPU before):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_encoder_zoo_transfix.yaml --local --max-parallel 1
+
+study: FINAL_coarse_encoder_zoo_transfix
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: false        # nn.TransformerEncoder is not scriptable
+  transformer_final_norm: true  # <-- THE FIX
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: EZ_trans_full_fix_s0,    seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 384, grad_checkpoint: true, autocast_bf16: true}
+  - {exp_name: EZ_trans_fullcum_fix_s0, seed: 0, model_class: ode_transformer, u_transform: cumsum_sqrt,       context_len: 384, grad_checkpoint: true, autocast_bf16: true}
+  - {exp_name: EZ_trans_full_lr_fix_s0, seed: 0, model_class: ode_transformer, u_transform: pulse_cumsum_sqrt, context_len: 384, grad_checkpoint: true, autocast_bf16: true, lr: 0.0005, warmup_epochs: 15}
+  # ── mamba_ssm re-run (failed in the heavy sweep: wrong env; mamba_ssm is CUDA-only).
+  #    Identical to the heavy-sweep arms (context_len 64, pulse_cumsum_sqrt from fixed). Needs CUDA env. ──
+  - {exp_name: EZ_mambassm_s0, seed: 0, model_class: ode_mamba_ssm}
+  - {exp_name: EZ_mambassm_s1, seed: 1, model_class: ode_mamba_ssm}
+  - {exp_name: EZ_mambassm_s2, seed: 2, model_class: ode_mamba_ssm}
