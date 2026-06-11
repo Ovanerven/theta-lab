@@ -4,18 +4,16 @@
 # pin_theta collapses each theta entry's (lo, hi) box to a single point, so
 # log_gamma returns that constant and its gradient is ~0 — theta is a fixed
 # physical constant while u_to_y_jump and the correction MLP keep training.
-# The 6 M4 rate constants are [lam, VTXmax, kdm, VTLmax, kmt, kmatm] (theta_dim=6).
+# The 5 M4 rate constants are [v_TX, v_TL, k_M, k_mat, k_degp] (theta_dim=5).
 #
 # Thin clone of FINAL_coarse_node_baselines_h600.yaml: identical fixed block,
 # only the NODE_corr arm kept, only pin_theta added. Apples-to-apples vs the
 # jointly-fit NODE_corr_h600_s* rungs. Uses the SAME stage-1 theta as the h400
 # stage-2 sweep (theta fit is capacity-independent).
 #
-#  >>> FILL IN pin_theta BEFORE LAUNCHING <<<
-#  Run stage 1, then:
-#    python scripts/extract_fixed_theta.py experiments/FINAL_coarse_node_corr_stage1_fixedtheta
-#  paste the emitted dict into every run below. Placeholder values are the
-#  geometric box-midpoints (raw_theta=0) — REPLACE THEM.
+# pin_theta below is the stage-1 global fit (FIXEDTHETA_s0, best val 0.58053);
+# the 3 stage-1 seeds were near-identical so seed choice barely matters. To
+# regenerate: python scripts/extract_fixed_theta.py experiments/FINAL_coarse_node_corr_stage1_fixedtheta
 #
 # Launch:
 #   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_node_corr_stage2_pintheta_h600.yaml --local --max-parallel 1
@@ -71,8 +69,8 @@ fixed:
   loss_normalizer_channels: 3
   loss_clamp_min: 1.0
   source_loss_weights: {new: 1.0, old: 1.0}
-  # PLACEHOLDER — replace with stage-1 extracted theta (same value for all seeds).
-  pin_theta: {0: 2.236e-05, 1: 1.897e-03, 2: 3.162e-04, 3: 1.549e-03, 4: 5.916e-05, 5: 4.183e-04}
+  # Stage-1 global theta — FIXEDTHETA_s0 (best val). Frozen; trains only the correction.
+  pin_theta: {0: 0.0009142, 1: 0.0005488, 2: 0.0001519, 3: 3.521e-05, 4: 6.506e-05}
 
 runs:
   - {exp_name: NODE_corr_pin_h600_s0, seed: 0, model_class: neural_ode_correction}
