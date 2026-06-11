@@ -1367,6 +1367,7 @@ class TrainConfig:
     theta_head_transform: str = "log_gamma"  # "log_gamma" | "gamma"
     theta_head_tau: float = 1.0           # log_gamma sigmoid temperature (Bob: 2.3)
     u_transform: str = "none"             # forward-time u feature transform ("none" | "sqrt" | "cumsum" | …)
+    u_decay_taus: Optional[list] = None   # leaky-integrator τ's (s) for u_transform="decay_trace"; None → model default [300, 3600, 36000]
     y_transform: str = "none"             # forward-time y feature transform ("none" | "sqrt_clamp1" | "log1p" | …)
 
     grad_clip: float = 1.0
@@ -2001,6 +2002,7 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         # layer; ode_rnn reads self.u_transform in forward. Other models ignore
         # it (absorbed by **kwargs) and use the forward-time u_transform arg.
         u_transform=cfg.u_transform,
+        u_decay_taus=cfg.u_decay_taus,
         rk4_residual=cfg.rk4_residual,
         rk4_residual_hidden=cfg.rk4_residual_hidden,
         rk4_residual_layers=cfg.rk4_residual_layers,

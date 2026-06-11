@@ -1,0 +1,78 @@
+# STAGE 1 of the two-stage NODE_corr fit — fit ONE global theta to all
+# trajectories with NO neural correction (model_class: ode_fixed_theta).
+#
+# Rationale: in the joint UDE fit (FINAL_coarse_node_baselines_h{400,600}.yaml)
+# the single global theta has to serve the mechanism AND compete with the neural
+# correction for the same residual. That is the unfair pressure we remove here:
+# we first let the bare M4 mechanism claim its best global theta on the cell-free
+# data, then (stage 2) freeze that theta via pin_theta and retrain ONLY the
+# correction on what the mechanism leaves behind.
+#
+# This sweep is CAPACITY-INDEPENDENT: ode_fixed_theta has no neural term, so the
+# nn_hidden / hidden fields below are inert. ONE stage-1 run therefore feeds BOTH
+# the h400 and h600 stage-2 sweeps. Everything else (dataset, split, loss, obs,
+# n_substeps, scaffold, theta bounds) is copied verbatim from the baseline so the
+# theta is fit under identical conditions.
+#
+# Workflow:
+#   1. python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_node_corr_stage1_fixedtheta.yaml --local --max-parallel 1
+#   2. python scripts/extract_fixed_theta.py experiments/FINAL_coarse_node_corr_stage1_fixedtheta
+#      -> prints physical theta per seed + a ready-to-paste `pin_theta:` line
+#   3. paste pin_theta into the stage-2 specs and launch those.
+
+study: FINAL_coarse_node_corr_stage1_fixedtheta
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400          # inert for ode_fixed_theta (no encoder)
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  nn_hidden: 400       # inert for ode_fixed_theta (no correction MLP)
+  nn_layers: 2
+  theta_lo: 1.0e-06
+  theta_hi: 2.0
+  theta_head_tau: 2.3
+  encoder_use_log_dt: true
+  u_transform: cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: FIXEDTHETA_s0, seed: 0, model_class: ode_fixed_theta}
+  - {exp_name: FIXEDTHETA_s1, seed: 1, model_class: ode_fixed_theta}
+  - {exp_name: FIXEDTHETA_s2, seed: 2, model_class: ode_fixed_theta}

@@ -1,0 +1,79 @@
+# STAGE 2 (hidden=400) of the two-stage NODE_corr fit — retrain ONLY the neural
+# correction with the global theta FROZEN at the stage-1 mechanism-only fit.
+#
+# pin_theta collapses each theta entry's (lo, hi) box to a single point, so
+# log_gamma returns that constant and its gradient is ~0 — theta is a fixed
+# physical constant while u_to_y_jump and the correction MLP keep training.
+# The 6 M4 rate constants are [lam, VTXmax, kdm, VTLmax, kmt, kmatm] (theta_dim=6).
+#
+# Thin clone of FINAL_coarse_node_baselines_h400.yaml: identical fixed block,
+# only the NODE_corr arm kept, only pin_theta added. Apples-to-apples vs the
+# jointly-fit NODE_corr_h400_s* rungs.
+#
+#  >>> FILL IN pin_theta BEFORE LAUNCHING <<<
+#  Run stage 1, then:
+#    python scripts/extract_fixed_theta.py experiments/FINAL_coarse_node_corr_stage1_fixedtheta
+#  paste the emitted dict into every run below. Placeholder values are the
+#  geometric box-midpoints (raw_theta=0) — REPLACE THEM.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_node_corr_stage2_pintheta_h400.yaml --local --max-parallel 1
+
+study: FINAL_coarse_node_corr_stage2_pintheta_h400
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  nn_hidden: 400
+  nn_layers: 2
+  theta_lo: 1.0e-06
+  theta_hi: 2.0
+  theta_head_tau: 2.3
+  encoder_use_log_dt: true
+  u_transform: cumsum_sqrt
+  y_transform: sqrt_clamp1
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+  # PLACEHOLDER — replace with stage-1 extracted theta (same value for all seeds).
+  pin_theta: {0: 2.236e-05, 1: 1.897e-03, 2: 3.162e-04, 3: 1.549e-03, 4: 5.916e-05, 5: 4.183e-04}
+
+runs:
+  - {exp_name: NODE_corr_pin_h400_s0, seed: 0, model_class: neural_ode_correction}
+  - {exp_name: NODE_corr_pin_h400_s1, seed: 1, model_class: neural_ode_correction}
+  - {exp_name: NODE_corr_pin_h400_s2, seed: 2, model_class: neural_ode_correction}

@@ -1,0 +1,114 @@
+# Transformer input-transform FOLLOW-UP: replicate the winners + capacity + τ probe.
+#
+# Why: FINAL_coarse_transformer_inputs ran 1 SEED per input transform. The decay_trace
+# lead (final 0.399) over pulse_cumsum_sqrt (0.352) is SMALLER than the seed-to-seed
+# noise we measured in the seedhunt (protein_final swings 0.28–0.65 across seeds of the
+# SAME config), so the ranking is not yet trustworthy. Before tuning anything further we
+# replicate the top two transforms at 3 fresh seeds each (4 total with the existing s0).
+#
+# Four questions, all holding the fix on (transformer_final_norm=true) and the encoder-zoo
+# M4/h400 recipe fixed — identical to FINAL_coarse_transformer_inputs so results sit
+# directly next to the originals:
+#   (A) decay_trace replication      — seeds 1,2,3 @ h400 (does the 0.399 lead survive?)
+#   (B) pulse_cumsum_sqrt replication — seeds 1,2,3 @ h400 (the runner-up)
+#   (C) decay_trace @ h600           — seeds 0,1,2 (best encoding + the capacity that
+#                                       helped new-tube transfer for cumsum_sqrt; shot at
+#                                       being the first transformer to break 0.45)
+#   (D) decay_trace fast-τ @ h400    — seeds 0,1,2, u_decay_taus=[120,1200,7200] vs the
+#                                       default [300,3600,36000]. Traj run ~hours, so the
+#                                       10h slow integrator may be wasted; this tests
+#                                       whether recency resolution beats the near-cumulative
+#                                       slow channel. (sqrt dropped — strictly worse last run.)
+#
+# u_decay_taus is now plumbed through train.py (cfg.u_decay_taus → OdeTransformer);
+# None falls back to the model default [300, 3600, 36000].
+#
+# 12 arms, ~3.3 h each on the GPU box serialized ≈ 40 h wall. Trim seeds if needed.
+#
+# Launch (GPU box, serialized):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_transformer_decay_replicate.yaml --local --max-parallel 1
+
+study: FINAL_coarse_transformer_decay_replicate
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: decay_trace
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 384
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: true
+  jit_scripting: false
+  model_class: ode_transformer
+  transformer_final_norm: true
+  grad_checkpoint: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  # ── (A) decay_trace replication @ h400, default τ (s0 already exists = 0.399) ──
+  - {exp_name: TR_decay_s1, seed: 1, u_transform: decay_trace}
+  - {exp_name: TR_decay_s2, seed: 2, u_transform: decay_trace}
+  - {exp_name: TR_decay_s3, seed: 3, u_transform: decay_trace}
+  # ── (B) pulse_cumsum_sqrt replication @ h400 (runner-up; s0 exists = 0.352) ──
+  - {exp_name: TR_pulse_s1, seed: 1, u_transform: pulse_cumsum_sqrt}
+  - {exp_name: TR_pulse_s2, seed: 2, u_transform: pulse_cumsum_sqrt}
+  - {exp_name: TR_pulse_s3, seed: 3, u_transform: pulse_cumsum_sqrt}
+  # ── (C) decay_trace + h600 capacity (best encoding + new-tube capacity) ──
+  - {exp_name: TR_decay_h600_s0, seed: 0, u_transform: decay_trace, hidden: 600}
+  - {exp_name: TR_decay_h600_s1, seed: 1, u_transform: decay_trace, hidden: 600}
+  - {exp_name: TR_decay_h600_s2, seed: 2, u_transform: decay_trace, hidden: 600}
+  # ── (D) decay_trace fast-τ @ h400 ([120,1200,7200]s vs default [300,3600,36000]) ──
+  - {exp_name: TR_decay_fastau_s0, seed: 0, u_transform: decay_trace, u_decay_taus: [120, 1200, 7200]}
+  - {exp_name: TR_decay_fastau_s1, seed: 1, u_transform: decay_trace, u_decay_taus: [120, 1200, 7200]}
+  - {exp_name: TR_decay_fastau_s2, seed: 2, u_transform: decay_trace, u_decay_taus: [120, 1200, 7200]}
