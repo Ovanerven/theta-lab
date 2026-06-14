@@ -1,0 +1,88 @@
+# L_zero (lambda_zero_traj) ablation for M4 + M5 — 4 runs.
+#
+# Question: does the synthetic no-go boundary loss (lambda_zero_traj) — which
+# penalises predicted (mm, pm) toward zero on synthetic no-go experiments
+# (z_expr == 0) — help the two best mechanistic scaffolds from the FINAL ladder
+# when they are trained on the combined real+synth dataset?
+#
+# Each cell reuses the EXACT FINAL-ladder dense-combined recipe for M4/M5
+# (txtl_ladder_native_combined.yaml: D-recipe loss, combined dataset, seed 0).
+# The only thing that changes within a model pair is lambda_zero_traj.
+#
+# Best-from-ladder cells being mirrored (lambda_zero_traj OFF = existing FINAL):
+#   M4_drecipe_s0 → scaffold txtl_model4_three_state
+#   M5_drecipe_s0 → scaffold txtl_resource_and_maturation_dna
+#
+# L_zero ON uses 0.005, matching the canonical M7 no-go penalty value.
+#
+# Outcome interpretation (vs the OFF arm = the FINAL ladder number):
+#   ΔR²p < 0.02   → L_zero does not help this scaffold; keep FINAL recipe as-is.
+#   ΔR²p ≥ 0.02   → the no-go penalty helps; consider adopting for M4/M5.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_m4_m5_lzero_ablation.yaml \
+#     --local --max-parallel 1 --out-root experiments_final/experiments
+# Outputs land in: experiments_final/experiments/FINAL_m4_m5_lzero_ablation/
+
+study: FINAL_m4_m5_lzero_ablation
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_a100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 100
+  endpoint_r2: true
+  obs_idx: [3, 5]
+  warmup_epochs: 5
+  hidden: 600
+  dataset_path: datasets/cell-free/txtl_native_combined.npz
+  use_synthetic_data: true
+  val_n: 125
+  test_n: 125
+  stratify_z_expr: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  balance_source_sampler: true                 # upweights NEW/OLD vs synth bulk
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  encoder_use_log_dt: true
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]   # combined: skip is_new(12) and u_open(13)
+  plot_extra_new_samples: 5
+  ckpt_every: 0
+  y0_theta_init: false
+  model_class: ode_rnn
+
+  # ── d-recipe loss (the FINAL-ladder recipe; applied to every run) ──────────
+  use_ivtt_mse_loss: false
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+  lambda_endpoint: 0.1
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+
+runs:
+  # ── M4 three-state ─────────────────────────────────────────────────────────
+  - exp_name: M4_drecipe_noLzero_s0      # = existing FINAL M4_drecipe_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    lambda_zero_traj: 0.0
+  - exp_name: M4_drecipe_Lzero_s0
+    scaffold: txtl_model4_three_state
+    seed: 0
+    lambda_zero_traj: 0.005
+
+  # ── M5 seven-state (resource + maturation) ─────────────────────────────────
+  - exp_name: M5_drecipe_noLzero_s0      # = existing FINAL M5_drecipe_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    lambda_zero_traj: 0.0
+  - exp_name: M5_drecipe_Lzero_s0
+    scaffold: txtl_resource_and_maturation_dna
+    seed: 0
+    lambda_zero_traj: 0.005

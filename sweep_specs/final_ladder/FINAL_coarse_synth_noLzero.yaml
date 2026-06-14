@@ -1,0 +1,90 @@
+# SYNTH WITHOUT the no-go loss (L_zero off) — the missing column of the synth-data ablation.
+#
+# For the "does adding synthetic no-go data help?" subsection we need three conditions per scaffold:
+#   real-only            (no synth)                 -> have (ladder M3-M5, m7m8_real for M7/M8)
+#   synth + L_zero        (lambda_zero_traj=0.005)   -> have (ladder M7/M8; m4m5_synth for M4/M5)
+#   synth, NO L_zero      (lambda_zero_traj=0.0)     -> THIS SWEEP (was missing on the matched recipe)
+#
+# Why this sweep: the only existing no-L_zero runs (FINAL_m4_m5_lzero_ablation) are on the WRONG grid
+# (txtl_native_combined.npz, not _coarsenold), wrong hidden (h600), 1 seed, M4 only — not comparable.
+# And M7/M8 no-L_zero never ran at all. This isolates whether the synthetic data helps via the data
+# itself vs via the zero-trajectory loss that penalises predicting protein on the no-go recipes.
+#
+# Recipe = the m4m5_synth recipe EXACTLY (combined_coarsenold / synth on / balance on / test_real_only
+# / pulse_cumsum_sqrt / nsub3). Hidden per scaffold = its selected ladder size (M4 h300, M5 h400,
+# M7 h600, M8 h600), so each condition is at the same capacity.
+#
+# Two blocks (15 runs total):
+#   A. synth, NO L_zero (lambda_zero_traj=0.0): M4/M5/M7/M8 x 3 seeds = 12  (the missing column)
+#   B. synth, WITH L_zero (lambda_zero_traj=0.005): M5 ONLY x 3 seeds = 3
+#      (m4m5_synth finished M4 +L_zero [s0-2] but only got M5 s0, incomplete -> fill M5 here).
+# NOT re-run: M4 +L_zero (done in m4m5_synth) and M7/M8 +L_zero (the combined ladder runs) — synth
+# training is slow, so we only run what is genuinely missing.
+#
+# Launch (overnight):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_coarse_synth_noLzero.yaml --local --max-parallel 2 --out-root experiments_final
+
+study: FINAL_coarse_synth_ablation_fill
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  nn_hidden: 256
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  model_class: ode_rnn
+  dataset_path: datasets/cell-free/txtl_native_combined_coarsenold.npz
+  use_synthetic_data: true
+  balance_source_sampler: true
+  test_real_only: true
+  lambda_zero_traj: 0.0          # the ablation: synth data present, no-go loss OFF
+  lambda_oxygen: 0.0
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: M4_synthNoLz_s0, scaffold: txtl_model4_three_state,          hidden: 300, seed: 0}
+  - {exp_name: M4_synthNoLz_s1, scaffold: txtl_model4_three_state,          hidden: 300, seed: 1}
+  - {exp_name: M4_synthNoLz_s2, scaffold: txtl_model4_three_state,          hidden: 300, seed: 2}
+  - {exp_name: M5_synthNoLz_s0, scaffold: txtl_resource_and_maturation_dna, hidden: 400, seed: 0}
+  - {exp_name: M5_synthNoLz_s1, scaffold: txtl_resource_and_maturation_dna, hidden: 400, seed: 1}
+  - {exp_name: M5_synthNoLz_s2, scaffold: txtl_resource_and_maturation_dna, hidden: 400, seed: 2}
+  - {exp_name: M7_synthNoLz_s0, scaffold: txtl_model7_bg_fixed,             hidden: 600, seed: 0}
+  - {exp_name: M7_synthNoLz_s1, scaffold: txtl_model7_bg_fixed,             hidden: 600, seed: 1}
+  - {exp_name: M7_synthNoLz_s2, scaffold: txtl_model7_bg_fixed,             hidden: 600, seed: 2}
+  - {exp_name: M8_synthNoLz_s0, scaffold: txtl_model8_bg_fixed,             hidden: 600, seed: 0}
+  - {exp_name: M8_synthNoLz_s1, scaffold: txtl_model8_bg_fixed,             hidden: 600, seed: 1}
+  - {exp_name: M8_synthNoLz_s2, scaffold: txtl_model8_bg_fixed,             hidden: 600, seed: 2}
+  # ── Block B: M5 synth WITH L_zero (lambda 0.005) — completes the +L_zero M5 column ──
