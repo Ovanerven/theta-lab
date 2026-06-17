@@ -1,0 +1,2 @@
+scaffold,label,P,theta_dim,N,trajR2_mRNA,trajR2_protein,nrmse_mRNA,nrmse_protein,endpointR2_mRNA,endpointR2_protein
+txtl_model7_bg_fixed,M7,12,17,24,0.9459,0.9975,0.0469,0.0148,0.9870,0.9582

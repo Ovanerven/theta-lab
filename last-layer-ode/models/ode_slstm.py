@@ -251,6 +251,27 @@ class OdesLSTM(nn.Module):
             raise ValueError(f"u_to_y_jump must be (U,P)=({self.U},{self.P}), got {tuple(u_to_y_jump.shape)}")
         self.register_buffer("u_to_y_jump", u_to_y_jump.float(), persistent=True)
 
+        # UDE neural residual g(y) added to the mechanistic RHS (port of ode_rnn.py
+        # idea #1). Only USED when self.rk4_residual is True; the MLP is always
+        # built so jit-scripting can resolve the attribute. Final layer zero-init
+        # so training starts equivalent to the pure mechanistic model.
+        self.rk4_residual = bool(kwargs.get("rk4_residual", False))
+        _res_hidden = int(kwargs.get("rk4_residual_hidden", 64))
+        _res_layers = int(kwargs.get("rk4_residual_layers", 2))
+        res_layers: list = [nn.Linear(self.P, _res_hidden), nn.SiLU()]
+        for _ in range(_res_layers - 1):
+            res_layers += [nn.Linear(_res_hidden, _res_hidden), nn.SiLU()]
+        res_layers.append(nn.Linear(_res_hidden, self.P))
+        nn.init.zeros_(res_layers[-1].weight)
+        nn.init.zeros_(res_layers[-1].bias)
+        self.rk4_residual_mlp = nn.Sequential(*res_layers)
+        # Bounded-residual stabiliser: g(y)=scale·tanh(MLP(y)). On the coarse old
+        # grid (dt up to ~1e5 s) an unbounded additive flux explodes under RK4;
+        # tanh caps the direction and the small learnable scale keeps the per-step
+        # flux comparable to the kinetic rates (~1e-3). scale starts tiny.
+        self._res_tanh = bool(kwargs.get("rk4_residual_tanh", False))
+        self.res_scale = nn.Parameter(torch.tensor(float(kwargs.get("rk4_residual_scale", 1e-3))))
+
         # y0 MLP: encodes the initial observation y0 into a per-sample logit bias
         # added to the head output at every timestep. Zero-init output so the
         # model starts equivalent to baseline (no contribution from y0_mlp at
@@ -377,6 +398,9 @@ class OdesLSTM(nn.Module):
                     theta_k = F.softplus(raw)
                 if self._analytic_scaffold:
                     y = self.rhs.analytic_step(y_prev, dt_k, theta_k, analytic_ctx)
+                elif self.rk4_residual:
+                    y = y_prev + (u_k @ self.u_to_y_jump)
+                    y = self._rk4_substeps_residual(y, dt_k, theta_k)
                 else:
                     y = y_prev + (u_k @ self.u_to_y_jump)
                     y = self._rk4_substeps(y, dt_k, theta_k)
@@ -397,6 +421,30 @@ class OdesLSTM(nn.Module):
             k2 = rhs(y + 0.5 * hdt * k1, theta)
             k3 = rhs(y + 0.5 * hdt * k2, theta)
             k4 = rhs(y + hdt * k3, theta)
+            y = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+            y = y.clamp(0.0, 1e5)
+        return y
+
+    def _gres(self, y):
+        # Neural residual flux. Bounded form (tanh·scale) when enabled, else raw.
+        if self._res_tanh:
+            return self.res_scale * torch.tanh(self.rk4_residual_mlp(y))
+        return self.rk4_residual_mlp(y)
+
+    def _rk4_substeps_residual(self, y, dt, theta):
+        # RHS = mechanism(theta) + g(y), g re-evaluated at each RK4 stage (UDE form).
+        rhs = self.rhs
+        n_sub = self.n_substeps
+        dt = dt.unsqueeze(1)
+        hdt = dt / float(n_sub)
+        for _ in range(n_sub):
+            k1 = rhs(y, theta) + self._gres(y)
+            y2 = y + 0.5 * hdt * k1
+            k2 = rhs(y2, theta) + self._gres(y2)
+            y3 = y + 0.5 * hdt * k2
+            k3 = rhs(y3, theta) + self._gres(y3)
+            y4 = y + hdt * k3
+            k4 = rhs(y4, theta) + self._gres(y4)
             y = y + (hdt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             y = y.clamp(0.0, 1e5)
         return y

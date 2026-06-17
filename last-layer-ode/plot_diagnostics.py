@@ -294,6 +294,16 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
         theta_head_tau=float(cfg.get("theta_head_tau", 1.0)),
         y0_theta_init=bool(cfg.get("y0_theta_init", False)),
 
+        # Neural-residual (UDE) knobs — without these the rebuilt model runs the
+        # PURE mechanistic RHS (rk4_residual defaults False) and the eval ignores
+        # the trained residual entirely → wrong R². Width/depth must match for the
+        # state_dict to load; tanh/scale must match for the forward to be correct.
+        rk4_residual=bool(cfg.get("rk4_residual", False)),
+        rk4_residual_hidden=int(cfg.get("rk4_residual_hidden", 64)),
+        rk4_residual_layers=int(cfg.get("rk4_residual_layers", 2)),
+        rk4_residual_tanh=bool(cfg.get("rk4_residual_tanh", False)),
+        rk4_residual_scale=float(cfg.get("rk4_residual_scale", 1e-3)),
+
         # Sparse-θ knobs. K doesn't affect parameter shapes (only the anchor
         # mask), so checkpoint loading succeeds regardless — but the rollout
         # used to generate plots would fire at the wrong anchors if these were
@@ -319,6 +329,13 @@ def rebuild_model_from_experiment(exp_dir: Path, device: torch.device, ckpt_path
 
         # --- NEW ADDITIONS TO SYNC WITH TRAIN.PY ---
         tf_group_size=int(cfg.get("tf_group_size", 32)),
+        # Infer final-norm from the checkpoint, not config: older transformer runs
+        # were trained without it and don't record the flag, so a config default of
+        # True would rebuild an extra LayerNorm with RANDOM weights and corrupt eval.
+        transformer_final_norm=any(
+            k.startswith("transformer.norm.")
+            for k in ckpt.get("state_dict", ckpt)
+        ),
         ar_gap=int(cfg.get("ar_gap", 4)),
         use_absolute_pos=bool(cfg.get("use_absolute_pos", False)),
         max_seq_len=int(cfg.get("max_seq_len", 512)),

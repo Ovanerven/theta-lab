@@ -966,6 +966,52 @@ class TXTLModel4_ThreeStateScaffold(MechanisticScaffold):
         return torch.stack((dM, dP_imm, dP_fluor, dDNA), dim=-1)
 
 
+class TXTLModel4_ThreeStateFluorLossScaffold(MechanisticScaffold):
+    """
+    M4 three-state ODE + a loss term on the OBSERVED fluorescent protein.
+
+        dM/dt        = v_TX * DNA - k_M * M
+        dP_imm/dt    = v_TL * M   - (k_mat + k_degp) * P_imm
+        dP_fluor/dt  = k_mat * P_imm - k_loss * P_fluor        # ← new term
+
+    Motivation (oracle-vs-learned θ diagnostic): in plain M4, dP_fluor = k_mat*P_imm
+    is non-negative, so the observed protein can only ever RISE — M4 cannot represent
+    the plateau/decline real CFPS traces show (GFP photobleaching, resource
+    depletion). k_degp acts on the *unobserved* P_imm and is unidentifiable; moving a
+    loss term onto the *observed* P_fluor (k_loss) makes the decay identifiable and
+    lets protein be non-monotonic.
+
+    States (4): M, P_imm, P_fluor, DNA
+    theta (6): v_TX, v_TL, k_M, k_mat, k_degp, k_loss
+    Observed indices: [0, 2]   (M, P_fluor)
+    """
+    def __init__(self):
+        super().__init__(P=4, theta_dim=6)
+        self.state_names = ["M", "P_imm", "P_fluor", "DNA"]
+        # First 5 bounds identical to canonical M4; k_loss is a slow loss rate on
+        # the fluorescent protein (photobleaching/dilution scale).
+        self.theta_lo_vec = [3e-5, 3e-5, 1e-5, 1e-5, 1e-7, 1e-7]
+        self.theta_hi_vec = [1.2e-1, 8e-2, 1e-2, 3.5e-4, 1e-3, 1e-3]
+        self.obs_state_idx = [0, 2]
+        self.control_state_map = {"DNA c": 3}
+
+    def forward(self, y: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        M, P_imm, P_fluor, DNA = y.unbind(dim=-1)
+        v_TX, v_TL, k_M, k_mat, k_degp, k_loss = theta.unbind(dim=-1)
+
+        M_p       = torch.clamp_min(M,       0.0)
+        P_imm_p   = torch.clamp_min(P_imm,   0.0)
+        P_fluor_p = torch.clamp_min(P_fluor, 0.0)
+        DNA_p     = torch.clamp_min(DNA,     0.0)
+
+        dM       = v_TX * DNA_p - k_M * M_p
+        dP_imm   = v_TL * M_p   - (k_mat + k_degp) * P_imm_p
+        dP_fluor = k_mat * P_imm_p - k_loss * P_fluor_p
+        dDNA     = torch.zeros_like(DNA)
+
+        return torch.stack((dM, dP_imm, dP_fluor, dDNA), dim=-1)
+
+
 class TXTLModel7_BoundaryGatedScaffold(MechanisticScaffold):
     """
     Model 7 (boundary-aware no-expression model) from new_scaffolds.tex.
@@ -3468,6 +3514,7 @@ SCAFFOLDS: dict[str, MechanisticScaffold] = {
     # ═══════════════════════════════════════════════════════════════════════
     "txtl_model3_two_state":        TXTLModel3_TwoStateScaffold(),     # ← canonical M3
     "txtl_model4_three_state":      TXTLModel4_ThreeStateScaffold(),   # ← canonical M4
+    "txtl_model4_three_state_fluorloss": TXTLModel4_ThreeStateFluorLossScaffold(),  # M4 + observed-protein loss term
     "txtl_model7_boundary_gated":   TXTLModel7_BoundaryGatedScaffold(),# INVALID (zero-gate collapse)
     "txtl_model7_kfix":             TXTLModel7_KBoundsFixed(),         # ablation: K bounds only
     "txtl_model7_fixed":            TXTLModel7_FullFixed(),            # INVALID (zero-gate collapse)

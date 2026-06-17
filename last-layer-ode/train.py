@@ -1257,6 +1257,10 @@ class TrainConfig:
     weight_decay: float = 0.0
     warmup_epochs: int = 0  # linear LR warmup; 0 disables
     cosine_decay: bool = False  # cosine decay from lr to lr*cosine_decay_min after warmup
+    warm_restarts: bool = False  # SGDR: cosine annealing with warm restarts (periodic LR spikes to escape local optima)
+    restart_period: int = 40     # T_0 — epochs to first restart; cycle length doubles each restart (T_mult=2)
+    swa: bool = False            # Stochastic Weight Averaging: average weights over the tail epochs (flat-minima seeker)
+    swa_start_frac: float = 0.5  # begin averaging after this fraction of epochs (constant-LR tail = canonical SWA)
     val_n: int = 100   # fixed count for validation set
     test_n: int = 100  # fixed count for held-out test set
     # If set, load test indices from this .npy file (overrides random/stratified
@@ -1393,6 +1397,8 @@ class TrainConfig:
     rk4_residual: bool = False
     rk4_residual_hidden: int = 64
     rk4_residual_layers: int = 2
+    rk4_residual_tanh: bool = False        # bounded residual g=scale·tanh(MLP); stabilises coarse-grid (ode_slstm)
+    rk4_residual_scale: float = 1e-3       # initial learnable magnitude of the bounded residual
 
     # If set (e.g. [0, 12]), supervise loss/TF only on those species indices.
     # If null/None, supervises all observed species (default behaviour).
@@ -1507,6 +1513,12 @@ class TrainConfig:
     # without editing scaffolds.py.  Example (M8 K-bounds sweep):
     #   theta_hi_override: {6: 0.1, 7: 0.1, 8: 0.1, 9: 0.1, 10: 0.1, 11: 0.1}
     theta_hi_override: dict[int, float] | None = None
+
+    # Symmetric lower-bound override. Dict of {theta_idx: new_lo}. Raises a
+    # parameter's floor without collapsing it (unlike pin_theta), so the readout
+    # keeps its per-sample range above the new floor. Example: lift k_degp off
+    # the scaffold floor toward the oracle median to test protein identifiability.
+    theta_lo_override: dict[int, float] | None = None
 
     # K-anchor sparse-θ readout (tex Models B2/B3). When using model_class
     # "ode_rnn_sparse_theta", set n_theta_anchors (typical 1, 3, or 6). None =
@@ -1888,6 +1900,28 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             scaffold.theta_hi_vec = hi_vec
             print(f"theta_hi_override: updated θ hi bounds at indices {sorted(cfg.theta_hi_override)}")
 
+        if cfg.theta_lo_override:
+            if not (cfg.pin_theta or cfg.theta_hi_override):  # vectors not yet copied
+                lo_vec = list(scaffold.theta_lo_vec) if scaffold.theta_lo_vec is not None \
+                    else [float(cfg.theta_lo)] * scaffold.theta_dim
+                hi_vec = list(scaffold.theta_hi_vec) if scaffold.theta_hi_vec is not None \
+                    else [float(cfg.theta_hi)] * scaffold.theta_dim
+            for k, v in cfg.theta_lo_override.items():
+                idx = int(k)
+                if not (0 <= idx < scaffold.theta_dim):
+                    raise ValueError(
+                        f"theta_lo_override index {idx} out of range for scaffold "
+                        f"'{cfg.scaffold}' (theta_dim={scaffold.theta_dim})"
+                    )
+                if float(v) >= hi_vec[idx]:
+                    raise ValueError(
+                        f"theta_lo_override[{idx}]={v} must be < hi bound {hi_vec[idx]}"
+                    )
+                lo_vec[idx] = float(v)
+            scaffold.theta_lo_vec = lo_vec
+            scaffold.theta_hi_vec = hi_vec
+            print(f"theta_lo_override: updated θ lo bounds at indices {sorted(cfg.theta_lo_override)}")
+
         if scaffold.P != P_obs and (
             getattr(scaffold, "obs_state_idx", None) is None
             or getattr(scaffold, "control_state_map", None) is None
@@ -2006,6 +2040,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
         rk4_residual=cfg.rk4_residual,
         rk4_residual_hidden=cfg.rk4_residual_hidden,
         rk4_residual_layers=cfg.rk4_residual_layers,
+        rk4_residual_tanh=cfg.rk4_residual_tanh,
+        rk4_residual_scale=cfg.rk4_residual_scale,
         # Correction-MLP width for the NeuralOdeCorrection baseline (other models
         # absorb these via **kwargs). Lets the baseline's capacity be set from cfg
         # instead of the hardcoded 256/2 defaults.
@@ -2060,7 +2096,26 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg.lr), weight_decay=float(cfg.weight_decay))
 
     scheduler = None
-    if cfg.warmup_epochs > 0 and cfg.cosine_decay:
+    if cfg.warm_restarts:
+        # SGDR (Loshchilov & Hutter): cosine anneal to eta_min over T_0 epochs, then
+        # SPIKE back to lr and repeat with cycle length ×2. The spikes are the escape
+        # mechanism for the irregular CMVF landscape (vs monotonic cosine, which only
+        # converges into the current basin). Warmup prepended when requested.
+        sgdr = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            opt, T_0=max(1, int(cfg.restart_period)), T_mult=2, eta_min=float(cfg.lr) * 0.01
+        )
+        if cfg.warmup_epochs > 0:
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                opt, start_factor=1e-6, end_factor=1.0, total_iters=int(cfg.warmup_epochs)
+            )
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                opt, schedulers=[warmup, sgdr], milestones=[int(cfg.warmup_epochs)]
+            )
+        else:
+            scheduler = sgdr
+        print(f"LR SGDR warm restarts: T_0={int(cfg.restart_period)} T_mult=2, "
+              f"peak {cfg.lr:.2e} → {float(cfg.lr)*0.01:.2e}, warmup {cfg.warmup_epochs}ep")
+    elif cfg.warmup_epochs > 0 and cfg.cosine_decay:
         warmup = torch.optim.lr_scheduler.LinearLR(
             opt, start_factor=1e-6, end_factor=1.0, total_iters=int(cfg.warmup_epochs)
         )
@@ -2099,6 +2154,8 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
 
     best_val = float("inf")
     best_state = None
+    swa_state = None
+    n_swa = 0
 
     train_losses: list[float] = []
     val_losses: list[float] = []
@@ -2613,6 +2670,23 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
                 best_val = va_loss
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
+            # Stochastic Weight Averaging: running mean of weights over the tail
+            # epochs (constant-LR region → canonical SWA). Only float tensors are
+            # averaged; int buffers (indices) keep their latest value.
+            if cfg.swa and ep >= int(cfg.swa_start_frac * cfg.epochs):
+                cur = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                if swa_state is None:
+                    swa_state = cur
+                    n_swa = 1
+                else:
+                    n_swa += 1
+                    inv = 1.0 / n_swa
+                    for k, v in cur.items():
+                        if v.is_floating_point():
+                            swa_state[k].mul_(1.0 - inv).add_(v, alpha=inv)
+                        else:
+                            swa_state[k] = v
+
         ep_time = time.time() - ep_t0
 
         if va_loss is None:
@@ -2665,8 +2739,11 @@ def train(cfg: TrainConfig, *, no_plot: bool = False, plot_samples: int = 5, plo
             val_species_losses=np.array(val_species_losses, dtype=np.float32) if len(val_species_losses) > 0 else None,
         )
 
-    # restore best weights (if we had validation)
-    if best_state is not None:
+    # restore weights for eval/save: SWA average if enabled, else best-val snapshot
+    if cfg.swa and swa_state is not None:
+        model.load_state_dict(swa_state)
+        print(f"SWA: loaded average of {n_swa} tail snapshots (from epoch {int(cfg.swa_start_frac * cfg.epochs)})")
+    elif best_state is not None:
         model.load_state_dict(best_state)
 
     # final test evaluation (on held-out test set, using best weights)
