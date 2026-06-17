@@ -1,0 +1,101 @@
+# SGDR on the heavy encoders (Transformer + Mamba) — the +SGDR column for the encoder table.
+# Identical Table 5.8 recipe (M4 / h400 / nsub3 / pulse_cumsum_sqrt / 200 ep, NO endpoint
+# supervision), so the ADAM BASELINE column is the existing experiments_final encoder-zoo
+# runs (FINAL_coarse_encoder_zoo_heavy) — no need to re-run it. This file is SGDR-only:
+# each encoder × SGDR(T_0=40) × {s0,s1,s2} = 6 runs. Pairs with:
+#   FINAL_encoder_sgdr_lstm.yaml         (LSTM, SGDR-only)
+#   FINAL_slstm_sgdr_verify.yaml         (sLSTM + GRU)  ← see NOTE below
+#
+# NOTE: FINAL_slstm_sgdr_verify.yaml still has Adam baseline arms AND runs GRU at the
+# scaffold-ladder recipe (h600+drecipe) rather than this h400 identical recipe — so its
+# baselines won't line up with experiments_final. For a consistent table, regenerate it
+# SGDR-only at the EZ recipe too; ask and I'll do it.
+#
+# Backends: ode_mamba = pure-PyTorch (portable, full BPTT, jit off). On a CUDA box you can
+# swap to ode_mamba_ssm (faster) — not installed locally. Transformer = full attention
+# (context_len 384 > coarse traj ~324) + grad_checkpoint + bf16 (bf16 is a no-op off-CUDA);
+# transformer_final_norm defaults True (the θ-collapse fix). Transformers are LR-sensitive
+# and SGDR re-spikes the LR — if the SGDR transformer arms diverge (R²<0 / θ collapse),
+# drop their lr to 5e-4 + warmup_epochs 15 (the gentle-optim arm).
+#
+# Requires the train.py SGDR additions (warm_restarts/restart_period) on the run machine.
+#
+# Launch (SERIALIZE — heavy encoders OOM if parallel on one GPU):
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_encoder_sgdr_transformer_mamba.yaml --local --max-parallel 1
+
+study: FINAL_encoder_sgdr_transformer_mamba
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+_mamba: &mamba {model_class: ode_mamba, jit_scripting: false}
+_trans: &trans {model_class: ode_transformer, context_len: 384, grad_checkpoint: true, autocast_bf16: true}
+
+runs:
+  # ── Mamba — SGDR (T_0=40) ──────────────────────────────────────────────────
+  - {exp_name: ESM_mamba_SGDR_s0, seed: 0, <<: *mamba, warm_restarts: true, restart_period: 40}
+  - {exp_name: ESM_mamba_SGDR_s1, seed: 1, <<: *mamba, warm_restarts: true, restart_period: 40}
+  - {exp_name: ESM_mamba_SGDR_s2, seed: 2, <<: *mamba, warm_restarts: true, restart_period: 40}
+  # ── Transformer — SGDR (T_0=40) ────────────────────────────────────────────
+  - {exp_name: ESM_trans_SGDR_s0, seed: 0, <<: *trans, warm_restarts: true, restart_period: 40}
+  - {exp_name: ESM_trans_SGDR_s1, seed: 1, <<: *trans, warm_restarts: true, restart_period: 40}
+  - {exp_name: ESM_trans_SGDR_s2, seed: 2, <<: *trans, warm_restarts: true, restart_period: 40}

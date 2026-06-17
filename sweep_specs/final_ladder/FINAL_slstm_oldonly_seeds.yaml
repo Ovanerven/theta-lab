@@ -1,0 +1,95 @@
+# Best-overall sLSTM (the EZ_slstm 0.692 recipe — plain, NO SGDR/warm-restarts)
+# swept across 3 seeds on the OLD-ONLY real dataset (coarsenold grid).
+#
+# Model = EZ_slstm arm from FINAL_coarse_encoder_zoo_light.yaml verbatim:
+#   model_class: ode_slstm, slstm_drop_last_layer: false, M4 / h400 / nsub3 /
+#   pulse_cumsum_sqrt / sqrt_clamp1 / 200 ep. Baseline EZ_slstm_s2 scored
+#   protein_final R²=0.692 on the combined (old+new) set.
+#
+# Change vs that sweep: dataset_path → coarsenold OLD-ONLY (new/oxygenated samples
+# dropped; same coarse grid as the baseline), and stratify_by_source off (single
+# source). Tests seed-consistency of the best model when the oxygenated data is
+# removed (cf. E26: old-only dropped protein 0.72→0.40 on s2 — this checks whether
+# that holds across seeds).
+#
+# NOTE: txtl_native_coarsenold_oldonly.npz is a derived file (the 691 'old' rows of
+# txtl_native_real_only_coarsenold.npz). Copy it to the run machine, or regenerate:
+#   python - <<'PY'
+#   import numpy as np
+#   d=np.load('datasets/cell-free/txtl_native_real_only_coarsenold.npz', allow_pickle=True)
+#   m=np.array([str(x)=='old' for x in d['source_label']]); n=len(m)
+#   out={k:(v[m] if isinstance(v,np.ndarray) and v.ndim>=1 and v.shape[0]==n else v) for k,v in d.items()}
+#   np.savez('datasets/cell-free/txtl_native_coarsenold_oldonly.npz', **out)
+#   PY
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_slstm_oldonly_seeds.yaml --local --max-parallel 3
+
+study: FINAL_slstm_oldonly_seeds
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  lmu_memory: 64
+  lmu_theta: 324
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: true
+  dataset_path: datasets/cell-free/txtl_native_coarsenold_oldonly.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: false
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: false        # ← single source now (old only)
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  endpoint_channels: null
+  lambda_endpoint: 0.0
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+runs:
+  - {exp_name: OO_slstm_s0, seed: 0, model_class: ode_slstm, slstm_drop_last_layer: false}
+  - {exp_name: OO_slstm_s1, seed: 1, model_class: ode_slstm, slstm_drop_last_layer: false}
+  - {exp_name: OO_slstm_s2, seed: 2, model_class: ode_slstm, slstm_drop_last_layer: false}

@@ -1,0 +1,126 @@
+# SGDR (Adam + cosine warm restarts) vs Adam-baseline schedule — 3-seed
+# verification of the "warm restarts escape local minima" finding.
+#
+# Both arms are the best sLSTM recipe (EZ_slstm + endpoint supervision λ=0.1 on
+# the combined coarsenold set). The ONLY difference per pair is the LR schedule:
+#   noSGDR : warmup → constant lr (the baseline Adam schedule)
+#   SGDR   : warmup → cosine warm restarts, T_0=40, T_mult=2 (LR re-spikes at
+#            ~ep45 and ~ep125 to jump out of the current basin)
+# 2 arms × 3 seeds = 6 runs.
+#
+# Single-seed evidence motivating this (seed 2, combined set):
+#   endpoint noSGDR (E1)  : protein 0.640, old 0.722
+#   endpoint + SGDR (E21) : protein 0.688, old 0.747, mRNA 0.515
+#   plain    + SGDR (E19) : protein 0.510 at the SAME total loss as the 0.692
+#                           baseline → SGDR escaped to a different, equal-loss
+#                           optimum (the local-minima evidence), reallocating
+#                           accuracy from protein to mRNA.
+# Restart-cadence scan (endpoint recipe, seed 2): T_0=25→0.627, T_0=40→0.688,
+# T_0=55→(pending). T_0=40 chosen.
+#
+# REQUIREMENTS on the run machine:
+#   * train.py must include the warm_restarts / restart_period fields + the
+#     CosineAnnealingWarmRestarts scheduler block (added locally — commit/push or
+#     copy train.py before running, else `Unknown config field: 'warm_restarts'`).
+#   * dataset = the standard combined coarsenold real set (already present).
+#
+# To instead compare the PLAIN best (the literal 0.692 model) ± SGDR, set
+# lambda_endpoint: 0.0 and endpoint_channels: null in `fixed`.
+#
+# Launch:
+#   python launch_sweep.py sweep_specs/final_ladder/FINAL_slstm_sgdr_verify.yaml --local --max-parallel 3
+
+study: FINAL_slstm_sgdr_verify
+runs_per_job: 1
+time: "02:00:00"
+partition: gpu_h100
+no_plot: false
+base_config: configs/txtl_gru_new_baseline.yaml
+
+fixed:
+  epochs: 200
+  warmup_epochs: 5
+  lr: 0.002
+  endpoint_r2: true
+  ckpt_every: 0
+  obs_idx: [3, 5]
+  gru_u_cols: [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  gru_y_cols: [3, 5]
+  val_n: 125
+  test_n: 125
+  scaffold: txtl_model4_three_state
+  slstm_drop_last_layer: false        # only used by ode_slstm; ignored by ode_rnn (GRU)
+  hidden: 400
+  num_layers: 2
+  lift_dim: 32
+  dropout: 0.2
+  n_substeps: 3
+  gru_variant: nn_gru
+  gru_init: supervisor
+  head_init: supervisor
+  lift_skip: true
+  theta_head_tau: 2.3
+  y0_theta_init: false
+  encoder_use_log_dt: true
+  u_transform: pulse_cumsum_sqrt
+  y_transform: sqrt_clamp1
+  d_state: 16
+  expand: 2
+  d_conv: 4
+  context_len: 64
+  tf_group_size: 32
+  ar_gap: 4
+  ff_mult: 2
+  autocast_bf16: false
+  jit_scripting: true
+  dataset_path: datasets/cell-free/txtl_native_real_only_coarsenold.npz
+  use_synthetic_data: false
+  balance_source_sampler: false
+  test_real_only: true
+  stratified_split: true
+  stratify_targets: [3, 5]
+  stratify_bins: 5
+  stratify_by_source: true
+  stratify_z_expr: false
+  subtract_channel_min: true
+  subtract_channel_min_cols: [3, 5]
+  use_ivtt_mse_loss: false
+  species_weights: null
+  time_upweight: null
+  lambda_endpoint: 0.1            # best recipe; set 0.0 for the plain-0.692 ± SGDR comparison
+  endpoint_channels: [5]
+  loss_normalizer_channels: 3
+  loss_clamp_min: 1.0
+  source_loss_weights: {new: 1.0, old: 1.0}
+
+# Two encoders, each at its own best M4 recipe, × {Adam baseline, SGDR} × 3 seeds
+# = 12 runs.
+#   sLSTM = EZ_slstm recipe (h400, endpoint λ=0.1; the 0.692 model). model_class ode_slstm.
+#   GRU   = scaffold-ladder M4 GRU recipe (h600, D-recipe loss: species_weights
+#           {3:1.25,5:1.0} + time_upweight {5:[0.5,3.0]} + endpoint λ=0.1). model_class ode_rnn.
+# Both on this sweep's REAL coarsenold set (NOT the ladder's synth-combined set) so the
+# ±SGDR comparison stays on the same real data as the sLSTM baseline.
+_gru_drecipe: &gru
+  model_class: ode_rnn
+  hidden: 600
+  species_weights: {3: 1.25, 5: 1.0}
+  time_upweight: {5: [0.5, 3.0]}
+
+runs:
+  # ── sLSTM (EZ recipe) — Adam baseline schedule ─────────────────────────────
+  - {exp_name: SV_slstm_noSGDR_s0, seed: 0, model_class: ode_slstm, warm_restarts: false}
+  - {exp_name: SV_slstm_noSGDR_s1, seed: 1, model_class: ode_slstm, warm_restarts: false}
+  - {exp_name: SV_slstm_noSGDR_s2, seed: 2, model_class: ode_slstm, warm_restarts: false}
+  # ── sLSTM — SGDR warm restarts (T_0=40) ────────────────────────────────────
+  - {exp_name: SV_slstm_SGDR_s0, seed: 0, model_class: ode_slstm, warm_restarts: true, restart_period: 40}
+  - {exp_name: SV_slstm_SGDR_s1, seed: 1, model_class: ode_slstm, warm_restarts: true, restart_period: 40}
+  - {exp_name: SV_slstm_SGDR_s2, seed: 2, model_class: ode_slstm, warm_restarts: true, restart_period: 40}
+
+  # ── GRU (scaffold-ladder M4 recipe) — Adam baseline schedule ───────────────
+  - {exp_name: SV_gru_noSGDR_s0, seed: 0, <<: *gru, warm_restarts: false}
+  - {exp_name: SV_gru_noSGDR_s1, seed: 1, <<: *gru, warm_restarts: false}
+  - {exp_name: SV_gru_noSGDR_s2, seed: 2, <<: *gru, warm_restarts: false}
+  # ── GRU — SGDR warm restarts (T_0=40) ──────────────────────────────────────
+  - {exp_name: SV_gru_SGDR_s0, seed: 0, <<: *gru, warm_restarts: true, restart_period: 40}
+  - {exp_name: SV_gru_SGDR_s1, seed: 1, <<: *gru, warm_restarts: true, restart_period: 40}
+  - {exp_name: SV_gru_SGDR_s2, seed: 2, <<: *gru, warm_restarts: true, restart_period: 40}
