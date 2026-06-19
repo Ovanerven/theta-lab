@@ -10,7 +10,7 @@ This repository is the official implementation of Mechanistic Encoders for Laten
 
 **Overview:** Our framework evaluates bolus-to-parameter mapping across four distinct dynamical systems: cell-free production, metabolic networks, material synthesis, and enzymatic reactions. We test how various sequence encoders (GRU, Transformer, SSM) map discrete input events to mechanistic ODE parameters ($\theta$). The evaluation systematically explores the effects of state and parameter reduction on model identifiability, benchmarking our approach against standard neural and ODE baselines.
 
-*This public release contains the cell-free TX-TL (TXTL) track — the six canonical TXTL scaffolds (M3, M4, M5, M7, M8, M9) and the full model zoo.*
+*`scaffolds.py` defines the scaffolds for all four domains — TXTL (M3, M4, M5, M7, M8, M9), MOF synthesis, glycolysis, and single-enzyme kinetics — plus the full model zoo. The end-to-end data pipeline shipped here covers the cell-free TXTL track; the ground-truth simulators for the other domains live in the research tree.*
 
 All runnable scripts are located in the `last-layer-ode` directory. **Please run everything from the repository root.**
 
