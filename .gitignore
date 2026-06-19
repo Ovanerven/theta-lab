@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Data & experiment outputs (not tracked — this is a code-only repo)
+datasets/
+experiments/
+results/
+*.npz
+*.pt
+*.png
+*.pdf
+
+# allow the standalone reference configs
+!last-layer-ode/standalone/*.yaml
+
+# README figure asset
+!Figure_2_Neurips_edited.png
